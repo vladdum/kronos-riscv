@@ -95,7 +95,9 @@ module kronos_lsu (
     endcase
   end
 
-  assign data_req_o  = req_i;
+  // Suppress req in WAIT_RVALID: prevents the data bridge (MaxRequests=2) from
+  // accepting a duplicate request for the same frozen address while stalled.
+  assign data_req_o  = req_i & (state_q == IDLE);
   assign data_we_o   = we_i;
   assign data_addr_o = {addr_i[31:2], 2'b00}; // word-aligned
 
