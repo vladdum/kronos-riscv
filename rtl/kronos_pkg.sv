@@ -27,6 +27,21 @@ package kronos_pkg;
     WB_CSR = 2'd3   // CSR read value
   } wb_sel_e;
 
+  // -------------------------------------------------------------------------
+  // Stage 2: M-extension muldiv types
+  // -------------------------------------------------------------------------
+
+  typedef enum logic [2:0] {
+    MULDIV_MUL    = 3'd0,
+    MULDIV_MULH   = 3'd1,
+    MULDIV_MULHSU = 3'd2,
+    MULDIV_MULHU  = 3'd3,
+    MULDIV_DIV    = 3'd4,
+    MULDIV_DIVU   = 3'd5,
+    MULDIV_REM    = 3'd6,
+    MULDIV_REMU   = 3'd7
+  } muldiv_op_e;
+
   // Decoded instruction — output of kronos_decode
   typedef struct packed {
     // Register operands
@@ -59,6 +74,9 @@ package kronos_pkg;
     logic        is_ecall;
     logic        is_ebreak;
     logic        is_mret;
+    // M extension
+    logic        is_muldiv;
+    muldiv_op_e  muldiv_op;
     // Writeback
     wb_sel_e     wb_sel;
     // Illegal

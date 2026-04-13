@@ -30,6 +30,20 @@ filesets:
       - rtl/stage1/kronos_top.sv
     file_type: systemVerilogSource
 
+  files_rtl_s2:
+    files:
+      - rtl/kronos_pkg.sv
+      - rtl/stage0/kronos_alu.sv
+      - rtl/stage2/kronos_decode.sv
+      - rtl/stage0/kronos_regfile.sv
+      - rtl/stage0/kronos_csr.sv
+      - rtl/stage1/kronos_lsu.sv
+      - rtl/stage1/kronos_forward.sv
+      - rtl/stage1/kronos_hazard.sv
+      - rtl/stage2/kronos_muldiv.sv
+      - rtl/stage2/kronos_top.sv
+    file_type: systemVerilogSource
+
   files_tb_s0:
     files:
       - tb/stage0/tb_alu.sv
@@ -46,11 +60,20 @@ filesets:
 
 targets:
   default:
-    filesets: [files_rtl_s1]
+    filesets: [files_rtl_s2]
     toplevel: kronos_top
 
   lint:
-    filesets: [files_rtl_s1]
+    filesets: [files_rtl_s2]
+    tools:
+      verilator:
+        mode: lint-only
+        verilator_options: [--Wall, --Wno-UNUSED]
+    toplevel: kronos_top
+    default_tool: verilator
+
+  lint-s2:
+    filesets: [files_rtl_s2]
     tools:
       verilator:
         mode: lint-only

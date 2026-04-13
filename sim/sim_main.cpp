@@ -133,8 +133,15 @@ int main(int argc, char** argv) {
 
     const int MAX_CYCLES = 100000;
     int halted = 0;
+    // IRQ trigger: a store to 0x80000000 arms this flag; irq_timer_i is asserted
+    // for exactly one rising edge on the following cycle.
+    bool fire_irq = false;
 
     for (int cycle = 0; cycle < MAX_CYCLES && !halted; cycle++) {
+        // Assert timer IRQ for this cycle if the previous cycle armed it.
+        top->irq_timer_i = fire_irq ? 1 : 0;
+        if (fire_irq) fire_irq = false;
+
         // ---- Rising edge: execute current instruction ----
         top->clk_i = 1;
         top->eval();
@@ -142,20 +149,25 @@ int main(int argc, char** argv) {
         // Handle stores. At this point instr_rdata_i still reflects the instruction
         // that just executed, so data_req_o/we_o/addr_o/wdata_o are valid for it.
         if (top->data_req_o && top->data_we_o) {
-            uint32_t word_addr = (top->data_addr_o >> 2) & 0xFFFF;
             uint32_t be   = top->data_be_o;
             uint32_t wdat = top->data_wdata_o;
-            uint32_t cur  = mem[word_addr];
-            if (be & 1) cur = (cur & ~0x000000FFu) | (wdat & 0x000000FFu);
-            if (be & 2) cur = (cur & ~0x0000FF00u) | (wdat & 0x0000FF00u);
-            if (be & 4) cur = (cur & ~0x00FF0000u) | (wdat & 0x00FF0000u);
-            if (be & 8) cur = (cur & ~0xFF000000u) | (wdat & 0xFF000000u);
-            mem[word_addr] = cur;
 
-            if ((top->data_addr_o & 0xC0000000u) == 0x40000000u) {
+            if (top->data_addr_o == 0x80000000u) {
+                // Timer IRQ trigger: assert irq_timer_i on the next rising edge.
+                // OBI gnt/rvalid are handled by prefetch_data; no memory write.
+                fire_irq = true;
+            } else if ((top->data_addr_o & 0xC0000000u) == 0x40000000u) {
                 printf("[sim] halt at cycle %d, x10 = %u\n", cycle, wdat);
                 halted = 1;
                 break;
+            } else {
+                uint32_t word_addr = (top->data_addr_o >> 2) & 0xFFFF;
+                uint32_t cur  = mem[word_addr];
+                if (be & 1) cur = (cur & ~0x000000FFu) | (wdat & 0x000000FFu);
+                if (be & 2) cur = (cur & ~0x0000FF00u) | (wdat & 0x0000FF00u);
+                if (be & 4) cur = (cur & ~0x00FF0000u) | (wdat & 0x00FF0000u);
+                if (be & 8) cur = (cur & ~0xFF000000u) | (wdat & 0xFF000000u);
+                mem[word_addr] = cur;
             }
         }
 

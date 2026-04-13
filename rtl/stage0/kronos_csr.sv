@@ -5,7 +5,11 @@
 // kronos_csr.sv — machine-mode CSR file for Stage 0
 // Implements mstatus, misa, mie, mtvec, mscratch, mepc, mcause, mip.
 // Handles trap entry (ECALL/EBREAK/illegal), MRET, and CSR read/write.
-module kronos_csr (
+module kronos_csr #(
+  // MISA extension bits [25:0]. Default = I-only (bit 8).
+  // Stage 2 passes 26'h1100 to advertise I+M.
+  parameter logic [25:0] MISA_EXT = 26'h0100
+) (
   input  logic        clk_i,
   input  logic        rst_ni,
   input  logic        req_i,
@@ -45,8 +49,8 @@ module kronos_csr (
   logic [31:0] misa;
   logic [31:0] mip;
 
-  // MISA: MXL=01 (32-bit), I extension set
-  assign misa = 32'h4000_0100;
+  // MISA: MXL=01 (32-bit), extension bits from parameter
+  assign misa = {2'b01, 4'b0, MISA_EXT};
 
   // MIP: fast IRQs at [30:16], timer at [7]
   assign mip  = {1'b0, irq_fast_i, 4'b0, 1'b0, 3'b0, irq_timer_i, 3'b0, 1'b0, 3'b0};

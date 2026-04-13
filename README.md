@@ -22,7 +22,7 @@ all stages; RV64 support is added at Stage 4.
 |-------|-------------------------------------|------------------|---------|-------------|
 | 0     | Single-cycle golden model           | RV32I            | OBI     | Complete    |
 | 1     | 5-stage in-order pipeline           | RV32I            | OBI     | Complete    |
-| 2     | M extension + CSR hardening         | RV32IM           | OBI     | Planned     |
+| 2     | M extension + CSR hardening         | RV32IM           | OBI     | Complete    |
 | 3     | C extension + branch predictor      | RV32IMC          | OBI     | Planned     |
 | 4     | RV64I + A extension                 | RV64IMAC         | OBI     | Planned     |
 | 5     | F/D extensions (floating point)     | RV64IMAFDС       | OBI     | Planned     |
@@ -47,22 +47,28 @@ kronos-riscv/
 ├── rtl/
 │   ├── kronos_pkg.sv          # Shared enums, structs, types
 │   ├── stage0/                # Stage 0: single-cycle golden model
-│   └── stage1/                # Stage 1: 5-stage pipeline
-│       ├── kronos_lsu.sv      # LSU with 2-state OBI FSM + mem_stall
-│       ├── kronos_forward.sv  # Data forwarding mux selects (pure comb)
-│       ├── kronos_hazard.sv   # Stall/flush control (pure comb)
-│       └── kronos_top.sv      # Pipeline top (IF→ID→EX→MEM→WB)
+│   ├── stage1/                # Stage 1: 5-stage pipeline
+│   │   ├── kronos_lsu.sv      # LSU with 2-state OBI FSM + mem_stall
+│   │   ├── kronos_forward.sv  # Data forwarding mux selects (pure comb)
+│   │   ├── kronos_hazard.sv   # Stall/flush control (pure comb)
+│   │   └── kronos_top.sv      # Pipeline top (IF→ID→EX→MEM→WB)
+│   └── stage2/                # Stage 2: RV32M multiply/divide
+│       ├── kronos_decode.sv   # RV32I+M decoder (extends stage0)
+│       ├── kronos_muldiv.sv   # Multi-cycle mul/div FSM (2–34 cycles)
+│       └── kronos_top.sv      # Stage2 pipeline top (muldiv + combined stall)
 ├── tb/
 │   ├── tb_pkg.sv              # Shared testbench utilities
 │   ├── stage0/                # Stage 0 testbenches
-│   └── stage1/                # Stage 1 unit testbenches
+│   ├── stage1/                # Stage 1 unit testbenches
+│   └── stage2/                # Stage 2 unit testbenches
 ├── sw/
 │   ├── stage0/                # Stage 0 test programs (RISC-V assembly)
-│   └── stage1/                # Stage 1 hazard-focused test programs
+│   ├── stage1/                # Stage 1 hazard-focused test programs
+│   └── stage2/                # Stage 2 M-extension test programs
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
 │   └── sim_main.cpp           # C++ OBI memory model and driver
-├── kronos_riscv.core          # FuseSoC core descriptor (active: stage1)
+├── kronos_riscv.core          # FuseSoC core descriptor (active: stage2)
 ├── LICENSE
 └── CLAUDE.md                  # Claude Code project instructions
 ```
@@ -72,19 +78,30 @@ kronos-riscv/
 Prerequisites: Verilator, FuseSoC, `riscv64-unknown-elf-gcc`.
 
 ```bash
-# Lint (stage 1)
+# Lint (stage 2, default)
 fusesoc --cores-root=. run --target=lint opensoc:ip:kronos_riscv
 
-# Lint (stage 0)
+# Lint earlier stages
+fusesoc --cores-root=. run --target=lint-s1 opensoc:ip:kronos_riscv
 fusesoc --cores-root=. run --target=lint-s0 opensoc:ip:kronos_riscv
 
-# Build stage 1 simulator
-cd sim && make build-s1
+# Build simulators
+cd sim && make build-s2   # stage 2 (RV32IM)
+cd sim && make build-s1   # stage 1 (RV32I)
 
-# Run a stage 1 test
-cd sim && make run-s1-test_forwarding
+# Run a stage 2 test
+cd sim && make run-s2-test_mul
+cd sim && make run-s2-test_div
+cd sim && make run-s2-test_muldiv_hazards
+cd sim && make run-s2-test_irq
 
-# Full stage 1 regression (unit tests + rv32ui compliance + hazard programs)
+# Muldiv unit test
+cd sim && make sim-muldiv
+
+# Full regression (stage 2 simulator, all sw/ programs + rv32ui compliance)
+cd sim && make sim-compliance
+
+# Full stage 1 regression (unit tests + rv32ui compliance)
 cd sim && make sim-compliance-s1
 
 # Unit tests
