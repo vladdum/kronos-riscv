@@ -109,6 +109,23 @@ git worktree remove .claude/worktrees/<name>
 
 If the worktree has changes that should be discarded, use `--force`.
 
+## Waveforms
+
+Use WaveDrom for all timing diagrams in documentation. Embed diagrams as fenced
+code blocks with the `wavedrom` language tag — they render on GitHub and in most
+documentation tools without any extra setup:
+
+````markdown
+```wavedrom
+{ "signal": [
+  { "name": "clk", "wave": "P..." },
+  { "name": "req", "wave": "0100" }
+]}
+```
+````
+
+Do not use ASCII art timing diagrams.
+
 ## Documentation Upkeep
 
 After completing each implementation step:
