@@ -79,7 +79,11 @@ module kronos_top
   logic [31:0] muldiv_result;
   logic        muldiv_busy, muldiv_valid, muldiv_idle;
   logic        muldiv_stall;
-  logic        combined_stall;  // mem_stall | muldiv_stall
+  logic        instr_fetch_stall;
+  logic        combined_stall;  // mem_stall | muldiv_stall | instr_fetch_stall
+  // Fetch throttle: set after gnt, cleared on rvalid — prevents the bridge
+  // (MaxRequests=2) from accepting a duplicate fetch for the same frozen address.
+  logic        fetch_outstanding;
 
   // -------------------------------------------------------------------------
   // MEM-stage wires
@@ -87,6 +91,11 @@ module kronos_top
   logic [31:0] lsu_rdata;
   logic        lsu_valid;
   logic        mem_stall;
+  // mem_done_q: set when LSU signals valid_o (data rvalid received); cleared
+  // when MEM/WB register advances.  Gates req_i so the LSU does not re-issue
+  // the same request while the pipeline is frozen by instr_fetch_stall.
+  logic        mem_done_q;
+  logic [31:0] lsu_rdata_latch;  // holds rdata across the stall gap
 
   // -------------------------------------------------------------------------
   // WB-stage wires
@@ -130,10 +139,23 @@ module kronos_top
     .fwd_rs2_sel_o    (fwd_rs2_sel)
   );
 
+  // Fetch throttle: track whether a fetch is in-flight (gnt received, rvalid pending).
+  // Cleared on rvalid.  instr_req_o is gated to 0 while outstanding, so the
+  // bridge (MaxRequests=2) never sees a second req for the same frozen address.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)                             fetch_outstanding <= 1'b0;
+    else if (instr_gnt_i && !instr_rvalid_i) fetch_outstanding <= 1'b1;
+    else if (instr_rvalid_i)                 fetch_outstanding <= 1'b0;
+  end
+
   // STAGE2: combined_stall replaces raw mem_stall for hazard unit.
   // muldiv_stall: asserted while any muldiv instruction is live in EX and not yet done.
-  assign muldiv_stall   = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
-  assign combined_stall = mem_stall | muldiv_stall;
+  // instr_fetch_stall: asserted whenever a fetch is in flight (rvalid not yet back).
+  //   Keeps pc_q frozen so if_id_q.pc matches the fetched address. Required for
+  //   correct JAL/branch targets when the AXI crossbar adds multi-cycle fetch latency.
+  assign muldiv_stall       = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
+  assign instr_fetch_stall  = ~instr_rvalid_i;
+  assign combined_stall     = mem_stall | muldiv_stall | instr_fetch_stall;
 
   kronos_hazard u_hazard (
     .id_ex_is_load_i  (id_ex_q.dec.is_load),
@@ -206,7 +228,7 @@ module kronos_top
   kronos_lsu u_lsu (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
-    .req_i         (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store)),
+    .req_i         (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store) & ~mem_done_q),
     .we_i          (ex_mem_q.dec.is_store),
     .addr_i        (ex_mem_q.alu_result),
     .wdata_i       (ex_mem_q.rs2_data),
@@ -239,7 +261,7 @@ module kronos_top
   // =========================================================================
   // IF stage
   // =========================================================================
-  assign instr_req_o  = rst_ni;
+  assign instr_req_o  = rst_ni & ~fetch_outstanding;
   assign instr_addr_o = pc_q;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -363,13 +385,33 @@ module kronos_top
   // MEM stage (kronos_lsu driven by ex_mem_q, instantiated above)
   // =========================================================================
 
+  // mem_done_q: prevents LSU re-issue while pipeline is frozen by instr_fetch_stall.
+  // lsu_rdata_latch: holds the load data across the gap between data rvalid and
+  // the next instr rvalid that allows the pipeline to advance.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      mem_done_q    <= 1'b0;
+      lsu_rdata_latch <= '0;
+    end else begin
+      if (lsu_valid) begin
+        mem_done_q    <= 1'b1;
+        lsu_rdata_latch <= lsu_rdata;
+      end
+      if (mem_wb_en) begin
+        mem_done_q <= 1'b0;  // pipeline advanced — re-arm for next instruction
+      end
+    end
+  end
+
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mem_wb_q <= '0;
     end else if (mem_wb_en) begin
       mem_wb_q.dec        <= ex_mem_q.dec;
       mem_wb_q.alu_result <= ex_mem_q.alu_result;
-      mem_wb_q.lsu_rdata  <= lsu_rdata;
+      // Use current rdata when LSU fires on this cycle; use latched value when
+      // the pipeline is advancing after an earlier lsu_valid (mem_done_q=1).
+      mem_wb_q.lsu_rdata  <= lsu_valid ? lsu_rdata : lsu_rdata_latch;
       mem_wb_q.csr_rdata  <= ex_mem_q.csr_rdata;
       mem_wb_q.pc4        <= ex_mem_q.pc + 32'd4;
       mem_wb_q.valid      <= ex_mem_q.valid;
