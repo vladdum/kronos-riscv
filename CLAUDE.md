@@ -157,18 +157,36 @@ Commit message convention: `type(scope): description`
 - Types: `feat`, `fix`, `chore`, `docs`, `test`, `refactor`
 - Scopes: `alu`, `decode`, `regfile`, `lsu`, `csr`, `top`, `sim`, `sw`, `pkg`
 
-## Pull Requests
+## Branch Workflow
 
-Do not include any reference to Claude or AI tools in PR titles, bodies, or descriptions (no `🤖 Generated with Claude Code`, no `Co-Authored-By`, no similar footers).
-
-Before creating any PR:
-
-1. Squash all commits on the branch into a single commit.
-2. Rebase on main:
+One branch per stage. Open it when you start, commit freely during development,
+squash to a single commit when the stage is done, then fast-forward merge to `main`.
 
 ```bash
+# 1. Open a stage branch
+git checkout -b stage3
+
+# 2. Develop freely — granular commits are fine on the branch
+
+# 3. Pick up any commits that landed on main while you worked
 git pull --rebase --autostash origin main
+
+# 4. Squash all branch commits into one
+git reset --soft origin/main
+git commit -m "feat(stage3): C extension + branch predictor"
+
+# 5. Fast-forward merge, push, and clean up
+git checkout main
+git merge --ff-only stage3
+git push origin main
+git branch -d stage3
 ```
+
+`main` always has exactly one commit per completed stage, plus the skeleton and docs
+commits. No merge commits, no squash PRs.
+
+Do not include any reference to Claude or AI tools in commit messages
+(no `🤖 Generated with Claude Code`, no `Co-Authored-By`, no similar footers).
 
 ## SystemVerilog Coding Guidelines
 
