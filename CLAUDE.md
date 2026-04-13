@@ -13,8 +13,8 @@ Development follows a staged learning progression:
 
 | Stage | Description                          | ISA              | Status      |
 |-------|--------------------------------------|------------------|-------------|
-| 0     | Single-cycle golden model            | RV32I            | In progress |
-| 1     | 5-stage in-order pipeline            | RV32I            | Planned     |
+| 0     | Single-cycle golden model            | RV32I            | Complete    |
+| 1     | 5-stage in-order pipeline            | RV32I            | In progress |
 | 2     | M extension + CSR hardening          | RV32IM           | Planned     |
 | 3     | C extension + branch predictor       | RV32IMC          | Planned     |
 | 4     | RV64I + A extension                  | RV64IMAC         | Planned     |
@@ -89,7 +89,7 @@ cd sim && make sim-regfile
 ## Testing Strategy
 
 - Unit testbenches: one per RTL module (tb/stage0/tb_alu.sv, etc.)
-- Integration: `tb/stage0/tb_top.sv` runs assembly programs via the OBI sim
+- Integration: `sim/sim_main.cpp` (C++ Verilator driver) runs assembly programs via the OBI memory model
 - Self-checking assembly: test programs store failure count in x10; x10=0 = pass
 - Golden model diffing: from Stage 1 onward, diff register state against Stage 0
 

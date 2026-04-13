@@ -27,6 +27,10 @@ filesets:
     file_type: systemVerilogSource
 
 targets:
+  default:
+    filesets: [files_rtl]
+    toplevel: kronos_top
+
   lint:
     filesets: [files_rtl]
     tools:

@@ -18,15 +18,15 @@ all stages; RV64 support is added at Stage 4.
 
 ## Staged Development
 
-| Stage | Description                         | ISA              | Bus     |
-|-------|-------------------------------------|------------------|---------|
-| 0     | Single-cycle golden model           | RV32I            | OBI     |
-| 1     | 5-stage in-order pipeline           | RV32I            | OBI     |
-| 2     | M extension + CSR hardening         | RV32IM           | OBI     |
-| 3     | C extension + branch predictor      | RV32IMC          | OBI     |
-| 4     | RV64I + A extension                 | RV64IMAC         | OBI     |
-| 5     | F/D extensions (floating point)     | RV64IMAFDС       | OBI     |
-| 6     | Out-of-order execution (BOOM style) | RV64IMAFDС       | AXI4    |
+| Stage | Description                         | ISA              | Bus     | Status      |
+|-------|-------------------------------------|------------------|---------|-------------|
+| 0     | Single-cycle golden model           | RV32I            | OBI     | Complete    |
+| 1     | 5-stage in-order pipeline           | RV32I            | OBI     | In progress |
+| 2     | M extension + CSR hardening         | RV32IM           | OBI     | Planned     |
+| 3     | C extension + branch predictor      | RV32IMC          | OBI     | Planned     |
+| 4     | RV64I + A extension                 | RV64IMAC         | OBI     | Planned     |
+| 5     | F/D extensions (floating point)     | RV64IMAFDС       | OBI     | Planned     |
+| 6     | Out-of-order execution (BOOM style) | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
 `kronos_top` module interface, so the testbench and SoC integration point never
