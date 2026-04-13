@@ -1,0 +1,12 @@
+build/
+obj_dir/
+*.vcd
+*.fst
+*.o
+*.elf
+*.hex
+*.map
+*.log
+docs/superpowers/
+__pycache__/
+riscv-arch-test/

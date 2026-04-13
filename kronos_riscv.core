@@ -1,0 +1,37 @@
+CAPI=2:
+# Copyright 2026 Vlad-Dumitru Popescu
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+name: "opensoc:ip:kronos_riscv"
+description: "kronos-riscv: BOOM-inspired RISC-V CPU core in SystemVerilog"
+
+filesets:
+  files_rtl:
+    files:
+      - rtl/kronos_pkg.sv
+      - rtl/stage0/kronos_alu.sv
+      - rtl/stage0/kronos_decode.sv
+      - rtl/stage0/kronos_regfile.sv
+      - rtl/stage0/kronos_lsu.sv
+      - rtl/stage0/kronos_csr.sv
+      - rtl/stage0/kronos_top.sv
+    file_type: systemVerilogSource
+
+  files_tb:
+    files:
+      - tb/tb_pkg.sv
+      - tb/stage0/tb_alu.sv
+      - tb/stage0/tb_decode.sv
+      - tb/stage0/tb_regfile.sv
+      - tb/stage0/tb_top.sv
+    file_type: systemVerilogSource
+
+targets:
+  lint:
+    filesets: [files_rtl]
+    tools:
+      verilator:
+        mode: lint-only
+        verilator_options: [--Wall, --Wno-UNUSED]
+    toplevel: kronos_top
+    default_tool: verilator
