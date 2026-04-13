@@ -65,4 +65,48 @@ package kronos_pkg;
     logic        illegal;
   } decoded_instr_t;
 
+  // -------------------------------------------------------------------------
+  // Stage 1: forwarding and pipeline register types
+  // -------------------------------------------------------------------------
+
+  typedef enum logic [1:0] {
+    FWD_NONE  = 2'd0,   // use register-file value
+    FWD_EXMEM = 2'd1,   // forward from EX/MEM alu_result
+    FWD_MEMWB = 2'd2    // forward from WB mux output
+  } fwd_sel_e;
+
+  typedef struct packed {
+    logic [31:0] pc;
+    logic [31:0] instr;
+    logic        valid;
+  } if_id_reg_t;
+
+  typedef struct packed {
+    logic [31:0]    pc;
+    decoded_instr_t dec;
+    logic [31:0]    rs1_data;
+    logic [31:0]    rs2_data;
+    logic           valid;
+  } id_ex_reg_t;
+
+  typedef struct packed {
+    logic [31:0]    pc;
+    decoded_instr_t dec;
+    logic [31:0]    alu_result;
+    logic [31:0]    rs2_data;
+    logic [31:0]    pc_next;
+    logic [31:0]    csr_rdata;
+    logic           redirect;
+    logic           valid;
+  } ex_mem_reg_t;
+
+  typedef struct packed {
+    decoded_instr_t dec;
+    logic [31:0]    alu_result;
+    logic [31:0]    lsu_rdata;
+    logic [31:0]    csr_rdata;
+    logic [31:0]    pc4;
+    logic           valid;
+  } mem_wb_reg_t;
+
 endpackage

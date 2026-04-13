@@ -6,7 +6,7 @@ name: "opensoc:ip:kronos_riscv"
 description: "kronos-riscv: BOOM-inspired RISC-V CPU core in SystemVerilog"
 
 filesets:
-  files_rtl:
+  files_rtl_s0:
     files:
       - rtl/kronos_pkg.sv
       - rtl/stage0/kronos_alu.sv
@@ -17,22 +17,49 @@ filesets:
       - rtl/stage0/kronos_top.sv
     file_type: systemVerilogSource
 
-  files_tb:
+  files_rtl_s1:
     files:
-      - tb/tb_pkg.sv
+      - rtl/kronos_pkg.sv
+      - rtl/stage0/kronos_alu.sv
+      - rtl/stage0/kronos_decode.sv
+      - rtl/stage0/kronos_regfile.sv
+      - rtl/stage0/kronos_csr.sv
+      - rtl/stage1/kronos_lsu.sv
+      - rtl/stage1/kronos_forward.sv
+      - rtl/stage1/kronos_hazard.sv
+      - rtl/stage1/kronos_top.sv
+    file_type: systemVerilogSource
+
+  files_tb_s0:
+    files:
       - tb/stage0/tb_alu.sv
       - tb/stage0/tb_decode.sv
       - tb/stage0/tb_regfile.sv
-      - tb/stage0/tb_top.sv
+    file_type: systemVerilogSource
+
+  files_tb_s1:
+    files:
+      - tb/stage1/tb_lsu_s1.sv
+      - tb/stage1/tb_forward.sv
+      - tb/stage1/tb_hazard.sv
     file_type: systemVerilogSource
 
 targets:
   default:
-    filesets: [files_rtl]
+    filesets: [files_rtl_s1]
     toplevel: kronos_top
 
   lint:
-    filesets: [files_rtl]
+    filesets: [files_rtl_s1]
+    tools:
+      verilator:
+        mode: lint-only
+        verilator_options: [--Wall, --Wno-UNUSED]
+    toplevel: kronos_top
+    default_tool: verilator
+
+  lint-s0:
+    filesets: [files_rtl_s0]
     tools:
       verilator:
         mode: lint-only

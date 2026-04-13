@@ -21,7 +21,7 @@ all stages; RV64 support is added at Stage 4.
 | Stage | Description                         | ISA              | Bus     | Status      |
 |-------|-------------------------------------|------------------|---------|-------------|
 | 0     | Single-cycle golden model           | RV32I            | OBI     | Complete    |
-| 1     | 5-stage in-order pipeline           | RV32I            | OBI     | In progress |
+| 1     | 5-stage in-order pipeline           | RV32I            | OBI     | Complete    |
 | 2     | M extension + CSR hardening         | RV32IM           | OBI     | Planned     |
 | 3     | C extension + branch predictor      | RV32IMC          | OBI     | Planned     |
 | 4     | RV64I + A extension                 | RV64IMAC         | OBI     | Planned     |
@@ -46,16 +46,23 @@ memory requests with tagged, out-of-order responses.
 kronos-riscv/
 ├── rtl/
 │   ├── kronos_pkg.sv          # Shared enums, structs, types
-│   └── stage0/                # Stage 0: single-cycle golden model
+│   ├── stage0/                # Stage 0: single-cycle golden model
+│   └── stage1/                # Stage 1: 5-stage pipeline
+│       ├── kronos_lsu.sv      # LSU with 2-state OBI FSM + mem_stall
+│       ├── kronos_forward.sv  # Data forwarding mux selects (pure comb)
+│       ├── kronos_hazard.sv   # Stall/flush control (pure comb)
+│       └── kronos_top.sv      # Pipeline top (IF→ID→EX→MEM→WB)
 ├── tb/
 │   ├── tb_pkg.sv              # Shared testbench utilities
-│   └── stage0/                # Stage 0 testbenches
+│   ├── stage0/                # Stage 0 testbenches
+│   └── stage1/                # Stage 1 unit testbenches
 ├── sw/
-│   └── stage0/                # Stage 0 test programs (RISC-V assembly)
+│   ├── stage0/                # Stage 0 test programs (RISC-V assembly)
+│   └── stage1/                # Stage 1 hazard-focused test programs
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
 │   └── sim_main.cpp           # C++ OBI memory model and driver
-├── kronos_riscv.core          # FuseSoC core descriptor
+├── kronos_riscv.core          # FuseSoC core descriptor (active: stage1)
 ├── LICENSE
 └── CLAUDE.md                  # Claude Code project instructions
 ```
@@ -65,14 +72,25 @@ kronos-riscv/
 Prerequisites: Verilator, FuseSoC, `riscv64-unknown-elf-gcc`.
 
 ```bash
-# Lint
+# Lint (stage 1)
 fusesoc --cores-root=. run --target=lint opensoc:ip:kronos_riscv
 
-# Build simulator
-cd sim && make build
+# Lint (stage 0)
+fusesoc --cores-root=. run --target=lint-s0 opensoc:ip:kronos_riscv
 
-# Run a test
-cd sim && make run-test_rtype
+# Build stage 1 simulator
+cd sim && make build-s1
+
+# Run a stage 1 test
+cd sim && make run-s1-test_forwarding
+
+# Full stage 1 regression (unit tests + rv32ui compliance + hazard programs)
+cd sim && make sim-compliance-s1
+
+# Unit tests
+cd sim && make sim-forward   # forwarding unit
+cd sim && make sim-hazard    # hazard/stall control
+cd sim && make sim-lsu-s1    # LSU OBI FSM
 ```
 
 ## Integration with OpenSoC

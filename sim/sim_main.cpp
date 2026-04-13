@@ -109,11 +109,15 @@ int main(int argc, char** argv) {
 
     // Call after fetch_instr(). Propagates combinationally to discover data_req_o/addr,
     // then pre-loads data_rdata_i for loads so the register write is correct.
+    // For stores, gnt+rvalid are asserted immediately (OBI: rvalid fires for all
+    // transactions, rdata is irrelevant for writes).
     auto prefetch_data = [&]() {
         top->eval();  // combinational propagation (no new clock edge)
-        if (top->data_req_o && !top->data_we_o) {
-            uint32_t wa      = (top->data_addr_o >> 2) & 0xFFFF;
-            top->data_rdata_i  = mem[wa];
+        if (top->data_req_o) {
+            if (!top->data_we_o) {  // load: provide read data
+                uint32_t wa       = (top->data_addr_o >> 2) & 0xFFFF;
+                top->data_rdata_i = mem[wa];
+            }
             top->data_gnt_i    = 1;
             top->data_rvalid_i = 1;
             top->data_err_i    = 0;
