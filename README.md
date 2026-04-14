@@ -18,15 +18,15 @@ all stages; RV64 support is added at Stage 4.
 
 ## Staged Development
 
-| Stage | Description                         | ISA              | Bus     | Status      |
-|-------|-------------------------------------|------------------|---------|-------------|
-| 0     | Single-cycle golden model           | RV32I            | OBI     | Complete    |
-| 1     | 5-stage in-order pipeline           | RV32I            | OBI     | Complete    |
-| 2     | M extension + CSR hardening         | RV32IM           | OBI     | Complete    |
-| 3     | C extension + branch predictor      | RV32IMC          | OBI     | Planned     |
-| 4     | RV64I + A extension                 | RV64IMAC         | OBI     | Planned     |
-| 5     | F/D extensions (floating point)     | RV64IMAFDС       | OBI     | Planned     |
-| 6     | Out-of-order execution (BOOM style) | RV64IMAFDС       | AXI4    | Planned     |
+| Stage | Description                                     | ISA              | Bus     | Status      |
+|-------|-------------------------------------------------|------------------|---------|-------------|
+| 0     | Single-cycle golden model                       | RV32I            | OBI     | Complete    |
+| 1     | 5-stage in-order pipeline                       | RV32I            | OBI     | Complete    |
+| 2     | M extension + CSR hardening                     | RV32IM           | OBI     | Complete    |
+| 3     | AXI4 switch + C extension + branch predictor   | RV32IMC          | AXI4    | In progress |
+| 4     | RV64I + A extension                             | RV64IMAC         | AXI4    | Planned     |
+| 5     | F/D extensions (floating point)                 | RV64IMAFDС       | AXI4    | Planned     |
+| 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
 `kronos_top` module interface, so the testbench and SoC integration point never
@@ -34,11 +34,15 @@ change between stages.
 
 ## Bus Interface
 
-**Stages 0–5:** OBI (Open Bus Interface) — a simple req/gnt/rvalid handshake
+**Stages 0–2:** OBI (Open Bus Interface) — a simple req/gnt/rvalid handshake
 with one outstanding transaction per port (instruction fetch + data).
 
-**Stage 6:** Native AXI4 — the out-of-order LSU requires multiple outstanding
-memory requests with tagged, out-of-order responses.
+**Stages 3–5:** Native AXI4 — single-outstanding AXI4 master ports (one
+in-flight transaction per channel). The `axi_from_mem` bridge used in earlier
+stages is removed; the core connects directly to the AXI crossbar.
+
+**Stage 6:** AXI4 with multiple outstanding IDs — the out-of-order LSU issues
+multiple in-flight memory requests with tagged, out-of-order responses.
 
 ## Repository Structure
 
@@ -52,22 +56,26 @@ kronos-riscv/
 │   │   ├── kronos_forward.sv  # Data forwarding mux selects (pure comb)
 │   │   ├── kronos_hazard.sv   # Stall/flush control (pure comb)
 │   │   └── kronos_top.sv      # Pipeline top (IF→ID→EX→MEM→WB)
-│   └── stage2/                # Stage 2: RV32M multiply/divide
-│       ├── kronos_decode.sv   # RV32I+M decoder (extends stage0)
-│       ├── kronos_muldiv.sv   # Multi-cycle mul/div FSM (2–34 cycles)
-│       └── kronos_top.sv      # Stage2 pipeline top (muldiv + combined stall)
+│   ├── stage2/                # Stage 2: RV32M multiply/divide
+│   │   ├── kronos_decode.sv   # RV32I+M decoder (extends stage0)
+│   │   ├── kronos_muldiv.sv   # Multi-cycle mul/div FSM (2–34 cycles)
+│   │   └── kronos_top.sv      # Stage2 pipeline top (muldiv + combined stall)
+│   └── stage3/                # Stage 3: AXI4 bus + C extension + branch predictor
+│       └── kronos_lsu.sv      # AXI4 LSU (single-outstanding, replaces OBI LSU)
 ├── tb/
 │   ├── tb_pkg.sv              # Shared testbench utilities
 │   ├── stage0/                # Stage 0 testbenches
 │   ├── stage1/                # Stage 1 unit testbenches
-│   └── stage2/                # Stage 2 unit testbenches
+│   ├── stage2/                # Stage 2 unit testbenches
+│   └── stage3/                # Stage 3 unit testbenches
 ├── sw/
 │   ├── stage0/                # Stage 0 test programs (RISC-V assembly)
 │   ├── stage1/                # Stage 1 hazard-focused test programs
-│   └── stage2/                # Stage 2 M-extension test programs
+│   ├── stage2/                # Stage 2 M-extension test programs
+│   └── stage3/                # Stage 3 test programs
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
-│   └── sim_main.cpp           # C++ OBI memory model and driver
+│   └── sim_main.cpp           # C++ simulation driver
 ├── kronos_riscv.core          # FuseSoC core descriptor (active: stage2)
 ├── LICENSE
 └── CLAUDE.md                  # Claude Code project instructions
@@ -123,8 +131,10 @@ cd sim && make sim-lsu-s1    # LSU OBI FSM
 
 kronos-riscv is designed to plug into
 [OpenSoC](https://github.com/vladdum/opensoc) as a git submodule at
-`hw/ip/kronos_riscv`, replacing the Ibex core. The OBI port list matches
-OpenSoC's existing `axi_from_mem` bridges exactly.
+`hw/ip/kronos_riscv`, replacing the Ibex core. Stages 0–2 use OBI and connect
+via OpenSoC's existing `axi_from_mem` bridges. From Stage 3 onward the core
+exposes native AXI4 master ports and connects directly to the AXI crossbar,
+removing the need for the bridge.
 
 ## License
 

@@ -8,6 +8,9 @@ OBJ_DIR   := obj_dir
 VERILATOR := verilator
 CFLAGS    := -std=c++14
 
+# --Wno-WIDTHEXPAND: suppress upstream axi_pkg.sv:203 width warning (PULP library bug)
+# This flag is required for all invocations that include axi_pkg.sv (stage3+)
+
 TOP       := kronos_top
 SIM_BIN   := $(OBJ_DIR)/V$(TOP)
 
@@ -72,10 +75,10 @@ SV_FILES_S2 := $(RTL_DIR)/kronos_pkg.sv \
 
 SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
 
-.PHONY: build build-s1 build-s2 run-% run-s0-% run-s1-% run-s2-% \
+.PHONY: build build-s1 build-s2 build-s3 run-% run-s0-% run-s1-% run-s2-% run-s3-% run-s3-latency-% \
         sim-alu sim-regfile sim-decode sim-compliance \
         sim-compliance-s1 sim-lsu-s1 sim-forward sim-hazard \
-        sim-muldiv sim-compliance-s2 clean
+        sim-muldiv sim-compliance-s2 sim-lsu-s3 sim-compliance-s3 clean
 
 build: $(SIM_BIN)
 
@@ -188,6 +191,75 @@ sim-compliance-s2: build-s2
 	  fi; \
 	done; \
 	echo "Stage 2 regression: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]
+
+PULP_AXI_INC  := -I/home/popes/opensoc/hw/ip/pulp_axi/include
+AXI_PKG_SV    := /home/popes/opensoc/hw/ip/pulp_axi/src/axi_pkg.sv
+SW_DIR_S3     := ../sw/stage3
+
+SV_FILES_S3 := $(AXI_PKG_SV) \
+               $(RTL_DIR)/kronos_pkg.sv \
+               $(RTL_DIR)/stage0/kronos_alu.sv \
+               $(RTL_DIR)/stage2/kronos_decode.sv \
+               $(RTL_DIR)/stage0/kronos_regfile.sv \
+               $(RTL_DIR)/stage0/kronos_csr.sv \
+               $(RTL_DIR)/stage3/kronos_lsu.sv \
+               $(RTL_DIR)/stage1/kronos_forward.sv \
+               $(RTL_DIR)/stage1/kronos_hazard.sv \
+               $(RTL_DIR)/stage2/kronos_muldiv.sv \
+               $(RTL_DIR)/stage3/kronos_top.sv \
+               sim_top.sv
+
+TOP_S3     := sim_top
+SIM_BIN_S3 := $(OBJ_DIR)/s3/V$(TOP_S3)
+
+TB_LSU_S3_FILES := $(AXI_PKG_SV) \
+                   $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage3/kronos_lsu.sv \
+                   $(TB_DIR)/stage3/tb_lsu_s3.sv
+
+build-s3: $(SIM_BIN_S3)
+
+$(SIM_BIN_S3): $(SV_FILES_S3) sim_main.cpp
+	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	  --top-module $(TOP_S3) \
+	  $(SV_FILES_S3) sim_main.cpp \
+	  -CFLAGS "$(CFLAGS)" \
+	  -Mdir $(OBJ_DIR)/s3 \
+	  $(PULP_AXI_INC) \
+	  -o V$(TOP_S3)
+
+run-s3-%: build-s3
+	./$(SIM_BIN_S3) $(SW_DIR_S3)/build/$*.hex
+
+run-s3-latency-%: build-s3
+	./$(SIM_BIN_S3) $(SW_DIR_S3)/build/$*.hex 2 4
+
+sim-lsu-s3:
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_lsu_s3 $(TB_LSU_S3_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_lsu_s3
+	./$(OBJ_DIR)/tb_lsu_s3/Vtb_lsu_s3
+
+sim-compliance-s3: build-s3
+	$(MAKE) -C $(SW_DIR) all
+	$(MAKE) -C $(SW_DIR_S1) all
+	$(MAKE) -C $(SW_DIR_S2) all
+	$(MAKE) -C $(SW_DIR_S3) all
+	@pass=0; fail=0; \
+	for hex in $(SW_DIR)/build/*.hex $(SW_DIR_S1)/build/*.hex \
+	           $(SW_DIR_S2)/build/*.hex \
+	           $$(ls $(SW_DIR_S3)/build/*.hex 2>/dev/null); do \
+	  [ -f "$$hex" ] || continue; \
+	  out=$$(./$(SIM_BIN_S3) $$hex 2>&1); \
+	  x10=$$(echo "$$out" | grep -oP 'x10 = \K[0-9]+'); \
+	  if [ "$$x10" = "0" ]; then \
+	    pass=$$((pass+1)); \
+	  else \
+	    echo "FAIL: $$hex (x10=$$x10)"; fail=$$((fail+1)); \
+	  fi; \
+	done; \
+	echo "Stage 3 regression: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ]
 
 clean:

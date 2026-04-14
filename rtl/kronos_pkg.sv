@@ -2,7 +2,25 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+`include "axi/typedef.svh"
+
 package kronos_pkg;
+
+  // -------------------------------------------------------------------------
+  // Stage 3+: AXI4 master port types
+  // -------------------------------------------------------------------------
+  typedef logic [31:0] kronos_axi_addr_t;
+  typedef logic [ 0:0] kronos_axi_id_t;
+  typedef logic [31:0] kronos_axi_data_t;
+  typedef logic [ 3:0] kronos_axi_strb_t;
+  typedef logic [ 0:0] kronos_axi_user_t;
+
+  // Generates: kronos_axi_aw_chan_t, kronos_axi_w_chan_t, kronos_axi_b_chan_t,
+  //            kronos_axi_ar_chan_t, kronos_axi_r_chan_t,
+  //            kronos_axi_req_t, kronos_axi_resp_t
+  `AXI_TYPEDEF_ALL(kronos_axi,
+    kronos_axi_addr_t, kronos_axi_id_t, kronos_axi_data_t,
+    kronos_axi_strb_t, kronos_axi_user_t)
 
   // ALU operation select
   typedef enum logic [3:0] {
