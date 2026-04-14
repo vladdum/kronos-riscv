@@ -76,7 +76,7 @@ filesets:
 
 targets:
   default:
-    filesets: [files_rtl_s2]
+    filesets: [files_rtl_s3]
     toplevel: kronos_top
 
   lint:
