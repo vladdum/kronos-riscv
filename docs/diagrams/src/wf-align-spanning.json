@@ -1,0 +1,35 @@
+{
+  "signal": [
+    { "name": "clk",          "wave": "P..............." },
+    { "name": "align_state",  "wave": "=....=....=...=.",
+      "data": ["NORMAL", "BUFFERED", "NEED_UPPER", "BUFFERED"] },
+    {},
+    { "name": "rvalid",       "wave": "0.10......10...." },
+    { "name": "rdata[1:0]",   "wave": "x.=x............",
+      "data": ["01 (16b)"] },
+    { "name": "rdata[15:0]",  "wave": "x.=x..........=x",
+      "data": ["instr16_A", "upper16_B"] },
+    { "name": "rdata[31:16]", "wave": "x.=x..........=x",
+      "data": ["low16_B (buf)", "tail16_C"] },
+    {},
+    { "name": "buf_data",     "wave": "x....=....=...=.",
+      "data": ["low16_B", "low16_B", "tail16_C"] },
+    { "name": "buf_valid",    "wave": "0....1.........." },
+    { "name": "need_upper",   "wave": "0.........1...0." },
+    {},
+    { "name": "instr_valid",  "wave": "0..10.....0...10" },
+    { "name": "instr_o",      "wave": "x..=x.....x...=x",
+      "data": ["decomp(A)", "{upper16_B, low16_B}"] },
+    { "name": "is_16b",       "wave": "0..1.0.........." },
+    {},
+    { "name": "needs_fetch",  "wave": "1....0....1...0." }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "Alignment — spanning 32-bit instruction (NEED_UPPER path)",
+    "tick": 0
+  },
+  "foot": {
+    "text": "A 32-bit instruction straddles two fetch words. NEED_UPPER pairs the previously buffered lower 16b with the next fetch's lower 16b; its upper 16b is buffered for the following instruction."
+  }
+}

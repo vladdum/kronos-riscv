@@ -1,0 +1,29 @@
+{
+  "signal": [
+    { "name": "clk",          "wave": "P......" },
+    { "name": "align_state",  "wave": "=......",
+      "data": ["NORMAL"] },
+    {},
+    { "name": "rvalid",       "wave": "0.10..." },
+    { "name": "rdata[1:0]",   "wave": "x.=x...",
+      "data": ["11 (32b)"] },
+    { "name": "rdata[31:0]",  "wave": "x.=x...",
+      "data": ["instr32"] },
+    {},
+    { "name": "instr_valid",  "wave": "0..10.." },
+    { "name": "instr_o",      "wave": "x..=x..",
+      "data": ["instr32"] },
+    { "name": "is_16b",       "wave": "0......" },
+    {},
+    { "name": "buf_valid",    "wave": "0......" },
+    { "name": "needs_fetch",  "wave": "1......" }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "Alignment — 32-bit pass-through (NORMAL state)",
+    "tick": 0
+  },
+  "foot": {
+    "text": "rdata[1:0]==11: instruction passes through; no buffering."
+  }
+}

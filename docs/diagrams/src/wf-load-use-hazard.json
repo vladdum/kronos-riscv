@@ -1,0 +1,35 @@
+{
+  "signal": [
+    { "name": "clk",             "wave": "P........." },
+    {},
+    { "name": "IF stage",        "wave": "=.=.=.=.=.",
+      "data": ["I₂", "I₃", "stall", "I₃", "I₄"] },
+    { "name": "ID stage",        "wave": "=.=.=.=.=.",
+      "data": ["I₁", "I₂", "stall", "I₂", "I₃"] },
+    { "name": "EX stage",        "wave": "=.=.=.=...",
+      "data": ["—", "I₁(LW)", "bubble", "I₂"] },
+    { "name": "MEM stage",       "wave": "=...=.....",
+      "data": ["—", "I₁(LW)"] },
+    { "name": "WB stage",        "wave": "=.....=...",
+      "data": ["—", "I₁(LW)"] },
+    {},
+    { "name": "id_ex_is_load",   "wave": "0.1.0....." },
+    { "name": "load-use match",  "wave": "0..10....." },
+    { "name": "id_ex_flush",     "wave": "0..10....." },
+    {},
+    { "name": "pc_en",           "wave": "1...0.1..." },
+    { "name": "if_id_en",        "wave": "1...0.1..." },
+    { "name": "id_ex_en",        "wave": "1...0.1..." },
+    {},
+    { "name": "fwd_rs1_sel",     "wave": "=.....=...",
+      "data": ["FWD_NONE", "FWD_MEMWB"] }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "Load-Use Hazard — 1-cycle bubble + MEM/WB forwarding",
+    "tick": 0
+  },
+  "foot": {
+    "text": "Load (I₁) writes rd in MEM; consumer (I₂) reads rd in EX. One bubble (id_ex flushed), then MEM/WB→EX forwarding resolves I₂."
+  }
+}

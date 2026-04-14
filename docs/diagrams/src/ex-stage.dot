@@ -1,0 +1,155 @@
+digraph ex_stage {
+  // ────────────────────────────────────────────────────────────────
+  // EX Stage — operand muxes, ALU, MUL/DIV, branch, CSR, trap.
+  // Layout: neato -n2 (pinned positions, orthogonal routing).
+  // Edge labels omitted — color and box labels carry the meaning:
+  //   red dashed    = FWD_EXMEM forwarding
+  //   purple dashed = FWD_MEMWB forwarding
+  //   dark-red dashed = branch redirect → IF PC
+  //
+  //   Forwarding inputs sit on far left above/below ID/EX.
+  //   Pipeline flows left → right through FWD → op muxes → ALU/MULDIV
+  //   → result mux / branch → EX/MEM.
+  //   Trap + CSR pair sits on the lower half.
+  // ────────────────────────────────────────────────────────────────
+  graph [
+    splines     = ortho,
+    pad         = 0.3,
+    outputorder = edgesfirst,
+    fontname    = "Helvetica",
+  ];
+
+  node [
+    shape    = box,
+    style    = "filled,rounded",
+    fontname = "Helvetica",
+    fontsize = 14,
+    penwidth = 2,
+  ];
+
+  edge [
+    fontname = "Helvetica",
+    fontsize = 12,
+    penwidth = 2,
+    color    = "#111827",
+  ];
+
+  // Title
+  title [pos="720,740!", label="EX Stage — Operand Muxes, ALU, MUL/DIV, Branch, CSR",
+         shape=plaintext, style="", fontsize=20, fontcolor="#7f1d1d"];
+
+  // Stage label
+  ex_label [pos="720,680!", label="EX Stage",
+            shape=plaintext, style="", fontsize=22, fontcolor="#7f1d1d"];
+
+  // ── Input register (tall — fans out to 8 destinations) ──────
+  id_ex_reg [pos="80,440!", label="ID/EX",
+             fillcolor="#9ca3af", color="#6b7280", fontsize=18,
+             width=1.4, height=4.0, fixedsize=true];
+
+  // ── Forwarding inputs (above and below ID/EX) ────────────────
+  ex_mem_fwd [pos="80,640!", label="EX/MEM fwd\nalu_result / rd",
+              fillcolor="#fecaca", color="#f87171", fontsize=13,
+              width=2.0, height=0.9, fixedsize=true];
+  mem_wb_fwd [pos="80,240!", label="MEM/WB fwd\nwb_result / rd",
+              fillcolor="#e9d5ff", color="#a855f7", fontsize=13,
+              width=2.0, height=0.9, fixedsize=true];
+
+  // ── FWD muxes ────────────────────────────────────────────────
+  fwd_rs1 [pos="340,560!",
+           label="FWD mux A\nFWD_NONE | EXMEM | MEMWB",
+           fillcolor="#fecaca", color="#f87171", fontsize=12,
+           width=3.0, height=0.9, fixedsize=true];
+  fwd_rs2 [pos="340,320!",
+           label="FWD mux B\nFWD_NONE | EXMEM | MEMWB",
+           fillcolor="#fecaca", color="#f87171", fontsize=12,
+           width=3.0, height=0.9, fixedsize=true];
+
+  // ── Operand muxes ────────────────────────────────────────────
+  op_a_mux [pos="640,560!",
+            label="Operand A mux\nuse_pc ? PC : fwd_rs1",
+            fillcolor="#fecaca", color="#f87171", fontsize=12,
+            width=2.4, height=0.9, fixedsize=true];
+  op_b_mux [pos="640,320!",
+            label="Operand B mux\nuse_imm ? imm : fwd_rs2",
+            fillcolor="#fecaca", color="#f87171", fontsize=12,
+            width=2.4, height=0.9, fixedsize=true];
+
+  // ── ALU and MUL/DIV ──────────────────────────────────────────
+  alu    [pos="920,560!",
+          label="kronos_alu\nRV32I integer ops",
+          fillcolor="#fecaca", color="#f87171", fontsize=13,
+          width=2.2, height=0.9, fixedsize=true];
+  muldiv [pos="920,320!",
+          label="kronos_muldiv\nmulti-cycle MUL/DIV",
+          fillcolor="#fecaca", color="#f87171", fontsize=13,
+          width=2.2, height=0.9, fixedsize=true];
+
+  // ── Result mux + Branch / Trap / CSR ─────────────────────────
+  res_mux [pos="1200,440!",
+           label="Result mux\nis_muldiv ?\nmuldiv_res : alu_res",
+           fillcolor="#fecaca", color="#f87171", fontsize=12,
+           width=2.4, height=1.0, fixedsize=true];
+  branch  [pos="1200,700!",
+           label="Branch resolution\ncomparator + mispredict",
+           fillcolor="#fecaca", color="#f87171", fontsize=12,
+           width=2.6, height=0.9, fixedsize=true];
+  trap    [pos="920,140!",
+           label="Trap priority\nirq > illegal > ecall > ebreak",
+           fillcolor="#fecaca", color="#f87171", fontsize=12,
+           width=2.6, height=0.9, fixedsize=true];
+  csr     [pos="1200,140!",
+           label="kronos_csr\ntraps / MRET / IRQ",
+           fillcolor="#fecaca", color="#f87171", fontsize=13,
+           width=2.2, height=0.9, fixedsize=true];
+
+  // ── Outputs ──────────────────────────────────────────────────
+  ex_mem_reg [pos="1500,440!", label="EX/MEM",
+              fillcolor="#9ca3af", color="#6b7280", fontsize=16,
+              width=1.4, height=0.7, fixedsize=true];
+  pc_reg     [pos="1500,660!",
+              label="IF PC Register\n(redirect target)",
+              fillcolor="#dbeafe", color="#3b82f6", fontsize=13,
+              width=2.0, height=0.9, fixedsize=true];
+
+  // ── ID/EX fan-out. Redundant control edges to muldiv/branch/trap
+  //    dropped — those units receive their control from id_ex_reg via
+  //    the same pipeline, shown implicitly by box labels.
+  id_ex_reg -> fwd_rs1  [tailport=ne, headport=w];
+  id_ex_reg -> op_a_mux [tailport=ne, headport=w];
+  id_ex_reg -> fwd_rs2  [tailport=se, headport=w];
+  id_ex_reg -> op_b_mux [tailport=se, headport=w];
+  id_ex_reg -> csr      [tailport=se, headport=w];
+
+  // ── Forwarding inputs (dashed) ───────────────────────────────
+  ex_mem_fwd -> fwd_rs1 [color="#ef4444", style=dashed, tailport=e, headport=w];
+  ex_mem_fwd -> fwd_rs2 [color="#ef4444", style=dashed, tailport=e, headport=w];
+  mem_wb_fwd -> fwd_rs1 [color="#a855f7", style=dashed, tailport=e, headport=w];
+  mem_wb_fwd -> fwd_rs2 [color="#a855f7", style=dashed, tailport=e, headport=w];
+
+  // ── Internal EX datapath ─────────────────────────────────────
+  fwd_rs1  -> op_a_mux [tailport=e, headport=w];
+  fwd_rs2  -> op_b_mux [tailport=e, headport=w];
+  op_a_mux -> alu      [tailport=e, headport=w];
+  op_b_mux -> muldiv   [tailport=e, headport=w];
+  // 2x2 cross — operand bus into both execute units
+  op_a_mux -> muldiv   [tailport=e, headport=nw];
+  op_b_mux -> alu      [tailport=e, headport=sw];
+  alu      -> res_mux  [tailport=e, headport=nw];
+  muldiv   -> res_mux  [tailport=e, headport=sw];
+
+  // Branch unit — fed via the top lane so arrows stay above alu/res_mux.
+  fwd_rs1 -> branch [tailport=n, headport=nw];
+  fwd_rs2 -> branch [tailport=n, headport=ne];
+  res_mux -> branch [tailport=n, headport=s];
+
+  trap    -> csr   [tailport=e, headport=w];
+
+  // ── Outputs to EX/MEM register ───────────────────────────────
+  res_mux -> ex_mem_reg [tailport=e, headport=w];
+  branch  -> ex_mem_reg [tailport=s, headport=n];
+  csr     -> ex_mem_reg [tailport=e, headport=s];
+
+  // ── Branch redirect → IF PC (dashed red) ─────────────────────
+  branch -> pc_reg [color="#dc2626", style=dashed, tailport=e, headport=w];
+}

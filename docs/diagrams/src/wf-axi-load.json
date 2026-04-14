@@ -1,0 +1,31 @@
+{
+  "signal": [
+    { "name": "clk",       "wave": "P........." },
+    { "name": "state",     "wave": "=.=.=.=.=.",
+      "data": ["IDLE", "LD_ADDR", "LD_DATA", "LD_DONE", "IDLE"] },
+    {},
+    { "name": "ar_valid",  "wave": "01.0......" },
+    { "name": "ar_ready",  "wave": "0.10......" },
+    { "name": "ar_addr",   "wave": "x=.x......",
+      "data": ["addr"] },
+    {},
+    { "name": "r_valid",   "wave": "0....10..." },
+    { "name": "r_ready",   "wave": "0...1.0..." },
+    { "name": "r_data",    "wave": "x....=x...",
+      "data": ["rdata"] },
+    {},
+    { "name": "req_i",     "wave": "01.0......" },
+    { "name": "mem_stall", "wave": "01.....0.." },
+    { "name": "valid_o",   "wave": "0......10." },
+    { "name": "rdata_o",   "wave": "x......=x.",
+      "data": ["rdata"] }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "AXI4 Load Transaction — IDLE → LD_ADDR → LD_DATA → LD_DONE → IDLE",
+    "tick": 0
+  },
+  "foot": {
+    "text": "LD_ADDR issues the address (AR); LD_DATA waits for the data (R); LD_DONE pulses valid_o. mem_stall holds the pipeline until r_valid arrives."
+  }
+}

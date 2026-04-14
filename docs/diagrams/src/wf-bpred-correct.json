@@ -1,0 +1,39 @@
+{
+  "signal": [
+    { "name": "clk",              "wave": "P........." },
+    {},
+    ["IF Stage",
+      { "name": "pc_q",           "wave": "=.=...=...",
+        "data": ["PC_branch", "T (predicted)", "T+4"] },
+      { "name": "pred_taken",     "wave": "01.0......" },
+      { "name": "pred_target",    "wave": "x=.x......",
+        "data": ["T"] }
+    ],
+    {},
+    ["ID Stage",
+      { "name": "if_id_q.pc",     "wave": "x=.=...=..",
+        "data": ["PC_branch", "T", "T+4"] },
+      { "name": "if_id_q.pred_taken",  "wave": "x01.0....." }
+    ],
+    {},
+    ["EX Stage",
+      { "name": "id_ex_q.pc",     "wave": "x..=.=...=",
+        "data": ["PC_branch", "T", "T+4"] },
+      { "name": "id_ex_q.pred_taken",  "wave": "x..01.0..." },
+      { "name": "actual_taken",   "wave": "x..01.0..." },
+      { "name": "bpred_mispredict", "wave": "0........." },
+      { "name": "ex_redirect",    "wave": "0........." }
+    ],
+    {},
+    { "name": "if_id_flush",      "wave": "0........." },
+    { "name": "id_ex_flush",      "wave": "0........." }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "Branch Predictor — correct prediction (pred_taken=1, actual_taken=1, same target)",
+    "tick": 0
+  },
+  "foot": {
+    "text": "PC jumps to T immediately. EX confirms actual_taken=1 with matching target. No mispredict, no flush."
+  }
+}

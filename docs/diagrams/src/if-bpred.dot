@@ -1,0 +1,112 @@
+digraph if_bpred {
+  // ────────────────────────────────────────────────────────────────
+  // IF Stage — Branch Predictor (kronos_bpred).
+  // Layout: neato -n2 (pinned positions, orthogonal routing).
+  //
+  // Compact two-row layout (no arrow intersections):
+  //   y=420 Lookup  : pc_in → idx_logic → {bimodal, btb} → hit_check → pred_out
+  //   y=180 Update  : upd_in → upd_idx  → {counter_upd, btb_upd}
+  //   Table pairs (bimodal/counter_upd and btb/btb_upd) share an
+  //   x-column, so the update-writeback arrows travel straight up
+  //   without crossing anything.
+  // ────────────────────────────────────────────────────────────────
+  graph [
+    splines     = ortho,
+    pad         = 0.3,
+    outputorder = edgesfirst,
+    fontname    = "Helvetica",
+  ];
+
+  node [
+    shape    = box,
+    style    = "filled,rounded",
+    fontname = "Helvetica",
+    fontsize = 14,
+    penwidth = 2,
+  ];
+
+  edge [
+    fontname = "Helvetica",
+    fontsize = 13,
+    penwidth = 2,
+    color    = "#111827",
+  ];
+
+  // Title
+  title [pos="620,580!", label="IF Stage — Branch Predictor (kronos_bpred)",
+         shape=plaintext, style="", fontsize=22, fontcolor="#111827"];
+
+  // Section labels
+  lookup_label [pos="620,520!", label="Lookup Path (combinational)",
+                shape=plaintext, style="", fontsize=16, fontcolor="#1e3a8a"];
+  upd_label    [pos="620,300!", label="Update Path (registered)",
+                shape=plaintext, style="", fontsize=16, fontcolor="#9a3412"];
+
+  // ── Inputs (left column) ──────────────────────────────────────
+  pc_in  [pos="70,420!", label="PC input\n(pc_q)",
+          fillcolor="#f5f5f5", color="#9ca3af", fontsize=13,
+          width=1.5, height=0.8, fixedsize=true];
+  upd_in [pos="70,180!", label="EX Update\nupd_valid / pc / taken\n/ target / is_jal",
+          fillcolor="#ffedd5", color="#f97316", fontsize=12,
+          width=1.8, height=1.0, fixedsize=true];
+
+  // ── Lookup Path (top row, blue) ───────────────────────────────
+  idx_logic [pos="250,420!",
+             label="Index Logic\nbimodal_idx = pc[7:2]\nbtb_idx     = pc[5:2]\ntag         = pc[31:6]",
+             fillcolor="#bfdbfe", color="#60a5fa", fontsize=11,
+             width=2.2, height=1.2, fixedsize=true];
+  bimodal   [pos="490,420!",
+             label="Bimodal Table\n64×2b sat-counter\npred_taken = counter[1]",
+             fillcolor="#bfdbfe", color="#60a5fa", fontsize=11,
+             width=2.4, height=1.0, fixedsize=true];
+  btb       [pos="740,420!",
+             label="BTB\n16 entries\n(valid|tag|target)\nhit = valid & tag match",
+             fillcolor="#bfdbfe", color="#60a5fa", fontsize=11,
+             width=2.4, height=1.1, fixedsize=true];
+  hit_check [pos="1030,420!",
+             label="Hit & Prediction\npred_taken = btb_hit\n              & counter[1]\npred_target = btb[idx].target",
+             fillcolor="#bfdbfe", color="#60a5fa", fontsize=11,
+             width=3.0, height=1.2, fixedsize=true];
+
+  // ── Update Path (bottom row, orange) — columns aligned with lookup
+  upd_idx    [pos="250,180!",
+              label="Update Index Logic\nupdate_idx     = upd_pc[7:2]\nupdate_btb_idx = upd_pc[5:2]",
+              fillcolor="#fed7aa", color="#fb923c", fontsize=11,
+              width=2.6, height=1.0, fixedsize=true];
+  counter_upd[pos="490,180!",
+              label="Counter Update\ntaken → incr (max 11)\nnot-taken → decr (min 00)\n(JAL skips counter)",
+              fillcolor="#fed7aa", color="#fb923c", fontsize=11,
+              width=2.4, height=1.2, fixedsize=true];
+  btb_upd    [pos="740,180!",
+              label="BTB Update\ntaken/JAL → write entry\nnot-taken & cnt=00\n→ invalidate",
+              fillcolor="#fed7aa", color="#fb923c", fontsize=11,
+              width=2.4, height=1.2, fixedsize=true];
+
+  // ── Output ───────────────────────────────────────────────────
+  pred_out [pos="1300,420!",
+            label="Prediction Outputs\npred_taken_o\npred_target_o",
+            fillcolor="#dcfce7", color="#22c55e", fontsize=13,
+            width=2.2, height=1.0, fixedsize=true];
+
+  // Note aligned under pred_out
+  note [pos="1300,180!",
+        label="Reset: counters = 2'b01,\nBTB cleared.\nLookup: combinational.\nUpdates: registered.",
+        fillcolor="#fef9c3", color="#eab308", fontcolor="#713f12",
+        fontsize=11, width=2.4, height=1.2, fixedsize=true];
+
+  // ── Lookup edges (horizontal, same row) ──────────────────────
+  pc_in     -> idx_logic [tailport=e, headport=w];
+  idx_logic -> bimodal   [tailport=e, headport=w];
+  bimodal   -> btb       [tailport=e, headport=w];
+  btb       -> hit_check [tailport=e, headport=w];
+  hit_check -> pred_out  [tailport=e, headport=w];
+
+  // ── Update edges (horizontal, same row) ──────────────────────
+  upd_in    -> upd_idx     [tailport=e, headport=w];
+  upd_idx   -> counter_upd [tailport=e, headport=w];
+  counter_upd -> btb_upd   [tailport=e, headport=w];
+
+  // ── Update writebacks (pure vertical — same x-column) ───────
+  counter_upd -> bimodal [color="#f97316", style=dashed, tailport=n, headport=s];
+  btb_upd     -> btb     [color="#f97316", style=dashed, tailport=n, headport=s];
+}

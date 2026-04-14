@@ -1,0 +1,27 @@
+{
+  "signal": [
+    { "name": "clk",               "wave": "P..........." },
+    { "name": "fetch_state",       "wave": "=.=...=.=...",
+      "data": ["IDLE", "WAIT_R", "IDLE", "WAIT_R"] },
+    {},
+    { "name": "ar_valid",          "wave": "01.0..1.0..." },
+    { "name": "ar_ready",          "wave": "0.10..0.10.." },
+    { "name": "ar_addr",           "wave": "x=.x..=.x...",
+      "data": ["PC₀", "PC₁"] },
+    {},
+    { "name": "r_valid",           "wave": "0...10...10." },
+    { "name": "r_ready",           "wave": "0..1.00..1.0" },
+    { "name": "r_data",            "wave": "x...=x...=x.",
+      "data": ["instr₀", "instr₁"] },
+    {},
+    { "name": "instr_fetch_stall", "wave": "1...0.1..0.1" }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "AXI4 Instruction Fetch — two back-to-back word reads",
+    "tick": 0
+  },
+  "foot": {
+    "text": "IDLE issues the address (AR); WAIT_R waits for the data (R). instr_fetch_stall deasserts once r_valid arrives, releasing the pipeline."
+  }
+}
