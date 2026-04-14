@@ -75,6 +75,22 @@ module kronos_top
   logic         instr_fetch_stall;
   logic         combined_stall;
 
+  // STAGE3: C extension — alignment unit signals
+  logic [31:0] align_instr;
+  logic        align_instr_valid;
+  logic        align_is_16b;
+  logic        align_stall;
+  logic        align_need_upper;
+  logic        align_needs_fetch;
+
+  // STAGE3: branch predictor
+  logic        pred_taken;
+  logic [31:0] pred_target;
+  logic        bpred_update_en;
+  logic        actual_taken;
+  logic        bpred_mispredict;
+  logic        is_branch_or_jump;
+
   // -------------------------------------------------------------------------
   // MEM-stage wires
   // -------------------------------------------------------------------------
@@ -131,8 +147,8 @@ module kronos_top
 
   // STAGE3: combined_stall — mem_stall | muldiv_stall | instr_fetch_stall
   assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
-  // instr_fetch_stall: deasserts only on the cycle r_valid fires in FETCH_WAIT_R.
-  assign instr_fetch_stall = ~(fetch_state_q == FETCH_WAIT_R && instr_axi_rsp_i.r_valid);
+  // STAGE3: stall until the alignment unit has a valid instruction ready.
+  assign instr_fetch_stall = ~align_instr_valid;
   assign combined_stall    = mem_stall | muldiv_stall | instr_fetch_stall;
 
   kronos_hazard u_hazard (
@@ -176,7 +192,7 @@ module kronos_top
 
   assign ex_result = id_ex_q.dec.is_muldiv ? muldiv_result : alu_result;
 
-  kronos_csr #(.MISA_EXT(26'h1100)) u_csr (
+  kronos_csr #(.MISA_EXT(26'h1104)) u_csr (  // I+M+C bits
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
     .req_i         (id_ex_q.valid & id_ex_q.dec.is_csr),
@@ -226,11 +242,45 @@ module kronos_top
   assign data_axi_req_o = data_req;
   assign data_rsp       = data_axi_rsp_i;
 
+  kronos_align u_align (
+    .clk_i               (clk_i),
+    .rst_ni              (rst_ni),
+    .rdata_i             (instr_axi_rsp_i.r.data),
+    .rvalid_i            ((fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid),
+    .stall_i             (align_instr_valid & ~if_id_en),
+    .flush_i             (if_id_flush | (pred_taken & pc_en & ~ex_redirect)),
+    .pc_offset_i         (ex_redirect ? ex_pc_next[1]
+                        : pred_taken  ? pred_target[1]
+                        :               pc_q[1]),
+    .instr_o             (align_instr),
+    .instr_valid_o       (align_instr_valid),
+    .is_16b_o            (align_is_16b),
+    .align_stall_o       (align_stall),
+    .align_need_upper_o  (align_need_upper),
+    .align_needs_fetch_o (align_needs_fetch)
+  );
+
+  kronos_bpred u_bpred (
+    .clk_i           (clk_i),
+    .rst_ni          (rst_ni),
+    .pc_i            (pc_q),
+    .pred_taken_o    (pred_taken),
+    .pred_target_o   (pred_target),
+    .upd_valid_i     (bpred_update_en),
+    .upd_pc_i        (id_ex_q.pc),
+    .upd_taken_i     (actual_taken),
+    .upd_target_i    (ex_pc_next),
+    .upd_is_jal_i    (id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr)
+  );
+
   // =========================================================================
   // PC register
   // =========================================================================
   logic [31:0] pc_next;
-  assign pc_next = ex_redirect ? ex_pc_next : pc_q + 32'd4;
+  assign pc_next = ex_redirect   ? ex_pc_next
+                 : pred_taken    ? pred_target
+                 : align_is_16b  ? pc_q + 32'd2
+                 :                 pc_q + 32'd4;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) pc_q <= boot_addr_i;
@@ -250,7 +300,7 @@ module kronos_top
     if (!rst_ni) fetch_state_q <= FETCH_IDLE;
     else begin
       unique case (fetch_state_q)
-        FETCH_IDLE:   if (instr_axi_rsp_i.ar_ready)  fetch_state_q <= FETCH_WAIT_R;
+        FETCH_IDLE:   if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready) fetch_state_q <= FETCH_WAIT_R;
         FETCH_WAIT_R: if (instr_axi_rsp_i.r_valid)   fetch_state_q <= FETCH_IDLE;
         default:      fetch_state_q <= FETCH_IDLE;
       endcase
@@ -263,8 +313,11 @@ module kronos_top
     instr_axi_req_o            = '0;
     unique case (fetch_state_q)
       FETCH_IDLE: begin
-        instr_axi_req_o.ar_valid  = rst_ni;
-        instr_axi_req_o.ar.addr   = pc_q;
+        // STAGE3: gate by align_needs_fetch; use next-word addr in NEED_UPPER
+        instr_axi_req_o.ar_valid  = rst_ni & align_needs_fetch;
+        instr_axi_req_o.ar.addr   = align_need_upper
+          ? {pc_q[31:2] + 30'd1, 2'b00}
+          : {pc_q[31:2], 2'b00};
         instr_axi_req_o.ar.size   = 3'b010;
         instr_axi_req_o.ar.burst  = axi_pkg::BURST_INCR;
       end
@@ -281,9 +334,12 @@ module kronos_top
     end else if (if_id_flush) begin
       if_id_q <= '0;
     end else if (if_id_en) begin
-      if_id_q.pc    <= pc_q;
-      if_id_q.instr <= instr_axi_rsp_i.r.data;
-      if_id_q.valid <= (fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid;
+      if_id_q.pc          <= pc_q;
+      if_id_q.instr       <= align_instr;
+      if_id_q.valid       <= align_instr_valid;
+      if_id_q.is_16b      <= align_is_16b;
+      if_id_q.pred_taken  <= pred_taken & ~ex_redirect;
+      if_id_q.pred_target <= pred_target;
     end
   end
 
@@ -296,11 +352,14 @@ module kronos_top
     end else if (id_ex_flush) begin
       id_ex_q <= '0;
     end else if (id_ex_en) begin
-      id_ex_q.pc       <= if_id_q.pc;
-      id_ex_q.dec      <= id_dec;
-      id_ex_q.rs1_data <= rs1_data_id;
-      id_ex_q.rs2_data <= rs2_data_id;
-      id_ex_q.valid    <= if_id_q.valid;
+      id_ex_q.pc          <= if_id_q.pc;
+      id_ex_q.dec         <= id_dec;
+      id_ex_q.rs1_data    <= rs1_data_id;
+      id_ex_q.rs2_data    <= rs2_data_id;
+      id_ex_q.valid       <= if_id_q.valid;
+      id_ex_q.is_16b      <= if_id_q.is_16b;
+      id_ex_q.pred_taken  <= if_id_q.pred_taken;
+      id_ex_q.pred_target <= if_id_q.pred_target;
     end
   end
 
@@ -360,13 +419,30 @@ module kronos_top
     else if (branch_taken)
       ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
     else
-      ex_pc_next = id_ex_q.pc + 32'd4;
+      ex_pc_next = id_ex_q.is_16b ? id_ex_q.pc + 32'd2 : id_ex_q.pc + 32'd4;
   end
 
-  assign ex_redirect = id_ex_q.valid &
-    (id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr | branch_taken |
-     id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak | id_ex_q.dec.illegal |
-     id_ex_q.dec.is_mret  | irq_pending);
+  // STAGE3: branch predictor — misprediction detection and update
+  assign is_branch_or_jump = id_ex_q.dec.is_branch | id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr;
+  assign actual_taken = branch_taken | id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr;
+
+  assign bpred_mispredict = id_ex_q.valid & (
+    // Predicted taken but actually not taken (or not a branch/jump at all)
+    (id_ex_q.pred_taken & ~actual_taken) |
+    // Not predicted but actually taken
+    (~id_ex_q.pred_taken & actual_taken) |
+    // Both predicted and actually taken but wrong target
+    (id_ex_q.pred_taken & actual_taken & (id_ex_q.pred_target != ex_pc_next))
+  );
+
+  // Update predictor when a branch/jump leaves EX
+  assign bpred_update_en = id_ex_q.valid & ex_mem_en & is_branch_or_jump;
+
+  // STAGE3: redirect on misprediction or trap/mret (not on correct prediction)
+  assign ex_redirect = bpred_mispredict |
+    (id_ex_q.valid &
+     (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak | id_ex_q.dec.illegal |
+      irq_pending | id_ex_q.dec.is_mret));
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -380,6 +456,7 @@ module kronos_top
       ex_mem_q.csr_rdata  <= csr_rdata;
       ex_mem_q.redirect   <= ex_redirect;
       ex_mem_q.valid      <= id_ex_q.valid & ~irq_pending;
+      ex_mem_q.is_16b     <= id_ex_q.is_16b;
     end
   end
 
@@ -414,7 +491,7 @@ module kronos_top
       // the pipeline advances after an earlier lsu_valid (mem_done_q=1).
       mem_wb_q.lsu_rdata  <= lsu_valid ? lsu_rdata : lsu_rdata_latch;
       mem_wb_q.csr_rdata  <= ex_mem_q.csr_rdata;
-      mem_wb_q.pc4        <= ex_mem_q.pc + 32'd4;
+      mem_wb_q.pc4        <= ex_mem_q.pc + (ex_mem_q.is_16b ? 32'd2 : 32'd4);
       mem_wb_q.valid      <= ex_mem_q.valid;
     end
   end

@@ -111,10 +111,25 @@ package kronos_pkg;
     FWD_MEMWB = 2'd2    // forward from WB mux output
   } fwd_sel_e;
 
+  // -------------------------------------------------------------------------
+  // Stage 3: compressed instruction and branch predictor types
+  // -------------------------------------------------------------------------
+
+  // BTB entry (16-entry direct-mapped, indexed by pc[5:2])
+  typedef struct packed {
+    logic        valid;
+    logic [25:0] tag;    // pc[31:6] — distinguishes aliased entries
+    logic [31:0] target; // predicted branch/jump target
+  } btb_entry_t;
+
   typedef struct packed {
     logic [31:0] pc;
     logic [31:0] instr;
     logic        valid;
+    // Stage 3+
+    logic        is_16b;      // instruction was 16-bit (C extension); PC+2, not PC+4
+    logic        pred_taken;  // branch predictor predicted taken
+    logic [31:0] pred_target; // predicted target (valid when pred_taken=1)
   } if_id_reg_t;
 
   typedef struct packed {
@@ -123,6 +138,10 @@ package kronos_pkg;
     logic [31:0]    rs1_data;
     logic [31:0]    rs2_data;
     logic           valid;
+    // Stage 3+
+    logic        is_16b;
+    logic        pred_taken;
+    logic [31:0] pred_target;
   } id_ex_reg_t;
 
   typedef struct packed {
@@ -134,6 +153,8 @@ package kronos_pkg;
     logic [31:0]    csr_rdata;
     logic           redirect;
     logic           valid;
+    // Stage 3+
+    logic           is_16b;   // needed so WB computes correct pc4 link address
   } ex_mem_reg_t;
 
   typedef struct packed {

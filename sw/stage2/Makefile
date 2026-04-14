@@ -4,7 +4,7 @@ OBJCOPY := riscv64-unknown-elf-objcopy
 
 BUILD_DIR := build
 
-TESTS := test_mul test_div test_muldiv_hazards test_irq
+TESTS := test_mul test_div test_muldiv_hazards test_irq test_load_muldiv_edge
 
 all: $(addprefix $(BUILD_DIR)/, $(addsuffix .hex, $(TESTS)))
 
