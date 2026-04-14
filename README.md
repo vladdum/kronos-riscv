@@ -23,7 +23,7 @@ all stages; RV64 support is added at Stage 4.
 | 0     | Single-cycle golden model                       | RV32I            | OBI     | Complete    |
 | 1     | 5-stage in-order pipeline                       | RV32I            | OBI     | Complete    |
 | 2     | M extension + CSR hardening                     | RV32IM           | OBI     | Complete    |
-| 3     | AXI4 switch + C extension + branch predictor   | RV32IMC          | AXI4    | In progress |
+| 3     | AXI4 switch + C extension + branch predictor   | RV32IMC          | AXI4    | Complete    |
 | 4     | RV64I + A extension                             | RV64IMAC         | AXI4    | Planned     |
 | 5     | F/D extensions (floating point)                 | RV64IMAFDС       | AXI4    | Planned     |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
@@ -61,7 +61,11 @@ kronos-riscv/
 │   │   ├── kronos_muldiv.sv   # Multi-cycle mul/div FSM (2–34 cycles)
 │   │   └── kronos_top.sv      # Stage2 pipeline top (muldiv + combined stall)
 │   └── stage3/                # Stage 3: AXI4 bus + C extension + branch predictor
-│       └── kronos_lsu.sv      # AXI4 LSU (single-outstanding, replaces OBI LSU)
+│       ├── kronos_lsu.sv      # AXI4 LSU (single-outstanding, replaces OBI LSU)
+│       ├── kronos_decompress.sv # RV32C 16-bit → 32-bit instruction expander
+│       ├── kronos_align.sv    # Fetch alignment buffer (variable-width instructions)
+│       ├── kronos_bpred.sv    # Bimodal branch predictor with BTB
+│       └── kronos_top.sv      # Stage3 pipeline top (AXI4 + C ext + bpred)
 ├── tb/
 │   ├── tb_pkg.sv              # Shared testbench utilities
 │   ├── stage0/                # Stage 0 testbenches
@@ -76,7 +80,7 @@ kronos-riscv/
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
 │   └── sim_main.cpp           # C++ simulation driver
-├── kronos_riscv.core          # FuseSoC core descriptor (active: stage2)
+├── kronos_riscv.core          # FuseSoC core descriptor (active: stage3)
 ├── LICENSE
 └── CLAUDE.md                  # Claude Code project instructions
 ```
@@ -103,25 +107,24 @@ fusesoc --cores-root=. run --target=lint-s1 opensoc:ip:kronos_riscv
 fusesoc --cores-root=. run --target=lint-s0 opensoc:ip:kronos_riscv
 
 # Build simulators
+cd sim && make build-s3   # stage 3 (RV32IMC, AXI4)
 cd sim && make build-s2   # stage 2 (RV32IM)
 cd sim && make build-s1   # stage 1 (RV32I)
 
-# Run a stage 2 test
-cd sim && make run-s2-test_mul
-cd sim && make run-s2-test_div
-cd sim && make run-s2-test_muldiv_hazards
-cd sim && make run-s2-test_irq
+# Run a stage 3 test
+cd sim && make run-s3-test_c_basic
+cd sim && make run-s3-test_c_control
+cd sim && make run-s3-test_bpred_loop
 
-# Muldiv unit test
+# Stage 3 unit testbenches
+cd sim && make sim-decompress  # RV32C instruction expander
+cd sim && make sim-bpred       # branch predictor
+cd sim && make sim-lsu-s3      # AXI4 LSU
+
+# Stage 2 unit testbenches
 cd sim && make sim-muldiv
 
-# Full regression (stage 2 simulator, all sw/ programs + rv32ui compliance)
-cd sim && make sim-compliance
-
-# Full stage 1 regression (unit tests + rv32ui compliance)
-cd sim && make sim-compliance-s1
-
-# Unit tests
+# Stage 1 unit testbenches
 cd sim && make sim-forward   # forwarding unit
 cd sim && make sim-hazard    # hazard/stall control
 cd sim && make sim-lsu-s1    # LSU OBI FSM

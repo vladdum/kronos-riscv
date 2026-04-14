@@ -57,6 +57,9 @@ filesets:
       - rtl/stage1/kronos_forward.sv
       - rtl/stage1/kronos_hazard.sv
       - rtl/stage2/kronos_muldiv.sv
+      - rtl/stage3/kronos_decompress.sv
+      - rtl/stage3/kronos_align.sv
+      - rtl/stage3/kronos_bpred.sv
       - rtl/stage3/kronos_top.sv
     file_type: systemVerilogSource
 

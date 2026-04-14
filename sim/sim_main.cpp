@@ -10,6 +10,7 @@
 //   data_latency:  cycles from AW+W accepted to B valid / AR to R valid (default 1)
 
 #include "Vsim_top.h"
+#include "Vsim_top___024root.h"
 #include "verilated.h"
 #include <cstdio>
 #include <cstring>
@@ -111,6 +112,8 @@ int main(int argc, char** argv) {
     int irq_countdown = 0;
     const int IRQ_HOLD = INSTR_LAT * 4 + DATA_LAT + 4;
 
+    bool debug = (getenv("SIM_DEBUG") != nullptr);
+
     for (int cycle = 0; cycle < MAX_CYCLES && !halted; cycle++) {
 
         // ---- Drive IRQ ----
@@ -153,10 +156,17 @@ int main(int argc, char** argv) {
         }
 
         // ---- Evaluate combinatorial outputs BEFORE rising edge ----
-        // Handshakes are sampled from the pre-clock combinatorial state. After the
-        // rising edge, FSM state updates (e.g. FETCH_IDLE→FETCH_WAIT_R) deassert
-        // ar_valid, making post-clock detection miss accepted transactions.
         top->eval();
+
+        if (debug) {
+            uint32_t pc   = top->rootp->sim_top__DOT__u_top__DOT__pc_q;
+            uint8_t  al_v = top->rootp->sim_top__DOT__u_top__DOT__align_instr_valid;
+            uint32_t ins  = top->rootp->sim_top__DOT__u_top__DOT__align_instr;
+            uint8_t  redir = top->rootp->sim_top__DOT__u_top__DOT__ex_redirect;
+            uint32_t epc  = top->rootp->sim_top__DOT__u_top__DOT__ex_pc_next;
+            printf("C%05d: pc=%08x al_v=%d ins=%08x redir=%d epc=%08x\n",
+                   cycle, pc, al_v, ins, redir, epc);
+        }
 
         // ---- Detect handshakes from pre-clock combinatorial state ----
 
