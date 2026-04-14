@@ -56,21 +56,26 @@ module kronos_muldiv
   logic [31:0] result_q;
 
   // -------------------------------------------------------------------------
-  // MUL: combinational 66-bit product using 33-bit sign-extended operands.
-  // Computed immediately from a_i/b_i/op_i during the IDLE cycle when req fires.
+  // MUL: operands latched on req_i; combinational 66-bit product is computed
+  // from the latched copies during MUL_BUSY and registered into result_q.
+  // This gives synthesis a full clock period for the multiply path
+  // (a_q/b_q flops → mul_product → result_q flop) with no XDC needed.
   // -------------------------------------------------------------------------
+  logic [31:0]   mul_a_q, mul_b_q;
+  muldiv_op_e    mul_op_q;
+
   logic        mul_signed_a, mul_signed_b;
   logic [32:0] mul_a33, mul_b33;
   logic signed [65:0] mul_product;
 
-  assign mul_signed_a = (op_i == MULDIV_MUL) | (op_i == MULDIV_MULH) | (op_i == MULDIV_MULHSU);
-  assign mul_signed_b = (op_i == MULDIV_MUL) | (op_i == MULDIV_MULH);
-  assign mul_a33      = mul_signed_a ? {a_i[31], a_i} : {1'b0, a_i};
-  assign mul_b33      = mul_signed_b ? {b_i[31], b_i} : {1'b0, b_i};
+  assign mul_signed_a = (mul_op_q == MULDIV_MUL) | (mul_op_q == MULDIV_MULH) | (mul_op_q == MULDIV_MULHSU);
+  assign mul_signed_b = (mul_op_q == MULDIV_MUL) | (mul_op_q == MULDIV_MULH);
+  assign mul_a33      = mul_signed_a ? {mul_a_q[31], mul_a_q} : {1'b0, mul_a_q};
+  assign mul_b33      = mul_signed_b ? {mul_b_q[31], mul_b_q} : {1'b0, mul_b_q};
   assign mul_product  = $signed(mul_a33) * $signed(mul_b33);
 
   logic [31:0] mul_result_comb;
-  assign mul_result_comb = (op_i == MULDIV_MUL) ? mul_product[31:0] : mul_product[63:32];
+  assign mul_result_comb = (mul_op_q == MULDIV_MUL) ? mul_product[31:0] : mul_product[63:32];
 
   // -------------------------------------------------------------------------
   // DIV: registers for iterative restoring division
@@ -100,6 +105,9 @@ module kronos_muldiv
     if (!rst_ni) begin
       state_q     <= IDLE;
       result_q    <= '0;
+      mul_a_q     <= '0;
+      mul_b_q     <= '0;
+      mul_op_q    <= MULDIV_MUL;
       dividend_q  <= '0;
       remainder_q <= '0;
       quotient_q  <= '0;
@@ -116,8 +124,10 @@ module kronos_muldiv
           if (req_i) begin
             unique case (op_i)
               MULDIV_MUL, MULDIV_MULH, MULDIV_MULHSU, MULDIV_MULHU: begin
-                // Capture combinational product; spend one cycle in MUL_BUSY
-                result_q <= mul_result_comb;
+                // Latch operands; product is computed and registered in MUL_BUSY
+                mul_a_q  <= a_i;
+                mul_b_q  <= b_i;
+                mul_op_q <= op_i;
                 state_q  <= MUL_BUSY;
               end
 
@@ -170,9 +180,10 @@ module kronos_muldiv
 
         // ---------------------------------------------------------------
         MUL_BUSY: begin
-          // result_q already holds the product from the IDLE cycle.
-          // Spend exactly one busy cycle, then expose the result.
-          state_q <= DONE;
+          // Operands are stable in mul_a_q/mul_b_q; register the product now.
+          // Synthesis sees a full clock period: mul_a/b_q flops → mul_product → result_q.
+          result_q <= mul_result_comb;
+          state_q  <= DONE;
         end
 
         // ---------------------------------------------------------------
