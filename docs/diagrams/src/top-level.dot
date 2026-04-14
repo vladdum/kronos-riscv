@@ -1,0 +1,145 @@
+digraph top_level {
+  // ────────────────────────────────────────────────────────────────
+  // Top-level Kronos pipeline block diagram.
+  //
+  // Layout: neato -n2 (pinned positions, orthogonal edge routing).
+  // `pos` is in POINTS (72/inch); `width`/`height` are in INCHES.
+  //
+  // Layout plan (y grows up in DOT):
+  //   y=460..500  three red-lane waypoints, stacked with ~35pt gaps
+  //   y=288       pipeline row (IF, IF/ID, ID, ..., WB)
+  //   y=180       IRQ (under EX), Data AXI4 (under MEM), Instr AXI4
+  //   y=90        Control (hazard + forward)
+  //
+  //   x=50        boot_addr / Instr AXI4 / IF column start
+  //   Pipeline stages at ~108pt (1.5") apart horizontally.
+  // ────────────────────────────────────────────────────────────────
+  graph [
+    splines  = ortho,
+    pad      = 0.3,
+    fontname = "Helvetica",
+    outputorder = edgesfirst,
+  ];
+
+  node [
+    shape     = box,
+    style     = "filled,rounded",
+    fontname  = "Helvetica",
+    fontsize  = 22,
+    penwidth  = 2,
+  ];
+
+  edge [
+    fontname = "Helvetica",
+    fontsize = 16,
+    penwidth = 2,
+    color    = "#111827",
+  ];
+
+  // ────────────────────────────────────────────────────────────────
+  // Pipeline row (y = 288 pt ≈ 4 in)
+  // Pipeline x (pt): 240, 360, 480, 600, 720, 850, 980, 1110, 1230
+  // (shifted right +60 to leave room for enlarged boot_addr_i)
+  // ────────────────────────────────────────────────────────────────
+  IF     [pos="240,288!",  label="IF",     fillcolor="#dbeafe", color="#3b82f6", penwidth=3, fontsize=30, width=1.1, height=0.8, fixedsize=true];
+  if_id  [pos="360,288!",  label="IF/ID",  fillcolor="#9ca3af", color="#6b7280", fontsize=18, width=1.1, height=0.55, fixedsize=true];
+  ID     [pos="480,288!",  label="ID",     fillcolor="#dcfce7", color="#22c55e", penwidth=3, fontsize=30, width=1.1, height=0.8, fixedsize=true];
+  id_ex  [pos="600,288!",  label="ID/EX",  fillcolor="#9ca3af", color="#6b7280", fontsize=18, width=1.1, height=0.55, fixedsize=true];
+  EX     [pos="720,288!",  label="EX",     fillcolor="#fee2e2", color="#ef4444", penwidth=3, fontsize=30, width=1.1, height=0.8, fixedsize=true];
+  ex_mem [pos="850,288!",  label="EX/MEM", fillcolor="#9ca3af", color="#6b7280", fontsize=18, width=1.3, height=0.55, fixedsize=true];
+  MEM    [pos="980,288!",  label="MEM",    fillcolor="#ffedd5", color="#f97316", penwidth=3, fontsize=30, width=1.3, height=0.8, fixedsize=true];
+  mem_wb [pos="1110,288!", label="MEM/WB", fillcolor="#9ca3af", color="#6b7280", fontsize=18, width=1.3, height=0.55, fixedsize=true];
+  WB     [pos="1230,288!", label="WB",     fillcolor="#f3e8ff", color="#a855f7", penwidth=3, fontsize=30, width=1.1, height=0.8, fixedsize=true];
+
+  // ────────────────────────────────────────────────────────────────
+  // Red-lane waypoints — each directly ABOVE its source node.
+  //   • wp_redirect above EX     (redirect path exits EX straight up)
+  //   • wp_fwd      above mem_wb (forwarding exits mem_wb straight up)
+  //   • wp_bypass   above WB     (bypass exits WB straight up)
+  //
+  // Distinct y values give three separated horizontal lanes. Keeping
+  // each waypoint at the source's x prevents the ortho router from
+  // overshooting the target and producing a "loop".
+  // ────────────────────────────────────────────────────────────────
+  wp_redirect [pos="720,400!",  style=invis, label="", shape=point, width=0.01, height=0.01];  // above EX
+  wp_fwd      [pos="1110,440!", style=invis, label="", shape=point, width=0.01, height=0.01];  // above mem_wb
+  wp_bypass   [pos="1230,480!", style=invis, label="", shape=point, width=0.01, height=0.01];  // above WB
+
+  // ────────────────────────────────────────────────────────────────
+  // Red-edge labels — pinned as plaintext nodes so their position is
+  // deterministic. `fwd` sits at the midpoint of fwd arrow's horizontal
+  // segment; `redirect` sits at the SAME y as `fwd` (same vertical
+  // level) but centered on redirect's horizontal x-range. `bypass`
+  // sits centered on its own horizontal.
+  //   fwd horizontal: x ∈ [674, 1044]  → midpoint x = 859
+  //   redirect horizontal: x ∈ [174, 654] → midpoint x = 414
+  //   bypass horizontal: x ∈ [414, 1164] → midpoint x = 789
+  // ────────────────────────────────────────────────────────────────
+  // Note: neato applies a ~19pt x-offset to rendered plaintext labels
+  // vs their pinned pos; compensate by subtracting 19 from target x.
+  //   redirect horizontal: IF(240)..EX(720) → mid=480 → pin x=461
+  //   fwd horizontal:      EX(720)..mem_wb(1110) → mid=915 → pin x=896
+  //   bypass horizontal:   ID(480)..WB(1230) → mid=855 → pin x=836
+  //
+  // Each label pinned 20 DOT units ABOVE its arrow's horizontal lane
+  // (arrow lanes at y=400/440/480 → labels at y=420/460/500).
+  lbl_redirect [pos="461,420!", label="redirect", style="",
+                shape=plaintext, fontcolor="#7f1d1d", fontsize=16];
+  lbl_fwd      [pos="896,460!", label="fwd (EX/MEM, MEM/WB)", style="",
+                shape=plaintext, fontcolor="#991b1b", fontsize=16];
+  lbl_bypass   [pos="836,500!", label="wb / bypass", style="",
+                shape=plaintext, fontcolor="#991b1b", fontsize=16];
+
+  // ────────────────────────────────────────────────────────────────
+  // External I/O: Instr AXI4 LEFT of IF, IRQ below EX,
+  // Data AXI4 below MEM, Control below ID/EX.
+  // (boot_addr_i is a compile-time constant, not a diagram node.)
+  // ────────────────────────────────────────────────────────────────
+  instr_axi [pos="60,288!",   label="Instr AXI4",  shape=hexagon, fillcolor="#d4edda", color="#16a34a", fontsize=18, width=2.2, height=0.9, fixedsize=true];
+  irq       [pos="720,180!",  label="IRQ",         shape=hexagon, fillcolor="#e5e7eb", color="#6b7280", fontsize=18, width=1.2, height=0.7, fixedsize=true];
+  data_axi  [pos="980,180!",  label="Data AXI4",   shape=hexagon, fillcolor="#d4edda", color="#16a34a", fontsize=18, width=2.2, height=0.9, fixedsize=true];
+  ctrl      [pos="600,90!",   label="Control\n(hazard + forward)",
+             fillcolor="#fef9c3", color="#eab308", fontsize=18, width=2.4, height=0.9, fixedsize=true];
+
+  // ────────────────────────────────────────────────────────────────
+  // Datapath edges (solid black)
+  // ────────────────────────────────────────────────────────────────
+  IF    -> if_id  [color="#111827", penwidth=3];
+  if_id -> ID     [color="#111827", penwidth=3];
+  ID    -> id_ex  [color="#111827", penwidth=3];
+  id_ex -> EX     [color="#111827", penwidth=3];
+  EX    -> ex_mem [color="#111827", penwidth=3];
+  ex_mem-> MEM    [color="#111827", penwidth=3];
+  MEM   -> mem_wb [color="#111827", penwidth=3];
+  mem_wb-> WB     [color="#111827", penwidth=3];
+
+  instr_axi -> IF       [color="#111827", penwidth=2];
+  MEM       -> data_axi [color="#111827", penwidth=2];
+
+  // ────────────────────────────────────────────────────────────────
+  // Red feedback edges — each via its own waypoint (distinct lane)
+  // ────────────────────────────────────────────────────────────────
+
+  // Branch redirect (EX -> wp_redirect -> IF) — lowest lane
+  // Labels are rendered as separate plaintext nodes (lbl_redirect etc.)
+  EX          -> wp_redirect [color="#dc2626", style=dashed, penwidth=2, arrowhead=none];
+  wp_redirect -> IF          [color="#dc2626", style=dashed, penwidth=2];
+
+  // Consolidated forwarding (mem_wb -> wp_fwd -> EX) — middle lane
+  mem_wb -> wp_fwd [color="#ef4444", style=dashed, penwidth=2, arrowhead=none];
+  wp_fwd -> EX     [color="#ef4444", style=dashed, penwidth=2];
+
+  // Writeback bypass (WB -> wp_bypass -> ID) — top lane
+  WB        -> wp_bypass [color="#ef4444", style=dashed, penwidth=2, arrowhead=none];
+  wp_bypass -> ID        [color="#ef4444", style=dashed, penwidth=2];
+
+  // IRQ trap — up from below EX
+  irq -> EX [xlabel="trap",
+             color="#eab308", style=dotted, penwidth=2, fontcolor="#854d0e"];
+
+  // Control plane → pipeline registers
+  ctrl -> if_id  [color="#eab308", style=dotted, penwidth=2];
+  ctrl -> id_ex  [color="#eab308", style=dotted, penwidth=2];
+  ctrl -> ex_mem [color="#eab308", style=dotted, penwidth=2];
+  ctrl -> mem_wb [color="#eab308", style=dotted, penwidth=2];
+}

@@ -1,0 +1,35 @@
+{
+  "signal": [
+    { "name": "clk",       "wave": "P........." },
+    { "name": "state",     "wave": "=.=...=.=.",
+      "data": ["IDLE", "ST_SEND", "ST_RESP", "ST_DONE"] },
+    {},
+    { "name": "aw_valid",  "wave": "01.0......" },
+    { "name": "aw_ready",  "wave": "0.10......" },
+    { "name": "aw_addr",   "wave": "x=.x......",
+      "data": ["addr"] },
+    {},
+    { "name": "w_valid",   "wave": "01...0...." },
+    { "name": "w_ready",   "wave": "0....10..." },
+    { "name": "w_data",    "wave": "x=...x....",
+      "data": ["wdata"] },
+    { "name": "w_strb",    "wave": "x=...x....",
+      "data": ["strb"] },
+    { "name": "w_last",    "wave": "01...0...." },
+    {},
+    { "name": "b_valid",   "wave": "0....10..." },
+    { "name": "b_ready",   "wave": "0...1.0..." },
+    {},
+    { "name": "req_i",     "wave": "01.0......" },
+    { "name": "mem_stall", "wave": "01.....0.." },
+    { "name": "valid_o",   "wave": "0......10." }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "AXI4 Store Transaction — IDLE → ST_SEND → ST_RESP → ST_DONE → IDLE",
+    "tick": 0
+  },
+  "foot": {
+    "text": "ST_SEND issues address (AW) and data (W) simultaneously; ST_RESP waits for the write response (B); ST_DONE pulses valid_o."
+  }
+}

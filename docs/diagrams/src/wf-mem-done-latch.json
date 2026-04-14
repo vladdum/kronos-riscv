@@ -1,0 +1,29 @@
+{
+  "signal": [
+    { "name": "clk",               "wave": "P..........." },
+    {},
+    { "name": "lsu req (gated)",   "wave": "010........." },
+    { "name": "lsu_valid",         "wave": "0...10......" },
+    { "name": "lsu_rdata",         "wave": "x...=x......",
+      "data": ["rdata"] },
+    {},
+    { "name": "mem_done_q",        "wave": "0...1....0.." },
+    { "name": "lsu_rdata_latch",   "wave": "x...=.......",
+      "data": ["rdata"] },
+    {},
+    { "name": "instr_fetch_stall", "wave": "0....1...0.." },
+    { "name": "combined_stall",    "wave": "0...11...0.." },
+    {},
+    { "name": "mem_wb_en",         "wave": "10...0...10." },
+    { "name": "mem_wb_q.lsu_rdata","wave": "x........=x.",
+      "data": ["rdata"] }
+  ],
+  "config": { "hscale": 2 },
+  "head": {
+    "text": "mem_done_q latch — LSU rvalid arrives during instr_fetch_stall",
+    "tick": 0
+  },
+  "foot": {
+    "text": "LSU finishes while fetch is still stalled → mem_done_q latches the result; mem_wb_en stays gated until fetch_stall clears, so nothing is lost."
+  }
+}
