@@ -95,6 +95,13 @@ package kronos_pkg;
     // M extension
     logic        is_muldiv;
     muldiv_op_e  muldiv_op;
+    // RV64I
+    logic        is_word_op;  // W-suffix instruction (ADDW, SUBW, etc.)
+    // A extension
+    logic        is_lr;       // LR.W or LR.D
+    logic        is_sc;       // SC.W or SC.D
+    logic        is_amo;      // AMO instruction
+    logic [4:0]  amo_funct5;  // AMO function code
     // Writeback
     wb_sel_e     wb_sel;
     // Illegal
@@ -135,8 +142,8 @@ package kronos_pkg;
   typedef struct packed {
     logic [31:0]    pc;
     decoded_instr_t dec;
-    logic [31:0]    rs1_data;
-    logic [31:0]    rs2_data;
+    logic [63:0]    rs1_data;
+    logic [63:0]    rs2_data;
     logic           valid;
     // Stage 3+
     logic        is_16b;
@@ -147,10 +154,10 @@ package kronos_pkg;
   typedef struct packed {
     logic [31:0]    pc;
     decoded_instr_t dec;
-    logic [31:0]    alu_result;
-    logic [31:0]    rs2_data;
+    logic [63:0]    alu_result;
+    logic [63:0]    rs2_data;
     logic [31:0]    pc_next;
-    logic [31:0]    csr_rdata;
+    logic [63:0]    csr_rdata;
     logic           redirect;
     logic           valid;
     // Stage 3+
@@ -159,9 +166,9 @@ package kronos_pkg;
 
   typedef struct packed {
     decoded_instr_t dec;
-    logic [31:0]    alu_result;
-    logic [31:0]    lsu_rdata;
-    logic [31:0]    csr_rdata;
+    logic [63:0]    alu_result;
+    logic [63:0]    lsu_rdata;
+    logic [63:0]    csr_rdata;
     logic [31:0]    pc4;
     logic           valid;
   } mem_wb_reg_t;

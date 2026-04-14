@@ -2,12 +2,13 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_top.sv (stage3) — 5-stage in-order pipeline with RV32M and AXI4 bus.
-// Replaces OBI ports with native AXI4 master ports.
-// Reuses stage0: kronos_regfile, kronos_alu, kronos_csr
-// Reuses stage1: kronos_forward, kronos_hazard
-// Reuses stage2: kronos_decode (RV32I+M), kronos_muldiv
-// New in stage3:  kronos_lsu (AXI4 FSM), fetch FSM in kronos_top
+// kronos_top.sv (stage4) — 5-stage in-order pipeline widened to RV64IMAC.
+// Mirrors the stage3 top but uses 64-bit datapath components:
+//   * kronos_alu / kronos_muldiv support word_op_i (W-suffix instructions)
+//   * kronos_csr is 64-bit
+//   * kronos_lsu supports 64-bit loads/stores (LD/SD/LWU) and A-extension stubs
+// Reuses: kronos_regfile (stage0, already 64-bit), kronos_forward/hazard
+//         (stage1), kronos_align/kronos_bpred (stage3) unchanged.
 module kronos_top
   import kronos_pkg::*;
 (
@@ -48,24 +49,26 @@ module kronos_top
   // -------------------------------------------------------------------------
   decoded_instr_t id_dec;
   logic [63:0]    rs1_rdata_64, rs2_rdata_64;
-  logic [31:0]    rs1_data_id, rs2_data_id;
+  logic [63:0]    rs1_data_id, rs2_data_id;
   logic           wb_writing;
 
   // -------------------------------------------------------------------------
-  // EX-stage wires
+  // EX-stage wires (64-bit datapath)
   // -------------------------------------------------------------------------
-  logic [31:0] fwd_rs1_data, fwd_rs2_data;
-  logic [31:0] alu_a, alu_b, alu_result;
-  logic [31:0] ex_result;
+  logic [63:0] fwd_rs1_data, fwd_rs2_data;
+  logic [63:0] alu_a, alu_b, alu_result;
+  logic [63:0] ex_result;
   logic [31:0] ex_pc_next;
   logic        ex_redirect;
   logic        branch_taken;
   logic        irq_pending;
-  logic [31:0] csr_rdata, trap_vector, mepc;
+  logic [63:0] csr_rdata;
+  logic [63:0] trap_vector, mepc;
   logic [31:0] trap_cause;
+  logic [63:0] jalr_target_64;
 
-  // STAGE2: muldiv signals
-  logic [31:0] muldiv_result;
+  // STAGE2: muldiv signals (64-bit)
+  logic [63:0] muldiv_result;
   logic        muldiv_valid, muldiv_idle;
   logic        muldiv_stall;
 
@@ -92,24 +95,28 @@ module kronos_top
   logic        is_branch_or_jump;
 
   // -------------------------------------------------------------------------
-  // MEM-stage wires
+  // MEM-stage wires (64-bit lsu data)
   // -------------------------------------------------------------------------
-  logic [31:0]      lsu_rdata;
+  logic [63:0]      lsu_rdata;
   logic             lsu_valid;
   logic             mem_stall;
   // mem_done_q: set when LSU signals valid_o; cleared when MEM/WB register
   // advances.  Gates req_i so LSU does not re-issue while the pipeline is
   // frozen by instr_fetch_stall.
   logic             mem_done_q;
-  logic [31:0]      lsu_rdata_latch;  // holds rdata across the stall gap
+  logic [63:0]      lsu_rdata_latch;  // holds rdata across the stall gap
   kronos_axi_req_t  data_req;
   kronos_axi_resp_t data_rsp;
 
   // -------------------------------------------------------------------------
-  // WB-stage wires
+  // WB-stage wires (64-bit)
   // -------------------------------------------------------------------------
-  logic [31:0] wb_result;
   logic [63:0] wb_result_64;
+
+  // -------------------------------------------------------------------------
+  // PC next (combinational)
+  // -------------------------------------------------------------------------
+  logic [31:0] pc_next;
 
   // =========================================================================
   // Submodule instantiations
@@ -138,7 +145,7 @@ module kronos_top
     .id_ex_rs2_used_i (id_ex_q.dec.rs2_used),
     .ex_mem_rd_i      (ex_mem_q.dec.rd),
     .ex_mem_rd_wen_i  (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
-    .ex_mem_is_load_i (ex_mem_q.dec.is_load),
+    .ex_mem_is_load_i (ex_mem_q.dec.wb_sel == WB_MEM),  // SC/AMO also need suppression
     .mem_wb_rd_i      (mem_wb_q.dec.rd),
     .mem_wb_rd_wen_i  (mem_wb_q.dec.rd_wen & mem_wb_q.valid),
     .fwd_rs1_sel_o    (fwd_rs1_sel),
@@ -147,7 +154,6 @@ module kronos_top
 
   // STAGE3: combined_stall — mem_stall | muldiv_stall | instr_fetch_stall
   assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
-  // STAGE3: stall until the alignment unit has a valid instruction ready.
   assign instr_fetch_stall = ~align_instr_valid;
   assign combined_stall    = mem_stall | muldiv_stall | instr_fetch_stall;
 
@@ -171,28 +177,31 @@ module kronos_top
   );
 
   kronos_alu u_alu (
-    .op_i     (id_ex_q.dec.alu_op),
-    .a_i      (alu_a),
-    .b_i      (alu_b),
-    .result_o (alu_result)
+    .op_i      (id_ex_q.dec.alu_op),
+    .a_i       (alu_a),
+    .b_i       (alu_b),
+    .word_op_i (id_ex_q.dec.is_word_op),
+    .result_o  (alu_result)
   );
 
   kronos_muldiv u_muldiv (
-    .clk_i    (clk_i),
-    .rst_ni   (rst_ni),
-    .req_i    (id_ex_q.valid & id_ex_q.dec.is_muldiv & muldiv_idle & ~mem_stall),
-    .op_i     (id_ex_q.dec.muldiv_op),
-    .a_i      (fwd_rs1_data),
-    .b_i      (fwd_rs2_data),
-    .result_o (muldiv_result),
-    .busy_o   (),
-    .valid_o  (muldiv_valid),
-    .idle_o   (muldiv_idle)
+    .clk_i     (clk_i),
+    .rst_ni    (rst_ni),
+    .req_i     (id_ex_q.valid & id_ex_q.dec.is_muldiv & muldiv_idle & ~mem_stall),
+    .op_i      (id_ex_q.dec.muldiv_op),
+    .a_i       (fwd_rs1_data),
+    .b_i       (fwd_rs2_data),
+    .word_op_i (id_ex_q.dec.is_word_op),
+    .result_o  (muldiv_result),
+    .busy_o    (),
+    .valid_o   (muldiv_valid),
+    .idle_o    (muldiv_idle)
   );
 
   assign ex_result = id_ex_q.dec.is_muldiv ? muldiv_result : alu_result;
 
-  kronos_csr #(.MISA_EXT(26'h1104)) u_csr (  // I+M+C bits
+  // MISA_EXT = I + M + A + C extension bits (bit 8, 12, 0, 2) = 26'h1105
+  kronos_csr #(.MISA_EXT(26'h1105)) u_csr (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
     .req_i         (id_ex_q.valid & id_ex_q.dec.is_csr),
@@ -203,11 +212,8 @@ module kronos_top
     .rs1_addr_i    (id_ex_q.dec.rs1),
     .rdata_o       (csr_rdata),
     .valid_o       (),
-    // Gate trap_i and mret_i with ~combined_stall: the CSR must only update state
-    // (MEPC, MCAUSE, mstatus.MIE) when the pipeline is actually advancing.
-    // When combined_stall=1 (e.g. instr_fetch_stall active), the pipeline is frozen
-    // and no redirect occurs, so processing trap_i would clear MIE without the
-    // handler ever running.
+    // Gate trap_i and mret_i with ~combined_stall: CSR must only update state
+    // when the pipeline is actually advancing (see stage3 comment for details).
     .trap_i        (id_ex_q.valid & ~combined_stall &
                     (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
                      id_ex_q.dec.illegal  | irq_pending)),
@@ -221,22 +227,27 @@ module kronos_top
     .irq_pending_o (irq_pending)
   );
 
-  // STAGE3: LSU with AXI4 interface.
-  // mem_done_q gates req_i to prevent re-issue while the pipeline is frozen
-  // by instr_fetch_stall after a data response has already been received.
+  // STAGE4: 64-bit LSU with AXI4 interface and A-extension stubs.
   kronos_lsu u_lsu (
-    .clk_i       (clk_i),
-    .rst_ni      (rst_ni),
-    .req_i       (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store) & ~mem_done_q),
-    .we_i        (ex_mem_q.dec.is_store),
-    .addr_i      (ex_mem_q.alu_result[31:0]),
-    .wdata_i     (ex_mem_q.rs2_data[31:0]),
-    .funct3_i    (ex_mem_q.dec.mem_funct3),
-    .rdata_o     (lsu_rdata),
-    .valid_o     (lsu_valid),
-    .mem_stall_o (mem_stall),
-    .axi_req_o   (data_req),
-    .axi_rsp_i   (data_rsp)
+    .clk_i        (clk_i),
+    .rst_ni       (rst_ni),
+    .req_i        (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store
+                   | ex_mem_q.dec.is_amo) & ~mem_done_q),
+    .we_i         (ex_mem_q.dec.is_store),
+    .addr_i       (ex_mem_q.alu_result[31:0]),
+    .wdata_i      (ex_mem_q.rs2_data),
+    .funct3_i     (ex_mem_q.dec.mem_funct3),
+    .rdata_o      (lsu_rdata),
+    .valid_o      (lsu_valid),
+    .mem_stall_o  (mem_stall),
+    .is_lr_i      (ex_mem_q.dec.is_lr),
+    .is_sc_i      (ex_mem_q.dec.is_sc),
+    .is_amo_i     (ex_mem_q.dec.is_amo),
+    .amo_funct5_i (ex_mem_q.dec.amo_funct5),
+    .amo_src_i    (ex_mem_q.rs2_data),
+    .sc_success_o (),
+    .axi_req_o    (data_req),
+    .axi_rsp_i    (data_rsp)
   );
 
   assign data_axi_req_o = data_req;
@@ -276,7 +287,6 @@ module kronos_top
   // =========================================================================
   // PC register
   // =========================================================================
-  logic [31:0] pc_next;
   assign pc_next = ex_redirect   ? ex_pc_next
                  : pred_taken    ? pred_target
                  : align_is_16b  ? pc_q + 32'd2
@@ -288,32 +298,26 @@ module kronos_top
   end
 
   // =========================================================================
-  // IF stage — 2-state fetch FSM
+  // IF stage — 2-state fetch FSM (identical to stage3)
   // =========================================================================
-  // IDLE:      drive ar_valid=1, ar_addr=pc_q.  Transition to FETCH_WAIT_R on ar_ready.
-  // FETCH_WAIT_R: drive r_ready=1.  Transition to IDLE on r_valid.
-  //
-  // instr_fetch_stall deasserts only on the cycle r_valid fires (FETCH_WAIT_R).
-  // The PC and pipeline are frozen in all other cycles.
-
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) fetch_state_q <= FETCH_IDLE;
     else begin
       unique case (fetch_state_q)
-        FETCH_IDLE:   if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready) fetch_state_q <= FETCH_WAIT_R;
-        FETCH_WAIT_R: if (instr_axi_rsp_i.r_valid)   fetch_state_q <= FETCH_IDLE;
-        default:      fetch_state_q <= FETCH_IDLE;
+        FETCH_IDLE:
+          if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready)
+            fetch_state_q <= FETCH_WAIT_R;
+        FETCH_WAIT_R:
+          if (instr_axi_rsp_i.r_valid) fetch_state_q <= FETCH_IDLE;
+        default: fetch_state_q <= FETCH_IDLE;
       endcase
     end
   end
 
-  // Instr AXI4 request: ar_valid in IDLE, r_ready in FETCH_WAIT_R.
-  // AW/W/B unused on instr port (read-only).
   always_comb begin
     instr_axi_req_o            = '0;
     unique case (fetch_state_q)
       FETCH_IDLE: begin
-        // STAGE3: gate by align_needs_fetch; use next-word addr in NEED_UPPER
         instr_axi_req_o.ar_valid  = rst_ni & align_needs_fetch;
         instr_axi_req_o.ar.addr   = align_need_upper
           ? {pc_q[31:2] + 30'd1, 2'b00}
@@ -354,8 +358,8 @@ module kronos_top
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
-      id_ex_q.rs1_data    <= {{32{rs1_data_id[31]}}, rs1_data_id};
-      id_ex_q.rs2_data    <= {{32{rs2_data_id[31]}}, rs2_data_id};
+      id_ex_q.rs1_data    <= rs1_data_id;
+      id_ex_q.rs2_data    <= rs2_data_id;
       id_ex_q.valid       <= if_id_q.valid;
       id_ex_q.is_16b      <= if_id_q.is_16b;
       id_ex_q.pred_taken  <= if_id_q.pred_taken;
@@ -364,26 +368,30 @@ module kronos_top
   end
 
   // =========================================================================
-  // EX stage
+  // EX stage — 64-bit forwarding mux
   // =========================================================================
   always_comb begin
     unique case (fwd_rs1_sel)
-      FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data[31:0];
-      FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result[31:0];
-      FWD_MEMWB: fwd_rs1_data = wb_result;
-      default:   fwd_rs1_data = id_ex_q.rs1_data[31:0];
+      FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data;
+      FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result;
+      FWD_MEMWB: fwd_rs1_data = wb_result_64;
+      default:   fwd_rs1_data = id_ex_q.rs1_data;
     endcase
     unique case (fwd_rs2_sel)
-      FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data[31:0];
-      FWD_EXMEM: fwd_rs2_data = ex_mem_q.alu_result[31:0];
-      FWD_MEMWB: fwd_rs2_data = wb_result;
-      default:   fwd_rs2_data = id_ex_q.rs2_data[31:0];
+      FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data;
+      FWD_EXMEM: fwd_rs2_data = ex_mem_q.alu_result;
+      FWD_MEMWB: fwd_rs2_data = wb_result_64;
+      default:   fwd_rs2_data = id_ex_q.rs2_data;
     endcase
   end
 
-  assign alu_a = id_ex_q.dec.use_pc  ? id_ex_q.pc      : fwd_rs1_data;
-  assign alu_b = id_ex_q.dec.use_imm ? id_ex_q.dec.imm : fwd_rs2_data;
+  // ALU operand formation — PC zero-extends to 64, imm sign-extends to 64.
+  assign alu_a = id_ex_q.dec.use_pc  ? {32'b0, id_ex_q.pc}
+                                     : fwd_rs1_data;
+  assign alu_b = id_ex_q.dec.use_imm ? {{32{id_ex_q.dec.imm[31]}}, id_ex_q.dec.imm}
+                                     : fwd_rs2_data;
 
+  // 64-bit branch comparison
   always_comb begin
     branch_taken = 1'b0;
     if (id_ex_q.valid & id_ex_q.dec.is_branch) begin
@@ -400,20 +408,24 @@ module kronos_top
   end
 
   always_comb begin
-    if      (irq_pending)          trap_cause = 32'h80000007;
+    if      (irq_pending)          trap_cause = 32'h8000_0007;
     else if (id_ex_q.dec.illegal)  trap_cause = 32'd2;
     else if (id_ex_q.dec.is_ecall) trap_cause = 32'd11;
     else                           trap_cause = 32'd3;
   end
 
+  // JALR target: 64-bit add, truncate to 32-bit PC (physical PC is 32-bit).
+  assign jalr_target_64 = (fwd_rs1_data + {{32{id_ex_q.dec.imm[31]}}, id_ex_q.dec.imm})
+                           & ~64'd1;
+
   always_comb begin
     if      (id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
                                id_ex_q.dec.illegal  | irq_pending))
-      ex_pc_next = trap_vector;
+      ex_pc_next = trap_vector[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_mret)
-      ex_pc_next = mepc;
+      ex_pc_next = mepc[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
-      ex_pc_next = (fwd_rs1_data + id_ex_q.dec.imm) & ~32'd1;
+      ex_pc_next = jalr_target_64[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jal)
       ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
     else if (branch_taken)
@@ -424,21 +436,16 @@ module kronos_top
 
   // STAGE3: branch predictor — misprediction detection and update
   assign is_branch_or_jump = id_ex_q.dec.is_branch | id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr;
-  assign actual_taken = branch_taken | id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr;
+  assign actual_taken      = branch_taken | id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr;
 
   assign bpred_mispredict = id_ex_q.valid & (
-    // Predicted taken but actually not taken (or not a branch/jump at all)
     (id_ex_q.pred_taken & ~actual_taken) |
-    // Not predicted but actually taken
     (~id_ex_q.pred_taken & actual_taken) |
-    // Both predicted and actually taken but wrong target
     (id_ex_q.pred_taken & actual_taken & (id_ex_q.pred_target != ex_pc_next))
   );
 
-  // Update predictor when a branch/jump leaves EX
   assign bpred_update_en = id_ex_q.valid & ex_mem_en & is_branch_or_jump;
 
-  // STAGE3: redirect on misprediction or trap/mret (not on correct prediction)
   assign ex_redirect = bpred_mispredict |
     (id_ex_q.valid &
      (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak | id_ex_q.dec.illegal |
@@ -450,10 +457,10 @@ module kronos_top
     end else if (ex_mem_en) begin
       ex_mem_q.pc         <= id_ex_q.pc;
       ex_mem_q.dec        <= id_ex_q.dec;
-      ex_mem_q.alu_result <= {{32{ex_result[31]}}, ex_result};
-      ex_mem_q.rs2_data   <= {{32{fwd_rs2_data[31]}}, fwd_rs2_data};
+      ex_mem_q.alu_result <= ex_result;
+      ex_mem_q.rs2_data   <= fwd_rs2_data;
       ex_mem_q.pc_next    <= ex_pc_next;
-      ex_mem_q.csr_rdata  <= {32'b0, csr_rdata};
+      ex_mem_q.csr_rdata  <= csr_rdata;
       ex_mem_q.redirect   <= ex_redirect;
       ex_mem_q.valid      <= id_ex_q.valid & ~irq_pending;
       ex_mem_q.is_16b     <= id_ex_q.is_16b;
@@ -461,11 +468,8 @@ module kronos_top
   end
 
   // =========================================================================
-  // MEM stage
+  // MEM stage — mem_done_q / lsu_rdata_latch handle pipeline stall bridging
   // =========================================================================
-  // mem_done_q: prevents LSU re-issue while pipeline is frozen by instr_fetch_stall.
-  // lsu_rdata_latch: holds the load data across the gap between data rvalid and
-  // the next instr rvalid that allows the pipeline to advance.
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mem_done_q      <= 1'b0;
@@ -476,7 +480,7 @@ module kronos_top
         lsu_rdata_latch <= lsu_rdata;
       end
       if (mem_wb_en) begin
-        mem_done_q <= 1'b0;  // pipeline advanced — re-arm for next instruction
+        mem_done_q <= 1'b0;
       end
     end
   end
@@ -487,10 +491,7 @@ module kronos_top
     end else if (mem_wb_en) begin
       mem_wb_q.dec        <= ex_mem_q.dec;
       mem_wb_q.alu_result <= ex_mem_q.alu_result;
-      // Use current rdata when LSU fires this cycle; use latched value when
-      // the pipeline advances after an earlier lsu_valid (mem_done_q=1).
-      mem_wb_q.lsu_rdata  <= {{32{(lsu_valid ? lsu_rdata[31] : lsu_rdata_latch[31])}},
-                              (lsu_valid ? lsu_rdata : lsu_rdata_latch)};
+      mem_wb_q.lsu_rdata  <= lsu_valid ? lsu_rdata : lsu_rdata_latch;
       mem_wb_q.csr_rdata  <= ex_mem_q.csr_rdata;
       mem_wb_q.pc4        <= ex_mem_q.pc + (ex_mem_q.is_16b ? 32'd2 : 32'd4);
       mem_wb_q.valid      <= ex_mem_q.valid;
@@ -498,16 +499,16 @@ module kronos_top
   end
 
   // =========================================================================
-  // WB→ID bypass
+  // WB→ID bypass (64-bit)
   // =========================================================================
   assign wb_writing  = mem_wb_q.valid & mem_wb_q.dec.rd_wen & (mem_wb_q.dec.rd != 5'd0);
-  assign rs1_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs1) ? wb_result
-                                                                       : rs1_rdata_64[31:0];
-  assign rs2_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs2) ? wb_result
-                                                                       : rs2_rdata_64[31:0];
+  assign rs1_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs1)
+                         ? wb_result_64 : rs1_rdata_64;
+  assign rs2_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs2)
+                         ? wb_result_64 : rs2_rdata_64;
 
   // =========================================================================
-  // WB stage
+  // WB stage (64-bit)
   // =========================================================================
   always_comb begin
     unique case (mem_wb_q.dec.wb_sel)
@@ -518,7 +519,5 @@ module kronos_top
       default: wb_result_64 = mem_wb_q.alu_result;
     endcase
   end
-
-  assign wb_result = wb_result_64[31:0];
 
 endmodule

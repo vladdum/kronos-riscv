@@ -1,6 +1,6 @@
 # kronos-riscv Architecture Reference
 
-**ISA:** RV32IMC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4-Lite &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB)
+**ISA:** RV64IMAC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB)
 
 kronos-riscv is a 5-stage in-order RISC-V processor implementing the RV32IMC ISA. Instructions flow through Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). The IF stage includes an alignment unit that handles variable-width compressed instructions and a bimodal branch predictor that speculatively redirects fetch before branch resolution. The EX stage contains the ALU, a multi-cycle multiply/divide unit, branch resolution logic, and the CSR unit. The MEM stage drives an AXI4 load/store unit. Hazard and forwarding control modules sit outside the pipeline stages and manage stalls, flushes, and operand forwarding.
 
@@ -176,6 +176,27 @@ combined_stall = mem_stall | muldiv_stall | instr_fetch_stall
 **Load-use detection.** A load-use hazard exists when the instruction currently in EX is a valid load (`id_ex_valid & id_ex_is_load`), its destination is not `x0` (`id_ex_rd != 0`), and the instruction currently in ID reads the same register as either RS1 (`rs1_used & id_ex_rd == if_id_rs1`) or RS2 (`rs2_used & id_ex_rd == if_id_rs2`). The hazard inserts one bubble: IF and ID are held, the ID/EX register is flushed to NOP, and EX/MEM advances normally.
 
 ![Load-use hazard waveform](diagrams/svg/wf-load-use-hazard.svg)
+
+### Stage 4 — RV64IMAC
+
+All datapath widths widened to 64 bits. New: LR/SC reservation register, AMO
+read-modify-write sequencing in LSU, RV64C decompressor (C.ADDIW, C.LDSP,
+C.SDSP, C.LD, C.SD, C.ADDW, C.SUBW).
+
+```
+kronos_top  (rtl/stage4/kronos_top.sv)
+├── u_align      kronos_align      (rtl/stage3/kronos_align.sv)      reused
+├── u_bpred      kronos_bpred      (rtl/stage3/kronos_bpred.sv)      reused
+├── u_decompress kronos_decompress (rtl/stage4/kronos_decompress.sv) updated: RV64C
+├── u_decode     kronos_decode     (rtl/stage4/kronos_decode.sv)     updated: RV64IMAC
+├── u_regfile    kronos_regfile    (rtl/stage0/kronos_regfile.sv)    reused (now 64-bit)
+├── u_alu        kronos_alu        (rtl/stage4/kronos_alu.sv)        updated: 64-bit + W-suffix
+├── u_csr        kronos_csr        (rtl/stage4/kronos_csr.sv)        updated: 64-bit XLEN
+├── u_lsu        kronos_lsu        (rtl/stage4/kronos_lsu.sv)        updated: LR/SC + AMO
+├── u_muldiv     kronos_muldiv     (rtl/stage4/kronos_muldiv.sv)     updated: 64-bit
+├── u_forward    kronos_forward    (rtl/stage1/kronos_forward.sv)    reused
+└── u_hazard     kronos_hazard     (rtl/stage1/kronos_hazard.sv)     reused
+```
 
 ---
 
