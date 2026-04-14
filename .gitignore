@@ -10,3 +10,4 @@ obj_dir/
 docs/superpowers/
 __pycache__/
 riscv-arch-test/
+.claude/

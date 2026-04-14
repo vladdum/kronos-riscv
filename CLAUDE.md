@@ -160,7 +160,9 @@ Commit message convention: `type(scope): description`
 ## Branch Workflow
 
 One branch per stage. Open it when you start, commit freely during development,
-squash to a single commit when the stage is done, then fast-forward merge to `main`.
+squash to a single commit when the stage is done, then merge to `main` via PR.
+
+Direct pushes to `main` are blocked — all changes must go through a pull request.
 
 ```bash
 # 1. Open a stage branch
@@ -175,15 +177,16 @@ git pull --rebase --autostash origin main
 git reset --soft origin/main
 git commit -m "feat(stage3): C extension + branch predictor"
 
-# 5. Fast-forward merge, push, and clean up
+# 5. Open a pull request and merge
+git push -u origin stage3
+# Then open a PR on GitHub; merge via squash merge to main
 git checkout main
-git merge --ff-only stage3
-git push origin main
+git pull origin main
 git branch -d stage3
 ```
 
 `main` always has exactly one commit per completed stage, plus the skeleton and docs
-commits. No merge commits, no squash PRs.
+commits. Use squash merge on GitHub PRs.
 
 Do not include any reference to Claude or AI tools in commit messages
 (no `🤖 Generated with Claude Code`, no `Co-Authored-By`, no similar footers).
