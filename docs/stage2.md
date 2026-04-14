@@ -49,7 +49,7 @@ muldiv unit. It just freezes the pipeline.
 
 ---
 
-## Multiply — 2-Cycle Latency
+## Multiply — 3-Cycle Latency
 
 The four MUL variants differ in how operands are sign-treated:
 
@@ -65,12 +65,22 @@ A single 33-bit multiplier handles all four: signed operands get `{a[31], a}`
 covers every variant.
 
 FSM:
-1. **IDLE** — `req_i` fires: the combinational product is computed and stored in
-   `result_q`. State → **MUL_BUSY**.
-2. **MUL_BUSY** — one cycle of latency. State → **DONE**.
-3. **DONE** — `valid_o=1`. Pipeline captures `result_o`. State → **IDLE**.
+1. **IDLE** — `req_i` fires: operands latched into `mul_a_q`/`mul_b_q`.
+   State → **MUL_BUSY_1**.
+2. **MUL_BUSY_1** — raw 66-bit product registered into `product_q`.
+   The path `mul_a_q/mul_b_q → multiply → product_q` has no combinational
+   logic after the multiplier, so synthesis can map `product_q` to the
+   DSP48E1 M register (MREG=1). State → **MUL_BUSY_2**.
+3. **MUL_BUSY_2** — half-select and sign correction applied from `product_q`
+   into `result_q`. Short path with no DSPs in it. State → **DONE**.
+4. **DONE** — `valid_o=1`. Pipeline captures `result_o`. State → **IDLE**.
 
-Total: 2 cycles from `req_i` to `valid_o`.
+Total: 3 cycles from `req_i` to `valid_o`.
+
+The extra cycle vs the original 2-cycle design allows Vivado to pipeline the
+DSP48E1 tiles (MREG=1). The critical path shrinks from 23 logic levels
+(~16.3 ns, Fmax ~62 MHz on Arty A7-100T) to two short flop-to-flop segments,
+targeting ~80–100 MHz on the same part.
 
 ---
 

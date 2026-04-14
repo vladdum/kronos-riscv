@@ -4,9 +4,16 @@
 
 // kronos_muldiv.sv — multi-cycle multiply/divide unit (RV32M).
 //
-// MUL/MULH/MULHSU/MULHU: 2-cycle latency (MUL_BUSY then DONE).
-//   Operands are stored on req; the combinational product is registered
-//   during MUL_BUSY, so synthesis sees a single-cycle multiplier path.
+// MUL/MULH/MULHSU/MULHU: 3-cycle latency (MUL_BUSY_1 → MUL_BUSY_2 → DONE).
+//   Cycle 1 (MUL_BUSY_1): register the raw 66-bit product into product_q.
+//     No logic between the multiply and the register; synthesis can map this
+//     to the DSP48E1 M register (MREG=1), removing the multiplier from the
+//     combinational timing path.
+//   Cycle 2 (MUL_BUSY_2): apply the half-select and sign correction from
+//     product_q into result_q.
+//   This costs one extra stall cycle per MUL vs the previous 2-cycle design
+//   but allows Vivado to pipeline the DSP48E1 tiles and reach ~80-100 MHz
+//   on Artix-7, up from ~62 MHz.
 //
 // DIV/DIVU/REM/REMU: 34-cycle latency (IDLE→COMPUTE×32→DONE).
 //   Uses an iterative restoring algorithm. Edge cases (divide-by-zero,
@@ -36,16 +43,17 @@ module kronos_muldiv
   // -------------------------------------------------------------------------
   // FSM
   // -------------------------------------------------------------------------
-  typedef enum logic [1:0] {
-    IDLE     = 2'd0,
-    MUL_BUSY = 2'd1,
-    COMPUTE  = 2'd2,
-    DONE     = 2'd3
+  typedef enum logic [2:0] {
+    IDLE       = 3'd0,
+    MUL_BUSY_1 = 3'd1,
+    MUL_BUSY_2 = 3'd2,
+    COMPUTE    = 3'd3,
+    DONE       = 3'd4
   } muldiv_state_e;
 
   muldiv_state_e state_q;
 
-  assign busy_o   = (state_q == MUL_BUSY) | (state_q == COMPUTE);
+  assign busy_o   = (state_q == MUL_BUSY_1) | (state_q == MUL_BUSY_2) | (state_q == COMPUTE);
   assign valid_o  = (state_q == DONE);
   assign idle_o   = (state_q == IDLE);
   assign result_o = result_q;
@@ -56,11 +64,14 @@ module kronos_muldiv
   logic [31:0] result_q;
 
   // -------------------------------------------------------------------------
-  // MUL: operands latched on req_i; combinational 66-bit product is computed
-  // from the latched copies during MUL_BUSY and registered into result_q.
-  // This gives synthesis a full clock period for the multiply path
-  // (a_q/b_q flops → mul_product → result_q flop) with no XDC needed.
+  // MUL pipeline:
+  //   Stage 1 (MUL_BUSY_1): product_q ← raw 66-bit product.
+  //     Clean flop-to-flop path: mul_a_q/mul_b_q → multiply → product_q.
+  //     Synthesis maps product_q to the DSP48E1 M register (MREG=1).
+  //   Stage 2 (MUL_BUSY_2): result_q ← half-select applied to product_q.
+  //     Short path: product_q mux → result_q.
   // -------------------------------------------------------------------------
+  logic signed [65:0] product_q;
   logic [31:0]   mul_a_q, mul_b_q;
   muldiv_op_e    mul_op_q;
 
@@ -75,7 +86,7 @@ module kronos_muldiv
   assign mul_product  = $signed(mul_a33) * $signed(mul_b33);
 
   logic [31:0] mul_result_comb;
-  assign mul_result_comb = (mul_op_q == MULDIV_MUL) ? mul_product[31:0] : mul_product[63:32];
+  assign mul_result_comb = (mul_op_q == MULDIV_MUL) ? product_q[31:0] : product_q[63:32];
 
   // -------------------------------------------------------------------------
   // DIV: registers for iterative restoring division
@@ -105,6 +116,7 @@ module kronos_muldiv
     if (!rst_ni) begin
       state_q     <= IDLE;
       result_q    <= '0;
+      product_q   <= '0;
       mul_a_q     <= '0;
       mul_b_q     <= '0;
       mul_op_q    <= MULDIV_MUL;
@@ -124,11 +136,11 @@ module kronos_muldiv
           if (req_i) begin
             unique case (op_i)
               MULDIV_MUL, MULDIV_MULH, MULDIV_MULHSU, MULDIV_MULHU: begin
-                // Latch operands; product is computed and registered in MUL_BUSY
+                // Latch operands; product is registered in MUL_BUSY_1
                 mul_a_q  <= a_i;
                 mul_b_q  <= b_i;
                 mul_op_q <= op_i;
-                state_q  <= MUL_BUSY;
+                state_q  <= MUL_BUSY_1;
               end
 
               MULDIV_DIV, MULDIV_DIVU, MULDIV_REM, MULDIV_REMU: begin
@@ -179,9 +191,17 @@ module kronos_muldiv
         end
 
         // ---------------------------------------------------------------
-        MUL_BUSY: begin
-          // Operands are stable in mul_a_q/mul_b_q; register the product now.
-          // Synthesis sees a full clock period: mul_a/b_q flops → mul_product → result_q.
+        MUL_BUSY_1: begin
+          // Operands stable in mul_a_q/mul_b_q. Register the raw product.
+          // Clean path: mul_a_q/mul_b_q → multiply → product_q (MREG).
+          product_q <= mul_product;
+          state_q   <= MUL_BUSY_2;
+        end
+
+        // ---------------------------------------------------------------
+        MUL_BUSY_2: begin
+          // product_q stable. Apply half-select and write result_q.
+          // Short path: product_q mux → result_q.
           result_q <= mul_result_comb;
           state_q  <= DONE;
         end
