@@ -63,6 +63,25 @@ filesets:
       - rtl/stage3/kronos_top.sv
     file_type: systemVerilogSource
 
+  files_rtl_s4:
+    depend:
+      - pulp-platform.org::axi:0.39.9
+    files:
+      - rtl/kronos_pkg.sv
+      - rtl/stage4/kronos_alu.sv
+      - rtl/stage4/kronos_decode.sv
+      - rtl/stage0/kronos_regfile.sv
+      - rtl/stage4/kronos_csr.sv
+      - rtl/stage4/kronos_lsu.sv
+      - rtl/stage1/kronos_forward.sv
+      - rtl/stage1/kronos_hazard.sv
+      - rtl/stage4/kronos_muldiv.sv
+      - rtl/stage4/kronos_decompress.sv
+      - rtl/stage3/kronos_align.sv
+      - rtl/stage3/kronos_bpred.sv
+      - rtl/stage4/kronos_top.sv
+    file_type: systemVerilogSource
+
   files_tb_s0:
     files:
       - tb/stage0/tb_alu.sv
@@ -111,6 +130,15 @@ targets:
 
   lint-s3:
     filesets: [files_rtl_s3]
+    tools:
+      verilator:
+        mode: lint-only
+        verilator_options: [--Wall, --Wno-UNUSED, --Wno-WIDTHEXPAND]
+    toplevel: kronos_top
+    default_tool: verilator
+
+  lint-s4:
+    filesets: [files_rtl_s4]
     tools:
       verilator:
         mode: lint-only

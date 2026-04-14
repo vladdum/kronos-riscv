@@ -174,8 +174,8 @@ module kronos_top
     .rst_ni        (rst_ni),
     .req_i         (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store)),
     .we_i          (ex_mem_q.dec.is_store),
-    .addr_i        (ex_mem_q.alu_result),
-    .wdata_i       (ex_mem_q.rs2_data),
+    .addr_i        (ex_mem_q.alu_result[31:0]),
+    .wdata_i       (ex_mem_q.rs2_data[31:0]),
     .funct3_i      (ex_mem_q.dec.mem_funct3),
     .rdata_o       (lsu_rdata),
     .valid_o       (lsu_valid),
@@ -233,8 +233,8 @@ module kronos_top
     end else if (id_ex_en) begin
       id_ex_q.pc       <= if_id_q.pc;
       id_ex_q.dec      <= id_dec;
-      id_ex_q.rs1_data <= rs1_data_id;
-      id_ex_q.rs2_data <= rs2_data_id;
+      id_ex_q.rs1_data <= {{32{rs1_data_id[31]}}, rs1_data_id};
+      id_ex_q.rs2_data <= {{32{rs2_data_id[31]}}, rs2_data_id};
       id_ex_q.valid    <= if_id_q.valid;
     end
   end
@@ -246,16 +246,16 @@ module kronos_top
   // Forwarding muxes
   always_comb begin
     unique case (fwd_rs1_sel)
-      FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data;
-      FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result;
+      FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data[31:0];
+      FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result[31:0];
       FWD_MEMWB: fwd_rs1_data = wb_result;
-      default:   fwd_rs1_data = id_ex_q.rs1_data;
+      default:   fwd_rs1_data = id_ex_q.rs1_data[31:0];
     endcase
     unique case (fwd_rs2_sel)
-      FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data;
-      FWD_EXMEM: fwd_rs2_data = ex_mem_q.alu_result;
+      FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data[31:0];
+      FWD_EXMEM: fwd_rs2_data = ex_mem_q.alu_result[31:0];
       FWD_MEMWB: fwd_rs2_data = wb_result;
-      default:   fwd_rs2_data = id_ex_q.rs2_data;
+      default:   fwd_rs2_data = id_ex_q.rs2_data[31:0];
     endcase
   end
 
@@ -315,10 +315,10 @@ module kronos_top
     end else if (ex_mem_en) begin
       ex_mem_q.pc         <= id_ex_q.pc;
       ex_mem_q.dec        <= id_ex_q.dec;
-      ex_mem_q.alu_result <= alu_result;
-      ex_mem_q.rs2_data   <= fwd_rs2_data;
+      ex_mem_q.alu_result <= {{32{alu_result[31]}}, alu_result};
+      ex_mem_q.rs2_data   <= {{32{fwd_rs2_data[31]}}, fwd_rs2_data};
       ex_mem_q.pc_next    <= ex_pc_next;
-      ex_mem_q.csr_rdata  <= csr_rdata;
+      ex_mem_q.csr_rdata  <= {32'b0, csr_rdata};
       ex_mem_q.redirect   <= ex_redirect;
       // Squash valid on IRQ: instruction is re-fetched after MRET
       ex_mem_q.valid      <= id_ex_q.valid & ~irq_pending;
@@ -335,7 +335,7 @@ module kronos_top
     end else if (mem_wb_en) begin
       mem_wb_q.dec        <= ex_mem_q.dec;
       mem_wb_q.alu_result <= ex_mem_q.alu_result;
-      mem_wb_q.lsu_rdata  <= lsu_rdata;
+      mem_wb_q.lsu_rdata  <= {{32{lsu_rdata[31]}}, lsu_rdata};
       mem_wb_q.csr_rdata  <= ex_mem_q.csr_rdata;
       mem_wb_q.pc4        <= ex_mem_q.pc + 32'd4;
       mem_wb_q.valid      <= ex_mem_q.valid;
@@ -356,22 +356,14 @@ module kronos_top
   // =========================================================================
   always_comb begin
     unique case (mem_wb_q.dec.wb_sel)
-      WB_ALU:  wb_result = mem_wb_q.alu_result;
-      WB_MEM:  wb_result = mem_wb_q.lsu_rdata;
-      WB_PC4:  wb_result = mem_wb_q.pc4;
-      WB_CSR:  wb_result = mem_wb_q.csr_rdata;
-      default: wb_result = mem_wb_q.alu_result;
+      WB_ALU:  wb_result_64 = mem_wb_q.alu_result;
+      WB_MEM:  wb_result_64 = mem_wb_q.lsu_rdata;
+      WB_PC4:  wb_result_64 = {32'b0, mem_wb_q.pc4};
+      WB_CSR:  wb_result_64 = mem_wb_q.csr_rdata;
+      default: wb_result_64 = mem_wb_q.alu_result;
     endcase
   end
 
-  always_comb begin
-    unique case (mem_wb_q.dec.wb_sel)
-      WB_ALU:  wb_result_64 = {{32{wb_result[31]}}, wb_result};
-      WB_MEM:  wb_result_64 = {{32{wb_result[31]}}, wb_result};
-      WB_PC4:  wb_result_64 = {32'b0, wb_result};
-      WB_CSR:  wb_result_64 = {32'b0, wb_result};
-      default: wb_result_64 = {{32{wb_result[31]}}, wb_result};
-    endcase
-  end
+  assign wb_result = wb_result_64[31:0];
 
 endmodule

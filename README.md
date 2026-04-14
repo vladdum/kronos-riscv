@@ -13,8 +13,8 @@ superscalar design.
 
 **Final target:** RV64GC (RV64IMAFDС)
 
-The register file is 64-bit wide from Stage 0. RV32 software runs throughout
-all stages; RV64 support is added at Stage 4.
+The pipeline is 64-bit wide from Stage 4. Stages 0–3 implement RV32I/IM/IMC;
+Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 
 ## Staged Development
 
@@ -24,7 +24,7 @@ all stages; RV64 support is added at Stage 4.
 | 1     | 5-stage in-order pipeline                       | RV32I            | OBI     | Complete    |
 | 2     | M extension + CSR hardening                     | RV32IM           | OBI     | Complete    |
 | 3     | AXI4 switch + C extension + branch predictor   | RV32IMC          | AXI4    | Complete    |
-| 4     | RV64I + A extension                             | RV64IMAC         | AXI4    | Planned     |
+| 4     | RV64I + A extension                             | RV64IMAC         | AXI4    | Complete    |
 | 5     | F/D extensions (floating point)                 | RV64IMAFDС       | AXI4    | Planned     |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
@@ -60,27 +60,37 @@ kronos-riscv/
 │   │   ├── kronos_decode.sv   # RV32I+M decoder (extends stage0)
 │   │   ├── kronos_muldiv.sv   # Multi-cycle mul/div FSM (2–34 cycles)
 │   │   └── kronos_top.sv      # Stage2 pipeline top (muldiv + combined stall)
-│   └── stage3/                # Stage 3: AXI4 bus + C extension + branch predictor
-│       ├── kronos_lsu.sv      # AXI4 LSU (single-outstanding, replaces OBI LSU)
-│       ├── kronos_decompress.sv # RV32C 16-bit → 32-bit instruction expander
-│       ├── kronos_align.sv    # Fetch alignment buffer (variable-width instructions)
-│       ├── kronos_bpred.sv    # Bimodal branch predictor with BTB
-│       └── kronos_top.sv      # Stage3 pipeline top (AXI4 + C ext + bpred)
+│   ├── stage3/                # Stage 3: AXI4 bus + C extension + branch predictor
+│   │   ├── kronos_lsu.sv      # AXI4 LSU (single-outstanding, replaces OBI LSU)
+│   │   ├── kronos_decompress.sv # RV32C 16-bit → 32-bit instruction expander
+│   │   ├── kronos_align.sv    # Fetch alignment buffer (variable-width instructions)
+│   │   ├── kronos_bpred.sv    # Bimodal branch predictor with BTB
+│   │   └── kronos_top.sv      # Stage3 pipeline top (AXI4 + C ext + bpred)
+│   └── stage4/                # Stage 4: RV64I + A extension
+│       ├── kronos_alu.sv      # 64-bit ALU with W-suffix (ADDW/SUBW/…)
+│       ├── kronos_decode.sv   # RV64IMAC decoder
+│       ├── kronos_decompress.sv # RV64C 16-bit → 32-bit instruction expander
+│       ├── kronos_muldiv.sv   # 64-bit multiply/divide unit
+│       ├── kronos_lsu.sv      # AXI4 LSU with LR/SC reservation + AMO RMW
+│       ├── kronos_csr.sv      # 64-bit CSR file (mstatus.SXL/UXL = 2)
+│       └── kronos_top.sv      # Stage4 pipeline top
 ├── tb/
 │   ├── tb_pkg.sv              # Shared testbench utilities
 │   ├── stage0/                # Stage 0 testbenches
 │   ├── stage1/                # Stage 1 unit testbenches
 │   ├── stage2/                # Stage 2 unit testbenches
-│   └── stage3/                # Stage 3 unit testbenches
+│   ├── stage3/                # Stage 3 unit testbenches
+│   └── stage4/                # Stage 4 unit testbenches
 ├── sw/
 │   ├── stage0/                # Stage 0 test programs (RISC-V assembly)
 │   ├── stage1/                # Stage 1 hazard-focused test programs
 │   ├── stage2/                # Stage 2 M-extension test programs
-│   └── stage3/                # Stage 3 test programs
+│   ├── stage3/                # Stage 3 test programs
+│   └── stage4/                # Stage 4 test programs (RV64IMAC)
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
 │   └── sim_main.cpp           # C++ simulation driver
-├── kronos_riscv.core          # FuseSoC core descriptor (active: stage3)
+├── kronos_riscv.core          # FuseSoC core descriptor (active: stage4)
 ├── LICENSE
 └── CLAUDE.md                  # Claude Code project instructions
 ```
@@ -99,25 +109,38 @@ kronos-riscv/
 Prerequisites: Verilator, FuseSoC, `riscv64-unknown-elf-gcc`.
 
 ```bash
-# Lint (stage 2, default)
+# Lint (stage 4, default)
 fusesoc --cores-root=. run --target=lint opensoc:ip:kronos_riscv
 
 # Lint earlier stages
+fusesoc --cores-root=. run --target=lint-s3 opensoc:ip:kronos_riscv
+fusesoc --cores-root=. run --target=lint-s2 opensoc:ip:kronos_riscv
 fusesoc --cores-root=. run --target=lint-s1 opensoc:ip:kronos_riscv
 fusesoc --cores-root=. run --target=lint-s0 opensoc:ip:kronos_riscv
 
 # Build simulators
+cd sim && make build-s4   # stage 4 (RV64IMAC, AXI4) — active
 cd sim && make build-s3   # stage 3 (RV32IMC, AXI4)
 cd sim && make build-s2   # stage 2 (RV32IM)
 cd sim && make build-s1   # stage 1 (RV32I)
 
-# Run a stage 3 test
-cd sim && make run-s3-test_c_basic
-cd sim && make run-s3-test_c_control
-cd sim && make run-s3-test_bpred_loop
+# Run stage 4 tests
+cd sim && make run-s4-test_rv64i_basic
+cd sim && make run-s4-test_word_ops
+cd sim && make run-s4-test_64bit_loadstore
+cd sim && make run-s4-test_atomic
+
+# Stage 4 regression (all stages 0–4, ISA-compatible tests)
+cd sim && make sim-compliance-s4
+
+# Stage 4 unit testbenches
+cd sim && make sim-alu-s4      # 64-bit ALU
+cd sim && make sim-decode-s4   # RV64IMAC decoder
+cd sim && make sim-muldiv-s4   # 64-bit multiply/divide
+cd sim && make sim-lsu-s4      # AXI4 LSU with LR/SC + AMO
 
 # Stage 3 unit testbenches
-cd sim && make sim-decompress  # RV32C instruction expander
+cd sim && make sim-decompress  # RV64C instruction expander
 cd sim && make sim-bpred       # branch predictor
 cd sim && make sim-lsu-s3      # AXI4 LSU
 

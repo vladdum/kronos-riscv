@@ -4,6 +4,7 @@ SW_DIR    := ../sw/stage0
 SW_DIR_S1 := ../sw/stage1
 SW_DIR_S2 := ../sw/stage2
 SW_DIR_S3 := ../sw/stage3
+SW_DIR_S4 := ../sw/stage4
 OBJ_DIR   := obj_dir
 
 VERILATOR := verilator
@@ -12,9 +13,10 @@ CFLAGS    := -std=c++14
 # --Wno-WIDTHEXPAND: suppress upstream axi_pkg.sv:203 width warning (PULP library bug)
 # PULP_AXI_INC / AXI_PKG_SV are required for all invocations: kronos_pkg.sv always
 # imports `AXI_TYPEDEF_ALL since the stage3 AXI switch plan.
-PULP_AXI_INC  := -I/home/popes/opensoc/hw/ip/pulp_axi/include
-AXI_PKG_SV    := /home/popes/opensoc/hw/ip/pulp_axi/src/axi_pkg.sv
-AXI_FLAGS     := $(PULP_AXI_INC) --Wno-WIDTHEXPAND
+PULP_AXI_ROOT ?= /home/popes/opensoc/hw/ip/pulp_axi
+PULP_AXI_INC  := -I$(PULP_AXI_ROOT)/include
+AXI_PKG_SV    := $(PULP_AXI_ROOT)/src/axi_pkg.sv
+AXI_FLAGS     := $(PULP_AXI_INC) --Wno-WIDTHEXPAND --Wno-BLKSEQ
 
 TOP       := kronos_top
 SIM_BIN   := $(OBJ_DIR)/V$(TOP)
@@ -94,7 +96,8 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         run-s3-latency-% sim-alu sim-regfile sim-decode sim-compliance \
         sim-compliance-s1 sim-lsu-s1 sim-forward sim-hazard \
         sim-muldiv sim-compliance-s2 sim-decompress sim-align sim-lsu-s3 sim-bpred \
-        sim-compliance-s3 clean
+        sim-compliance-s3 build-s4 run-s4-% sim-compliance-s4 sim-alu-s4 sim-decode-s4 \
+        sim-muldiv-s4 sim-lsu-s4 sim-all clean
 
 .DEFAULT_GOAL := help
 
@@ -133,25 +136,27 @@ help:
 	@echo "  make sim-compliance-s2  Stage 2: all sw/ programs + rv32ui compliance"
 	@echo "  make sim-compliance-s3  Stage 3: all sw/ programs (stages 0-3)"
 	@echo ""
+	@echo "  make sim-all         All unit testbenches + stage 4 compliance suite"
+	@echo ""
 	@echo "Housekeeping:"
 	@echo "  make clean           Remove build artifacts"
 
 build: $(SIM_BIN)
 
-$(SIM_BIN): $(SV_FILES) sim_main_obi.cpp
+$(SIM_BIN): $(SV_FILES) $(abspath sim_main_obi.cpp)
 	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED \
 	  --top-module $(TOP) \
-	  $(SV_FILES) sim_main_obi.cpp \
+	  $(SV_FILES) $(abspath sim_main_obi.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
 	  $(AXI_FLAGS) \
 	  -o V$(TOP)
 
 build-s1: $(SIM_BIN_S1)
 
-$(SIM_BIN_S1): $(SV_FILES_S1) sim_main_obi.cpp
+$(SIM_BIN_S1): $(SV_FILES_S1) $(abspath sim_main_obi.cpp)
 	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED \
 	  --top-module kronos_top \
-	  $(SV_FILES_S1) sim_main_obi.cpp \
+	  $(SV_FILES_S1) $(abspath sim_main_obi.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
 	  $(AXI_FLAGS) \
 	  -Mdir $(OBJ_DIR)/s1 \
@@ -222,10 +227,10 @@ sim-muldiv:
 
 build-s2: $(SIM_BIN_S2)
 
-$(SIM_BIN_S2): $(SV_FILES_S2) sim_main_obi.cpp
+$(SIM_BIN_S2): $(SV_FILES_S2) $(abspath sim_main_obi.cpp)
 	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND \
 	  --top-module kronos_top \
-	  $(SV_FILES_S2) sim_main_obi.cpp \
+	  $(SV_FILES_S2) $(abspath sim_main_obi.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
 	  $(AXI_FLAGS) \
 	  -Mdir $(OBJ_DIR)/s2 \
@@ -289,7 +294,7 @@ TB_ALIGN_FILES := $(AXI_PKG_SV) \
                   $(TB_DIR)/stage3/tb_align.sv
 
 sim-align:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND --Wno-BLKSEQ \
 	  --top-module tb_align $(TB_ALIGN_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_align
 	./$(OBJ_DIR)/tb_align/Vtb_align
@@ -301,10 +306,10 @@ TB_LSU_S3_FILES := $(AXI_PKG_SV) \
 
 build-s3: $(SIM_BIN_S3)
 
-$(SIM_BIN_S3): $(SV_FILES_S3) sim_main.cpp
+$(SIM_BIN_S3): $(SV_FILES_S3) $(abspath sim_main.cpp)
 	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --top-module $(TOP_S3) \
-	  $(SV_FILES_S3) sim_main.cpp \
+	  $(SV_FILES_S3) $(abspath sim_main.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
 	  -Mdir $(OBJ_DIR)/s3 \
 	  $(PULP_AXI_INC) \
@@ -317,7 +322,7 @@ run-s3-latency-%: build-s3
 	./$(SIM_BIN_S3) $(SW_DIR_S3)/build/$*.hex 2 4
 
 sim-lsu-s3:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND --Wno-BLKSEQ \
 	  --top-module tb_lsu_s3 $(TB_LSU_S3_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_lsu_s3
 	./$(OBJ_DIR)/tb_lsu_s3/Vtb_lsu_s3
@@ -328,7 +333,7 @@ TB_BPRED_FILES := $(AXI_PKG_SV) \
                   $(TB_DIR)/stage3/tb_bpred.sv
 
 sim-bpred:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND --Wno-BLKSEQ \
 	  --top-module tb_bpred $(TB_BPRED_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_bpred
 	./$(OBJ_DIR)/tb_bpred/Vtb_bpred
@@ -353,6 +358,161 @@ sim-compliance-s3: build-s3
 	done; \
 	echo "Stage 3 regression: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ]
+
+SV_FILES_S4 := $(AXI_PKG_SV) \
+               $(RTL_DIR)/kronos_pkg.sv \
+               $(RTL_DIR)/stage4/kronos_alu.sv \
+               $(RTL_DIR)/stage4/kronos_decode.sv \
+               $(RTL_DIR)/stage0/kronos_regfile.sv \
+               $(RTL_DIR)/stage4/kronos_csr.sv \
+               $(RTL_DIR)/stage4/kronos_lsu.sv \
+               $(RTL_DIR)/stage1/kronos_forward.sv \
+               $(RTL_DIR)/stage1/kronos_hazard.sv \
+               $(RTL_DIR)/stage4/kronos_muldiv.sv \
+               $(RTL_DIR)/stage4/kronos_decompress.sv \
+               $(RTL_DIR)/stage3/kronos_align.sv \
+               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR)/stage4/kronos_top.sv \
+               sim_top.sv
+
+TOP_S4     := sim_top
+SIM_BIN_S4 := $(OBJ_DIR)/s4/V$(TOP_S4)
+
+build-s4: $(SIM_BIN_S4)
+
+$(SIM_BIN_S4): $(SV_FILES_S4) $(abspath sim_main.cpp)
+	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	  --top-module $(TOP_S4) \
+	  $(SV_FILES_S4) $(abspath sim_main.cpp) \
+	  -CFLAGS "$(CFLAGS)" \
+	  -Mdir $(OBJ_DIR)/s4 \
+	  $(PULP_AXI_INC) \
+	  -o V$(TOP_S4)
+
+run-s4-%: build-s4
+	./$(SIM_BIN_S4) $(SW_DIR_S4)/build/$*.hex
+
+sim-compliance-s4: build-s4
+	@$(MAKE) -C $(SW_DIR) all & \
+	 $(MAKE) -C $(SW_DIR_S1) all & \
+	 $(MAKE) -C $(SW_DIR_S2) all & \
+	 $(MAKE) -C $(SW_DIR_S4) all & \
+	 wait
+	@tmpdir=$$(mktemp -d); \
+	pids=""; \
+	for hex in $(SW_DIR)/build/*.hex $(SW_DIR_S1)/build/*.hex \
+	           $(SW_DIR_S2)/build/*.hex \
+	           $$(ls $(SW_DIR_S4)/build/*.hex 2>/dev/null); do \
+	  [ -f "$$hex" ] || continue; \
+	  name=$$(basename $$hex .hex); \
+	  case "$$name" in \
+	    test_mul|test_div|test_irq) continue ;; \
+	  esac; \
+	  { out=$$(./$(SIM_BIN_S4) $$hex 2>&1); \
+	    x10=$$(echo "$$out" | grep -oP 'x10 = \K[0-9]+'); \
+	    echo "$$hex $$x10"; } > $$tmpdir/$$name & \
+	  pids="$$pids $$!"; \
+	done; \
+	wait $$pids; \
+	pass=0; fail=0; \
+	for f in $$tmpdir/*; do \
+	  read hex x10 < $$f; \
+	  if [ "$$x10" = "0" ]; then \
+	    pass=$$((pass+1)); \
+	  else \
+	    echo "FAIL: $$hex (x10=$$x10)"; fail=$$((fail+1)); \
+	  fi; \
+	done; \
+	rm -rf $$tmpdir; \
+	echo "Stage 4 regression: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]
+
+TB_ALU_S4_FILES := $(AXI_PKG_SV) \
+                   $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage4/kronos_alu.sv \
+                   $(TB_DIR)/stage4/tb_alu_s4.sv
+
+sim-alu-s4:
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_alu_s4 $(TB_ALU_S4_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_alu_s4
+	./$(OBJ_DIR)/tb_alu_s4/Vtb_alu_s4
+
+TB_DECODE_S4_FILES := $(AXI_PKG_SV) \
+                      $(RTL_DIR)/kronos_pkg.sv \
+                      $(RTL_DIR)/stage4/kronos_decode.sv \
+                      $(TB_DIR)/stage4/tb_decode_s4.sv
+
+sim-decode-s4:
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_decode_s4 $(TB_DECODE_S4_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_decode_s4
+	./$(OBJ_DIR)/tb_decode_s4/Vtb_decode_s4
+
+TB_MULDIV_S4_FILES := $(AXI_PKG_SV) \
+                      $(RTL_DIR)/kronos_pkg.sv \
+                      $(RTL_DIR)/stage4/kronos_muldiv.sv \
+                      $(TB_DIR)/stage4/tb_muldiv_s4.sv
+
+sim-muldiv-s4:
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_muldiv_s4 $(TB_MULDIV_S4_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_muldiv_s4
+	./$(OBJ_DIR)/tb_muldiv_s4/Vtb_muldiv_s4
+
+TB_LSU_S4_FILES := $(AXI_PKG_SV) \
+                   $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage4/kronos_lsu.sv \
+                   $(TB_DIR)/stage4/tb_lsu_s4.sv
+
+sim-lsu-s4:
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_lsu_s4 $(TB_LSU_S4_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_lsu_s4
+	./$(OBJ_DIR)/tb_lsu_s4/Vtb_lsu_s4
+
+SIM_UNITS := sim-alu sim-regfile sim-decode \
+             sim-lsu-s1 sim-forward sim-hazard \
+             sim-muldiv \
+             sim-decompress sim-align sim-lsu-s3 sim-bpred \
+             sim-alu-s4 sim-decode-s4 sim-muldiv-s4 sim-lsu-s4
+
+SIM_REPORT_DIR := $(OBJ_DIR)/sim-results
+
+sim-all:
+	@rm -rf $(SIM_REPORT_DIR) && mkdir -p $(SIM_REPORT_DIR)
+	@pids=""; \
+	for t in $(SIM_UNITS); do \
+	  { if $(MAKE) $$t > $(SIM_REPORT_DIR)/$$t.log 2>&1; \
+	    then echo "PASS  $$t"; \
+	    else echo "FAIL  $$t"; \
+	    fi; } > $(SIM_REPORT_DIR)/$$t.result & \
+	  pids="$$pids $$!"; \
+	done; \
+	{ if $(MAKE) sim-compliance-s4 > $(SIM_REPORT_DIR)/compliance.log 2>&1; then \
+	    echo "PASS  compliance  ($$(grep 'Stage 4 regression:' $(SIM_REPORT_DIR)/compliance.log | tail -1))"; \
+	  else \
+	    { grep 'FAIL:' $(SIM_REPORT_DIR)/compliance.log; \
+	      echo "FAIL  compliance  ($$(grep 'Stage 4 regression:' $(SIM_REPORT_DIR)/compliance.log | tail -1))"; }; \
+	  fi; } > $(SIM_REPORT_DIR)/compliance.result & \
+	pids="$$pids $$!"; \
+	wait $$pids || true; \
+	printf "\n%-50s\n" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
+	printf "  sim-all results\n"; \
+	printf "%-50s\n" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
+	for t in $(SIM_UNITS); do printf "  %s\n" "$$(cat $(SIM_REPORT_DIR)/$$t.result)"; done; \
+	printf "  %-48s\n" "──────────────────────────────────────────────────"; \
+	printf "  %s\n" "$$(cat $(SIM_REPORT_DIR)/compliance.result)"; \
+	printf "%-50s\n\n" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
+	for f in $(SIM_REPORT_DIR)/*.result; do \
+	  if grep -q "^FAIL" $$f; then \
+	    t=$$(basename $$f .result); \
+	    echo "--- $$t log ---"; \
+	    cat $(SIM_REPORT_DIR)/$$t.log; \
+	    echo "--- end $$t log ---"; \
+	  fi; \
+	done; \
+	! grep -q "^FAIL" $(SIM_REPORT_DIR)/*.result
 
 clean:
 	rm -rf $(OBJ_DIR)

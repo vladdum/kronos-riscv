@@ -157,10 +157,30 @@ Commit message convention: `type(scope): description`
 - Types: `feat`, `fix`, `chore`, `docs`, `test`, `refactor`
 - Scopes: `alu`, `decode`, `regfile`, `lsu`, `csr`, `top`, `sim`, `sw`, `pkg`
 
+## Pull Requests
+
+Do not include any reference to Claude or AI tools in PR titles, bodies, or descriptions
+(no `🤖 Generated with Claude Code`, no `Co-Authored-By`, no similar footers).
+
+Before creating any PR:
+
+1. Squash all commits on the branch into a single commit.
+2. Rebase on main:
+
+```bash
+git pull --rebase --autostash origin main
+```
+
+When merging, delete the branch:
+
+```bash
+gh pr merge --delete-branch
+```
+
 ## Branch Workflow
 
 One branch per stage. Open it when you start, commit freely during development,
-squash to a single commit when the stage is done, then merge to `main` via PR.
+then squash to a single commit and open a PR before merging.
 
 Direct pushes to `main` are blocked — all changes must go through a pull request.
 
@@ -170,26 +190,23 @@ git checkout -b stage3
 
 # 2. Develop freely — granular commits are fine on the branch
 
-# 3. Pick up any commits that landed on main while you worked
-git pull --rebase --autostash origin main
-
-# 4. Squash all branch commits into one
+# 3. Squash all branch commits into one
 git reset --soft origin/main
 git commit -m "feat(stage3): C extension + branch predictor"
 
-# 5. Open a pull request and merge
+# 4. Rebase on main
+git pull --rebase --autostash origin main
+
+# 5. Open a pull request
 git push -u origin stage3
-# Then open a PR on GitHub; merge via squash merge to main
-git checkout main
-git pull origin main
-git branch -d stage3
+gh pr create --title "feat(stage3): C extension + branch predictor" --body "..."
+
+# 6. Merge and delete the branch
+gh pr merge --delete-branch
 ```
 
 `main` always has exactly one commit per completed stage, plus the skeleton and docs
-commits. Use squash merge on GitHub PRs.
-
-Do not include any reference to Claude or AI tools in commit messages
-(no `🤖 Generated with Claude Code`, no `Co-Authored-By`, no similar footers).
+commits.
 
 ## SystemVerilog Coding Guidelines
 
