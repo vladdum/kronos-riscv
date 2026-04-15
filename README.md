@@ -25,7 +25,8 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 2     | M extension + CSR hardening                     | RV32IM           | OBI     | Complete    |
 | 3     | AXI4 switch + C extension + branch predictor   | RV32IMC          | AXI4    | Complete    |
 | 4     | RV64I + A extension                             | RV64IMAC         | AXI4    | Complete    |
-| 5     | F/D extensions (floating point)                 | RV64IMAFDС       | AXI4    | Planned     |
+| 5a    | F/D extensions (pipelined, no FDIV/FSQRT)       | RV64IMAFD        | AXI4    | Complete    |
+| 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4    | Planned     |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
@@ -66,31 +67,49 @@ kronos-riscv/
 │   │   ├── kronos_align.sv    # Fetch alignment buffer (variable-width instructions)
 │   │   ├── kronos_bpred.sv    # Bimodal branch predictor with BTB
 │   │   └── kronos_top.sv      # Stage3 pipeline top (AXI4 + C ext + bpred)
-│   └── stage4/                # Stage 4: RV64I + A extension
-│       ├── kronos_alu.sv      # 64-bit ALU with W-suffix (ADDW/SUBW/…)
-│       ├── kronos_decode.sv   # RV64IMAC decoder
-│       ├── kronos_decompress.sv # RV64C 16-bit → 32-bit instruction expander
-│       ├── kronos_muldiv.sv   # 64-bit multiply/divide unit
-│       ├── kronos_lsu.sv      # AXI4 LSU with LR/SC reservation + AMO RMW
-│       ├── kronos_csr.sv      # 64-bit CSR file (mstatus.SXL/UXL = 2)
-│       └── kronos_top.sv      # Stage4 pipeline top
+│   ├── stage4/                # Stage 4: RV64I + A extension
+│   │   ├── kronos_alu.sv      # 64-bit ALU with W-suffix (ADDW/SUBW/…)
+│   │   ├── kronos_decode.sv   # RV64IMAC decoder
+│   │   ├── kronos_decompress.sv # RV64C 16-bit → 32-bit instruction expander
+│   │   ├── kronos_muldiv.sv   # 64-bit multiply/divide unit
+│   │   ├── kronos_lsu.sv      # AXI4 LSU with LR/SC reservation + AMO RMW
+│   │   ├── kronos_csr.sv      # 64-bit CSR file (mstatus.SXL/UXL = 2)
+│   │   └── kronos_top.sv      # Stage4 pipeline top
+│   └── stage5/                # Stage 5a: F/D floating-point (no FDIV/FSQRT)
+│       ├── kronos_decode.sv   # RV64IMAFD decoder with FP rm resolution
+│       ├── kronos_regfile_fp.sv # 3R1W 32×64-bit FP register file
+│       ├── kronos_lsu.sv      # AXI4 LSU + FLW/FLD/FSW/FSD with NaN-boxing
+│       ├── kronos_csr.sv      # CSR + FFLAGS/FRM/FCSR/mstatus.FS
+│       ├── kronos_top.sv      # Stage5 pipeline top (FPU integrated)
+│       └── fpu/
+│           ├── kronos_fpu_fmisc.sv  # 1-cycle: FSGNJ, FMIN, FMAX, FCLASS, CMP, FMV
+│           ├── kronos_fpu_fcvt.sv   # 2-cycle: FCVT int↔FP and S↔D
+│           ├── kronos_fpu_fadd.sv   # 4-cycle: FADD/FSUB
+│           ├── kronos_fpu_fmul.sv   # 4-cycle: FMUL
+│           ├── kronos_fpu_fma.sv    # 5-cycle: FMADD/FMSUB/FNMADD/FNMSUB
+│           ├── kronos_fpu_scoreboard.sv # WAW busy-table + WB port reservation
+│           └── kronos_fpu_top.sv    # FPU dispatch wrapper
 ├── tb/
 │   ├── tb_pkg.sv              # Shared testbench utilities
 │   ├── stage0/                # Stage 0 testbenches
 │   ├── stage1/                # Stage 1 unit testbenches
 │   ├── stage2/                # Stage 2 unit testbenches
 │   ├── stage3/                # Stage 3 unit testbenches
-│   └── stage4/                # Stage 4 unit testbenches
+│   ├── stage4/                # Stage 4 unit testbenches
+│   └── stage5/                # Stage 5 FPU unit + integration testbenches
 ├── sw/
 │   ├── stage0/                # Stage 0 test programs (RISC-V assembly)
 │   ├── stage1/                # Stage 1 hazard-focused test programs
 │   ├── stage2/                # Stage 2 M-extension test programs
 │   ├── stage3/                # Stage 3 test programs
-│   └── stage4/                # Stage 4 test programs (RV64IMAC)
+│   ├── stage4/                # Stage 4 test programs (RV64IMAC)
+│   └── stage5/                # Stage 5 FP test programs (RV64IMAFD)
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
 │   └── sim_main.cpp           # C++ simulation driver
-├── kronos_riscv.core          # FuseSoC core descriptor (active: stage4)
+├── tools/
+│   └── coverage_gate.py       # LCOV line-coverage gate (≥95% threshold)
+├── kronos_riscv.core          # FuseSoC core descriptor (active: stage5)
 ├── LICENSE
 └── CLAUDE.md                  # Claude Code project instructions
 ```
@@ -109,29 +128,39 @@ kronos-riscv/
 Prerequisites: Verilator, FuseSoC, `riscv64-unknown-elf-gcc`.
 
 ```bash
-# Lint (stage 4, default)
+# Lint (stage 5, default)
 fusesoc --cores-root=. run --target=lint opensoc:ip:kronos_riscv
 
 # Lint earlier stages
+fusesoc --cores-root=. run --target=lint-s4 opensoc:ip:kronos_riscv
 fusesoc --cores-root=. run --target=lint-s3 opensoc:ip:kronos_riscv
 fusesoc --cores-root=. run --target=lint-s2 opensoc:ip:kronos_riscv
-fusesoc --cores-root=. run --target=lint-s1 opensoc:ip:kronos_riscv
 fusesoc --cores-root=. run --target=lint-s0 opensoc:ip:kronos_riscv
 
 # Build simulators
-cd sim && make build-s4   # stage 4 (RV64IMAC, AXI4) — active
+cd sim && make build-s5   # stage 5 (RV64IMAFD, AXI4) — active
+cd sim && make build-s4   # stage 4 (RV64IMAC, AXI4)
 cd sim && make build-s3   # stage 3 (RV32IMC, AXI4)
 cd sim && make build-s2   # stage 2 (RV32IM)
 cd sim && make build-s1   # stage 1 (RV32I)
 
-# Run stage 4 tests
-cd sim && make run-s4-test_rv64i_basic
-cd sim && make run-s4-test_word_ops
-cd sim && make run-s4-test_64bit_loadstore
-cd sim && make run-s4-test_atomic
+# Stage 5 FPU unit testbenches
+cd sim && make sim-fpu-fmisc   # FSGNJ/FMIN/FMAX/FCLASS/CMP/FMV
+cd sim && make sim-fpu-fcvt    # FCVT (int↔FP, S↔D)
+cd sim && make sim-fpu-fadd    # FADD/FSUB (4-stage)
+cd sim && make sim-fpu-fmul    # FMUL (4-stage)
+cd sim && make sim-fpu-fma     # FMA (5-stage)
 
-# Stage 4 regression (all stages 0–4, ISA-compatible tests)
-cd sim && make sim-compliance-s4
+# Stage 5 integration testbenches
+cd sim && make sim-core-fp-basic       # basic FMV + FADD end-to-end
+cd sim && make sim-core-fp-forwarding  # FMUL→FADD with forwarding
+
+# Stage 5 full regression + coverage gate (≥95% line coverage)
+cd sim && make sim-s5
+cd sim && make coverage
+
+# Stage 4 regression
+cd sim && make sim-s4
 
 # Stage 4 unit testbenches
 cd sim && make sim-alu-s4      # 64-bit ALU

@@ -17,6 +17,12 @@ module kronos_hazard
   input  logic [4:0] if_id_rs1_i,
   input  logic       if_id_rs2_used_i,
   input  logic [4:0] if_id_rs2_i,
+  // FP load-use detection (stage5+; tie to 0 in earlier stages)
+  input  logic       id_ex_is_fp_load_i,
+  input  logic       if_id_rs1_fp_i,
+  input  logic       if_id_rs2_fp_i,
+  input  logic       if_id_rs3_fp_i,
+  input  logic [4:0] if_id_rs3_i,
   // EX redirect (branch taken, JAL/JALR, trap, MRET)
   input  logic       ex_redirect_i,
   // MEM stall (LSU waiting for OBI rvalid)
@@ -33,10 +39,18 @@ module kronos_hazard
 );
 
   logic load_use;
+  logic fp_load_use;
 
   assign load_use = id_ex_valid_i && id_ex_is_load_i && (id_ex_rd_i != 5'd0) &&
                     ((if_id_rs1_used_i && if_id_rs1_i == id_ex_rd_i) ||
                      (if_id_rs2_used_i && if_id_rs2_i == id_ex_rd_i));
+
+  // FP load-use: FP load in EX, following FP instruction reads the same FP reg.
+  // Uses rs1_fp/rs2_fp/rs3_fp to distinguish FP register reads from integer reads.
+  assign fp_load_use = id_ex_valid_i && id_ex_is_fp_load_i && (id_ex_rd_i != 5'd0) &&
+                       ((if_id_rs1_fp_i && if_id_rs1_i == id_ex_rd_i) ||
+                        (if_id_rs2_fp_i && if_id_rs2_i == id_ex_rd_i) ||
+                        (if_id_rs3_fp_i && if_id_rs3_i == id_ex_rd_i));
 
   always_comb begin
     // Default: full advance, no flush
@@ -55,7 +69,7 @@ module kronos_hazard
       id_ex_en_o  = 1'b0;
       ex_mem_en_o = 1'b0;
       mem_wb_en_o = 1'b0;
-    end else if (load_use) begin
+    end else if (load_use | fp_load_use) begin
       // Priority 2: load-use — stall PC+IF+ID, bubble into EX
       pc_en_o       = 1'b0;
       if_id_en_o    = 1'b0;

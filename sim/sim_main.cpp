@@ -164,8 +164,22 @@ int main(int argc, char** argv) {
             uint32_t ins  = top->rootp->sim_top__DOT__u_top__DOT__align_instr;
             uint8_t  redir = top->rootp->sim_top__DOT__u_top__DOT__ex_redirect;
             uint32_t epc  = top->rootp->sim_top__DOT__u_top__DOT__ex_pc_next;
+#ifdef KRONOS_HAS_FPU
+            uint8_t  fov  = top->rootp->sim_top__DOT__u_top__DOT__fpu_out_valid;
+            uint8_t  fi   = top->rootp->sim_top__DOT__u_top__DOT__fp_inflight_q;
+            uint64_t fres = top->rootp->sim_top__DOT__u_top__DOT__fpu_result;
+            uint8_t  fwe  = top->rootp->sim_top__DOT__u_top__DOT__fp_we;
+            uint64_t fwd  = top->rootp->sim_top__DOT__u_top__DOT__fp_wd;
+            uint8_t  fwa  = top->rootp->sim_top__DOT__u_top__DOT__fp_wa;
+            printf("C%05d: pc=%08x al_v=%d ins=%08x redir=%d epc=%08x"
+                   " fov=%d fi=%d fres=%016llx fwe=%d fwa=%d fwd=%016llx\n",
+                   cycle, pc, al_v, ins, redir, epc,
+                   fov, fi, (unsigned long long)fres,
+                   fwe, fwa, (unsigned long long)fwd);
+#else
             printf("C%05d: pc=%08x al_v=%d ins=%08x redir=%d epc=%08x\n",
                    cycle, pc, al_v, ins, redir, epc);
+#endif
         }
 
         // ---- Detect handshakes from pre-clock combinatorial state ----

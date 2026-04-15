@@ -127,16 +127,21 @@ module kronos_top
     .if_id_rs1_used_i (id_dec.rs1_used),
     .if_id_rs1_i      (id_dec.rs1),
     .if_id_rs2_used_i (id_dec.rs2_used),
-    .if_id_rs2_i      (id_dec.rs2),
-    .ex_redirect_i    (ex_redirect),
-    .mem_stall_i      (mem_stall),
-    .pc_en_o          (pc_en),
-    .if_id_en_o       (if_id_en),
-    .id_ex_en_o       (id_ex_en),
-    .ex_mem_en_o      (ex_mem_en),
-    .mem_wb_en_o      (mem_wb_en),
-    .if_id_flush_o    (if_id_flush),
-    .id_ex_flush_o    (id_ex_flush)
+    .if_id_rs2_i          (id_dec.rs2),
+    .id_ex_is_fp_load_i   ('0),
+    .if_id_rs1_fp_i       ('0),
+    .if_id_rs2_fp_i       ('0),
+    .if_id_rs3_fp_i       ('0),
+    .if_id_rs3_i          (5'd0),
+    .ex_redirect_i        (ex_redirect),
+    .mem_stall_i          (mem_stall),
+    .pc_en_o              (pc_en),
+    .if_id_en_o           (if_id_en),
+    .id_ex_en_o           (id_ex_en),
+    .ex_mem_en_o          (ex_mem_en),
+    .mem_wb_en_o          (mem_wb_en),
+    .if_id_flush_o        (if_id_flush),
+    .id_ex_flush_o        (id_ex_flush)
   );
 
   kronos_alu u_alu (
