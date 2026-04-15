@@ -139,15 +139,15 @@ module kronos_top
   );
 
   kronos_forward u_forward (
-    .id_ex_rs1_i      (id_ex_q.dec.rs1),
-    .id_ex_rs1_used_i (id_ex_q.dec.rs1_used),
-    .id_ex_rs2_i      (id_ex_q.dec.rs2),
-    .id_ex_rs2_used_i (id_ex_q.dec.rs2_used),
+    .if_id_rs1_i      (id_dec.rs1),
+    .if_id_rs1_used_i (id_dec.rs1_used),
+    .if_id_rs2_i      (id_dec.rs2),
+    .if_id_rs2_used_i (id_dec.rs2_used),
+    .id_ex_rd_i       (id_ex_q.dec.rd),
+    .id_ex_rd_wen_i   (id_ex_q.dec.rd_wen & id_ex_q.valid),
+    .id_ex_is_load_i  (id_ex_q.dec.wb_sel == WB_MEM),
     .ex_mem_rd_i      (ex_mem_q.dec.rd),
     .ex_mem_rd_wen_i  (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
-    .ex_mem_is_load_i (ex_mem_q.dec.wb_sel == WB_MEM),  // SC/AMO also need suppression
-    .mem_wb_rd_i      (mem_wb_q.dec.rd),
-    .mem_wb_rd_wen_i  (mem_wb_q.dec.rd_wen & mem_wb_q.valid),
     .fwd_rs1_sel_o    (fwd_rs1_sel),
     .fwd_rs2_sel_o    (fwd_rs2_sel)
   );
@@ -364,6 +364,8 @@ module kronos_top
       id_ex_q.is_16b      <= if_id_q.is_16b;
       id_ex_q.pred_taken  <= if_id_q.pred_taken;
       id_ex_q.pred_target <= if_id_q.pred_target;
+      id_ex_q.fwd_rs1_sel <= fwd_rs1_sel;
+      id_ex_q.fwd_rs2_sel <= fwd_rs2_sel;
     end
   end
 
@@ -371,13 +373,13 @@ module kronos_top
   // EX stage — 64-bit forwarding mux
   // =========================================================================
   always_comb begin
-    unique case (fwd_rs1_sel)
+    unique case (id_ex_q.fwd_rs1_sel)
       FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data;
       FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result;
       FWD_MEMWB: fwd_rs1_data = wb_result_64;
       default:   fwd_rs1_data = id_ex_q.rs1_data;
     endcase
-    unique case (fwd_rs2_sel)
+    unique case (id_ex_q.fwd_rs2_sel)
       FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data;
       FWD_EXMEM: fwd_rs2_data = ex_mem_q.alu_result;
       FWD_MEMWB: fwd_rs2_data = wb_result_64;

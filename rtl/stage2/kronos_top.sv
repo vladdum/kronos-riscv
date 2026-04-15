@@ -126,15 +126,15 @@ module kronos_top
   );
 
   kronos_forward u_forward (
-    .id_ex_rs1_i      (id_ex_q.dec.rs1),
-    .id_ex_rs1_used_i (id_ex_q.dec.rs1_used),
-    .id_ex_rs2_i      (id_ex_q.dec.rs2),
-    .id_ex_rs2_used_i (id_ex_q.dec.rs2_used),
+    .if_id_rs1_i      (id_dec.rs1),
+    .if_id_rs1_used_i (id_dec.rs1_used),
+    .if_id_rs2_i      (id_dec.rs2),
+    .if_id_rs2_used_i (id_dec.rs2_used),
+    .id_ex_rd_i       (id_ex_q.dec.rd),
+    .id_ex_rd_wen_i   (id_ex_q.dec.rd_wen & id_ex_q.valid),
+    .id_ex_is_load_i  (id_ex_q.dec.is_load),
     .ex_mem_rd_i      (ex_mem_q.dec.rd),
     .ex_mem_rd_wen_i  (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
-    .ex_mem_is_load_i (ex_mem_q.dec.is_load),
-    .mem_wb_rd_i      (mem_wb_q.dec.rd),
-    .mem_wb_rd_wen_i  (mem_wb_q.dec.rd_wen & mem_wb_q.valid),
     .fwd_rs1_sel_o    (fwd_rs1_sel),
     .fwd_rs2_sel_o    (fwd_rs2_sel)
   );
@@ -287,11 +287,13 @@ module kronos_top
     end else if (id_ex_flush) begin
       id_ex_q <= '0;
     end else if (id_ex_en) begin
-      id_ex_q.pc       <= if_id_q.pc;
-      id_ex_q.dec      <= id_dec;
-      id_ex_q.rs1_data <= {{32{rs1_data_id[31]}}, rs1_data_id};
-      id_ex_q.rs2_data <= {{32{rs2_data_id[31]}}, rs2_data_id};
-      id_ex_q.valid    <= if_id_q.valid;
+      id_ex_q.pc          <= if_id_q.pc;
+      id_ex_q.dec         <= id_dec;
+      id_ex_q.rs1_data    <= {{32{rs1_data_id[31]}}, rs1_data_id};
+      id_ex_q.rs2_data    <= {{32{rs2_data_id[31]}}, rs2_data_id};
+      id_ex_q.valid       <= if_id_q.valid;
+      id_ex_q.fwd_rs1_sel <= fwd_rs1_sel;
+      id_ex_q.fwd_rs2_sel <= fwd_rs2_sel;
     end
   end
 
@@ -301,13 +303,13 @@ module kronos_top
 
   // Forwarding muxes
   always_comb begin
-    unique case (fwd_rs1_sel)
+    unique case (id_ex_q.fwd_rs1_sel)
       FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data[31:0];
       FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result[31:0];
       FWD_MEMWB: fwd_rs1_data = wb_result;
       default:   fwd_rs1_data = id_ex_q.rs1_data[31:0];
     endcase
-    unique case (fwd_rs2_sel)
+    unique case (id_ex_q.fwd_rs2_sel)
       FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data[31:0];
       FWD_EXMEM: fwd_rs2_data = ex_mem_q.alu_result[31:0];
       FWD_MEMWB: fwd_rs2_data = wb_result;

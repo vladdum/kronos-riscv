@@ -5,24 +5,24 @@
 module tb_forward;
   import kronos_pkg::*;
 
-  logic [4:0] id_ex_rs1_i, id_ex_rs2_i;
-  logic       id_ex_rs1_used_i, id_ex_rs2_used_i;
+  logic [4:0] if_id_rs1_i, if_id_rs2_i;
+  logic       if_id_rs1_used_i, if_id_rs2_used_i;
+  logic [4:0] id_ex_rd_i;
+  logic       id_ex_rd_wen_i, id_ex_is_load_i;
   logic [4:0] ex_mem_rd_i;
-  logic       ex_mem_rd_wen_i, ex_mem_is_load_i;
-  logic [4:0] mem_wb_rd_i;
-  logic       mem_wb_rd_wen_i;
+  logic       ex_mem_rd_wen_i;
   fwd_sel_e   fwd_rs1_sel_o, fwd_rs2_sel_o;
 
   kronos_forward u_fwd (
-    .id_ex_rs1_i      (id_ex_rs1_i),
-    .id_ex_rs1_used_i (id_ex_rs1_used_i),
-    .id_ex_rs2_i      (id_ex_rs2_i),
-    .id_ex_rs2_used_i (id_ex_rs2_used_i),
+    .if_id_rs1_i      (if_id_rs1_i),
+    .if_id_rs1_used_i (if_id_rs1_used_i),
+    .if_id_rs2_i      (if_id_rs2_i),
+    .if_id_rs2_used_i (if_id_rs2_used_i),
+    .id_ex_rd_i       (id_ex_rd_i),
+    .id_ex_rd_wen_i   (id_ex_rd_wen_i),
+    .id_ex_is_load_i  (id_ex_is_load_i),
     .ex_mem_rd_i      (ex_mem_rd_i),
     .ex_mem_rd_wen_i  (ex_mem_rd_wen_i),
-    .ex_mem_is_load_i (ex_mem_is_load_i),
-    .mem_wb_rd_i      (mem_wb_rd_i),
-    .mem_wb_rd_wen_i  (mem_wb_rd_wen_i),
     .fwd_rs1_sel_o    (fwd_rs1_sel_o),
     .fwd_rs2_sel_o    (fwd_rs2_sel_o)
   );
@@ -40,57 +40,57 @@ module tb_forward;
 
   initial begin
     // baseline: nothing produces, nothing consumes
-    id_ex_rs1_i = 5'd1; id_ex_rs1_used_i = 1;
-    id_ex_rs2_i = 5'd2; id_ex_rs2_used_i = 1;
-    ex_mem_rd_i = 5'd0; ex_mem_rd_wen_i = 0; ex_mem_is_load_i = 0;
-    mem_wb_rd_i = 5'd0; mem_wb_rd_wen_i = 0;
+    if_id_rs1_i = 5'd1; if_id_rs1_used_i = 1;
+    if_id_rs2_i = 5'd2; if_id_rs2_used_i = 1;
+    id_ex_rd_i = 5'd0; id_ex_rd_wen_i = 0; id_ex_is_load_i = 0;
+    ex_mem_rd_i = 5'd0; ex_mem_rd_wen_i = 0;
     check(FWD_NONE, FWD_NONE, "no hazard");
 
     // EX/MEM forward to RS1
-    ex_mem_rd_i = 5'd1; ex_mem_rd_wen_i = 1; ex_mem_is_load_i = 0;
+    id_ex_rd_i = 5'd1; id_ex_rd_wen_i = 1; id_ex_is_load_i = 0;
     check(FWD_EXMEM, FWD_NONE, "EX/MEM -> RS1");
 
     // EX/MEM forward to RS2
-    ex_mem_rd_i = 5'd2; ex_mem_rd_wen_i = 1; ex_mem_is_load_i = 0;
+    id_ex_rd_i = 5'd2; id_ex_rd_wen_i = 1; id_ex_is_load_i = 0;
     check(FWD_NONE, FWD_EXMEM, "EX/MEM -> RS2");
 
     // EX/MEM forward to both RS1 and RS2
-    id_ex_rs1_i = 5'd3; id_ex_rs2_i = 5'd3;
-    ex_mem_rd_i = 5'd3; ex_mem_rd_wen_i = 1; ex_mem_is_load_i = 0;
+    if_id_rs1_i = 5'd3; if_id_rs2_i = 5'd3;
+    id_ex_rd_i = 5'd3; id_ex_rd_wen_i = 1; id_ex_is_load_i = 0;
     check(FWD_EXMEM, FWD_EXMEM, "EX/MEM -> RS1+RS2");
 
     // EX/MEM is a load — no EX/MEM forward (load-use case, handled by stall)
-    id_ex_rs1_i = 5'd1; id_ex_rs2_i = 5'd2;
-    ex_mem_rd_i = 5'd1; ex_mem_rd_wen_i = 1; ex_mem_is_load_i = 1;
+    if_id_rs1_i = 5'd1; if_id_rs2_i = 5'd2;
+    id_ex_rd_i = 5'd1; id_ex_rd_wen_i = 1; id_ex_is_load_i = 1;
     check(FWD_NONE, FWD_NONE, "load in MEM - no EX/MEM fwd");
 
     // MEM/WB forward to RS1
-    ex_mem_rd_wen_i = 0; ex_mem_is_load_i = 0;
-    mem_wb_rd_i = 5'd1; mem_wb_rd_wen_i = 1;
+    id_ex_rd_wen_i = 0; id_ex_is_load_i = 0;
+    ex_mem_rd_i = 5'd1; ex_mem_rd_wen_i = 1;
     check(FWD_MEMWB, FWD_NONE, "MEM/WB -> RS1");
 
     // MEM/WB forward to RS2
-    id_ex_rs2_i = 5'd1;
+    if_id_rs2_i = 5'd1;
     check(FWD_MEMWB, FWD_MEMWB, "MEM/WB -> RS1+RS2");
 
     // EX/MEM takes priority over MEM/WB
-    id_ex_rs1_i = 5'd5; id_ex_rs2_i = 5'd5;
-    ex_mem_rd_i = 5'd5; ex_mem_rd_wen_i = 1; ex_mem_is_load_i = 0;
-    mem_wb_rd_i = 5'd5; mem_wb_rd_wen_i = 1;
+    if_id_rs1_i = 5'd5; if_id_rs2_i = 5'd5;
+    id_ex_rd_i = 5'd5; id_ex_rd_wen_i = 1; id_ex_is_load_i = 0;
+    ex_mem_rd_i = 5'd5; ex_mem_rd_wen_i = 1;
     check(FWD_EXMEM, FWD_EXMEM, "EX/MEM priority > MEM/WB");
 
     // No forward when rs_used=0 even if address matches
-    id_ex_rs1_i = 5'd1; id_ex_rs1_used_i = 0;
-    id_ex_rs2_i = 5'd1; id_ex_rs2_used_i = 0;
-    ex_mem_rd_i = 5'd1; ex_mem_rd_wen_i = 1; ex_mem_is_load_i = 0;
-    mem_wb_rd_i = 5'd1; mem_wb_rd_wen_i = 1;
+    if_id_rs1_i = 5'd1; if_id_rs1_used_i = 0;
+    if_id_rs2_i = 5'd1; if_id_rs2_used_i = 0;
+    id_ex_rd_i = 5'd1; id_ex_rd_wen_i = 1; id_ex_is_load_i = 0;
+    ex_mem_rd_i = 5'd1; ex_mem_rd_wen_i = 1;
     check(FWD_NONE, FWD_NONE, "rs_used=0 suppresses forward");
 
     // No forward when producer rd=x0
-    id_ex_rs1_used_i = 1; id_ex_rs2_used_i = 1;
+    if_id_rs1_used_i = 1; if_id_rs2_used_i = 1;
+    id_ex_rd_i = 5'd0; id_ex_rd_wen_i = 1;
     ex_mem_rd_i = 5'd0; ex_mem_rd_wen_i = 1;
-    mem_wb_rd_i = 5'd0; mem_wb_rd_wen_i = 1;
-    id_ex_rs1_i = 5'd0; id_ex_rs2_i = 5'd0;
+    if_id_rs1_i = 5'd0; if_id_rs2_i = 5'd0;
     check(FWD_NONE, FWD_NONE, "rd=x0 never forwarded");
 
     if (errors == 0) $display("ALL FORWARD TESTS PASSED");

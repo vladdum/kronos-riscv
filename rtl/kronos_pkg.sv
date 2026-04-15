@@ -144,6 +144,9 @@ package kronos_pkg;
     decoded_instr_t dec;
     logic [63:0]    rs1_data;
     logic [63:0]    rs2_data;
+    logic [63:0]    rs3_data;       // Stage 5a: FMA third source (from FP regfile)
+    fwd_sel_e       fwd_rs1_sel;    // pre-computed EX bypass select for rs1
+    fwd_sel_e       fwd_rs2_sel;    // pre-computed EX bypass select for rs2
     logic           valid;
     // Stage 3+
     logic        is_16b;
