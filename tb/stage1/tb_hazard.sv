@@ -20,17 +20,22 @@ module tb_hazard;
     .id_ex_valid_i    (id_ex_valid_i),
     .if_id_rs1_used_i (if_id_rs1_used_i),
     .if_id_rs1_i      (if_id_rs1_i),
-    .if_id_rs2_used_i (if_id_rs2_used_i),
-    .if_id_rs2_i      (if_id_rs2_i),
-    .ex_redirect_i    (ex_redirect_i),
-    .mem_stall_i      (mem_stall_i),
-    .pc_en_o          (pc_en_o),
-    .if_id_en_o       (if_id_en_o),
-    .id_ex_en_o       (id_ex_en_o),
-    .ex_mem_en_o      (ex_mem_en_o),
-    .mem_wb_en_o      (mem_wb_en_o),
-    .if_id_flush_o    (if_id_flush_o),
-    .id_ex_flush_o    (id_ex_flush_o)
+    .if_id_rs2_used_i     (if_id_rs2_used_i),
+    .if_id_rs2_i          (if_id_rs2_i),
+    .id_ex_is_fp_load_i   ('0),
+    .if_id_rs1_fp_i       ('0),
+    .if_id_rs2_fp_i       ('0),
+    .if_id_rs3_fp_i       ('0),
+    .if_id_rs3_i          (5'd0),
+    .ex_redirect_i        (ex_redirect_i),
+    .mem_stall_i          (mem_stall_i),
+    .pc_en_o              (pc_en_o),
+    .if_id_en_o           (if_id_en_o),
+    .id_ex_en_o           (id_ex_en_o),
+    .ex_mem_en_o          (ex_mem_en_o),
+    .mem_wb_en_o          (mem_wb_en_o),
+    .if_id_flush_o        (if_id_flush_o),
+    .id_ex_flush_o        (id_ex_flush_o)
   );
 
   int errors = 0;

@@ -60,6 +60,31 @@ package kronos_pkg;
     MULDIV_REMU   = 3'd7
   } muldiv_op_e;
 
+  // -------------------------------------------------------------------------
+  // Stage 5a: FPU operation select (declared here so decoded_instr_t can
+  // embed fp_op_e; must appear before the struct definition).
+  // -------------------------------------------------------------------------
+
+  // FPU unit operation select. One enum covers every arithmetic/movement op
+  // routed to the FPU; decode sets this. The destination format (S vs D) is
+  // carried alongside on `fmt_d` (1 = double, 0 = single).
+  typedef enum logic [4:0] {
+    // FMISC
+    FP_FSGNJ, FP_FSGNJN, FP_FSGNJX,
+    FP_FMIN,  FP_FMAX,
+    FP_FCLASS,
+    FP_FEQ,   FP_FLT,   FP_FLE,
+    FP_FMV_X_W, FP_FMV_W_X, FP_FMV_X_D, FP_FMV_D_X,
+    // FCVT
+    FP_FCVT_W_F, FP_FCVT_WU_F, FP_FCVT_L_F, FP_FCVT_LU_F,
+    FP_FCVT_F_W, FP_FCVT_F_WU, FP_FCVT_F_L, FP_FCVT_F_LU,
+    FP_FCVT_S_D, FP_FCVT_D_S,
+    // Arith
+    FP_FADD, FP_FSUB, FP_FMUL,
+    // FMA
+    FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB
+  } fp_op_e;
+
   // Decoded instruction — output of kronos_decode
   typedef struct packed {
     // Register operands
@@ -106,6 +131,18 @@ package kronos_pkg;
     wb_sel_e     wb_sel;
     // Illegal
     logic        illegal;
+    // Stage 5a: FP decode
+    logic       is_fp;       // FPU unit consumes this instruction
+    logic       fmt_d;       // 1 = double, 0 = single
+    logic       rs1_fp;      // rs1 comes from the FP regfile
+    logic       rs2_fp;      // rs2 comes from the FP regfile
+    logic       rs3_fp;      // rs3 (FMA) comes from the FP regfile
+    logic       rd_fp;       // rd writes the FP regfile
+    logic [4:0] rs3;         // FMA third source (instr[31:27])
+    logic [2:0] rm_resolved; // already-resolved rounding mode
+    fp_op_e     fp_op;       // unit operation (from fp_op_e enum)
+    logic       fp_load;     // FLW/FLD
+    logic       fp_store;    // FSW/FSD
   } decoded_instr_t;
 
   // -------------------------------------------------------------------------
@@ -175,5 +212,43 @@ package kronos_pkg;
     logic [31:0]    pc4;
     logic           valid;
   } mem_wb_reg_t;
+
+  // -------------------------------------------------------------------------
+  // Stage 5a: Floating-point types and constants
+  // -------------------------------------------------------------------------
+
+  // Writeback-tag width. 5 bits in Stage 5a (one per architectural FP reg).
+  // Widened in Stage 6 when physical registers appear.
+  localparam int unsigned WB_TAG_W = 5;
+
+  // IEEE 754 canonical quiet NaN (qNaN) payloads.
+  localparam logic [31:0] FP_CANON_QNAN_S = 32'h7FC0_0000;
+  localparam logic [63:0] FP_CANON_QNAN_D = 64'h7FF8_0000_0000_0000;
+
+  // NaN-box upper-half (for FLW / single-precision operand check).
+  localparam logic [31:0] FP_NANBOX_UPPER = 32'hFFFF_FFFF;
+
+  // Rounding modes (IEEE 754 / RISC-V FRM encoding).
+  typedef enum logic [2:0] {
+    FP_RM_RNE = 3'b000, // round to nearest, ties to even
+    FP_RM_RTZ = 3'b001, // round toward zero
+    FP_RM_RDN = 3'b010, // round down (toward -inf)
+    FP_RM_RUP = 3'b011, // round up (toward +inf)
+    FP_RM_RMM = 3'b100, // round to nearest, ties to max-magnitude
+    FP_RM_DYN = 3'b111  // dynamic (from FRM); illegal as a unit input
+  } fp_round_e;
+
+  // Exception flag bit positions within FFLAGS (fcsr[4:0]).
+  localparam int unsigned FP_FFLAG_NX = 0; // inexact
+  localparam int unsigned FP_FFLAG_UF = 1; // underflow
+  localparam int unsigned FP_FFLAG_OF = 2; // overflow
+  localparam int unsigned FP_FFLAG_DZ = 3; // divide by zero
+  localparam int unsigned FP_FFLAG_NV = 4; // invalid
+
+  // Writeback tag carried through each FPU pipeline.
+  typedef struct packed {
+    logic [WB_TAG_W-1:0] rd;       // destination register index
+    logic                fp_dest;  // 1 = FP regfile, 0 = integer regfile
+  } fpu_tag_t;
 
 endpackage

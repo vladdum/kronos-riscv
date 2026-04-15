@@ -5,6 +5,7 @@ SW_DIR_S1 := ../sw/stage1
 SW_DIR_S2 := ../sw/stage2
 SW_DIR_S3 := ../sw/stage3
 SW_DIR_S4 := ../sw/stage4
+SW_DIR_S5 := ../sw/stage5
 OBJ_DIR   := obj_dir
 
 VERILATOR := verilator
@@ -97,7 +98,15 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-compliance-s1 sim-lsu-s1 sim-forward sim-hazard \
         sim-muldiv sim-compliance-s2 sim-decompress sim-align sim-lsu-s3 sim-bpred \
         sim-compliance-s3 build-s4 run-s4-% sim-compliance-s4 sim-alu-s4 sim-decode-s4 \
-        sim-muldiv-s4 sim-lsu-s4 sim-all clean
+        sim-muldiv-s4 sim-lsu-s4 sim-all clean \
+        build-s5 run-s5-% sim-s5 sim-core-fp-basic sim-core-fp-forwarding \
+        sim-compliance-f sim-compliance-d \
+        sim-pkg-fp sim-regfile-fp sim-hf-smoke sim-sf-smoke \
+        sim-csr-fp sim-fpu-scoreboard \
+        sim-decode-fp sim-fpu-fmisc sim-fpu-fcvt sim-fpu-fadd sim-fpu-fmul \
+        sim-fpu-fma sim-fpu-top \
+        sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov \
+        sim-fpu-fma-cov coverage
 
 .DEFAULT_GOAL := help
 
@@ -513,6 +522,303 @@ sim-all:
 	  fi; \
 	done; \
 	! grep -q "^FAIL" $(SIM_REPORT_DIR)/*.result
+
+# -------------------- Stage 5 (F + D floating point) --------------------
+SV_FILES_S5 := $(AXI_PKG_SV) \
+               $(RTL_DIR)/kronos_pkg.sv \
+               $(RTL_DIR)/stage5/kronos_alu.sv \
+               $(RTL_DIR)/stage5/kronos_decode.sv \
+               $(RTL_DIR)/stage0/kronos_regfile.sv \
+               $(RTL_DIR)/stage5/kronos_csr.sv \
+               $(RTL_DIR)/stage5/kronos_lsu.sv \
+               $(RTL_DIR)/stage1/kronos_forward.sv \
+               $(RTL_DIR)/stage1/kronos_hazard.sv \
+               $(RTL_DIR)/stage5/kronos_muldiv.sv \
+               $(RTL_DIR)/stage5/kronos_decompress.sv \
+               $(RTL_DIR)/stage3/kronos_align.sv \
+               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR)/stage5/kronos_top.sv \
+               sim_top.sv \
+               $(RTL_DIR)/stage5/kronos_regfile_fp.sv \
+               $(HARDFLOAT_V) \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv
+
+TOP_S5     := sim_top
+SIM_BIN_S5 := $(OBJ_DIR)/s5/V$(TOP_S5)
+
+build-s5: $(SIM_BIN_S5)
+
+$(SIM_BIN_S5): $(SV_FILES_S5) $(abspath sim_main.cpp)
+	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-WIDTHTRUNC \
+	  --Wno-PINCONNECTEMPTY --Wno-LATCH --Wno-TIMESCALEMOD \
+	  --top-module $(TOP_S5) \
+	  $(SV_FILES_S5) $(abspath sim_main.cpp) \
+	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \
+	  -Mdir $(OBJ_DIR)/s5 \
+	  $(PULP_AXI_INC) \
+	  -o V$(TOP_S5)
+
+run-s5-%: build-s5
+	./$(SIM_BIN_S5) $(SW_DIR_S5)/build/$*.hex
+
+# ── Stage 5 integration TBs ────────────────────────────────────────────────
+TB_CORE_FP_BASIC_FILES := $(SV_FILES_S5) \
+                          $(TB_DIR)/stage5/tb_core_fp_basic.sv
+sim-core-fp-basic:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
+	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY --Wno-LATCH \
+	  --top-module tb_core_fp_basic $(TB_CORE_FP_BASIC_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_basic
+	$(OBJ_DIR)/core_fp_basic/Vtb_core_fp_basic
+
+TB_CORE_FP_FORWARDING_FILES := $(SV_FILES_S5) \
+                                $(TB_DIR)/stage5/tb_core_fp_forwarding.sv
+sim-core-fp-forwarding:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
+	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY --Wno-LATCH \
+	  --top-module tb_core_fp_forwarding $(TB_CORE_FP_FORWARDING_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_forwarding
+	$(OBJ_DIR)/core_fp_forwarding/Vtb_core_fp_forwarding
+
+# ── Stage 5 full regression (assembly + integration TBs) ───────────────────
+sim-s5: build-s5
+	@$(MAKE) -C $(SW_DIR_S5) all > /dev/null 2>&1; \
+	tmpdir=$$(mktemp -d); pids=""; \
+	for hex in $(SW_DIR_S5)/build/*.hex; do \
+	  [ -f "$$hex" ] || continue; \
+	  name=$$(basename $$hex .hex); \
+	  { out=$$(./$(SIM_BIN_S5) $$hex 2>&1); \
+	    x10=$$(echo "$$out" | grep -oP 'x10 = \K[0-9]+'); \
+	    echo "$$hex $$x10"; } > $$tmpdir/$$name & \
+	  pids="$$pids $$!"; \
+	done; \
+	wait $$pids; \
+	pass=0; fail=0; \
+	for f in $$tmpdir/*; do \
+	  read hex x10 < $$f; \
+	  if [ "$$x10" = "0" ]; then \
+	    pass=$$((pass+1)); \
+	  else \
+	    echo "FAIL: $$hex (x10=$$x10)"; fail=$$((fail+1)); \
+	  fi; \
+	done; \
+	rm -rf $$tmpdir; \
+	echo "Stage 5 assembly: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]
+	$(MAKE) sim-core-fp-basic
+	$(MAKE) sim-core-fp-forwarding
+
+# ── riscv-arch-test F and D compliance (requires separate clone) ───────────
+# Clone: git clone https://github.com/riscv-non-isa/riscv-arch-test /home/popes/riscv-arch-test
+ARCH_TEST ?= /home/popes/riscv-arch-test
+
+sim-compliance-f: build-s5
+	@bash run_compliance_fp.sh rv64i_m/F
+
+sim-compliance-d: build-s5
+	@bash run_compliance_fp.sh rv64i_m/D
+
+TB_PKG_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv $(TB_DIR)/stage5/tb_pkg_fp.sv
+
+sim-pkg-fp:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/pkg_fp \
+	  --top-module tb_pkg_fp $(TB_PKG_FP_FILES)
+	$(OBJ_DIR)/pkg_fp/Vtb_pkg_fp
+
+TB_REGFILE_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                       $(RTL_DIR)/stage5/kronos_regfile_fp.sv \
+                       $(TB_DIR)/stage5/tb_regfile_fp.sv
+sim-regfile-fp:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/regfile_fp \
+	  --top-module tb_regfile_fp $(TB_REGFILE_FP_FILES)
+	$(OBJ_DIR)/regfile_fp/Vtb_regfile_fp
+
+include $(RTL_DIR)/../vendor/hardfloat/file_list.mk
+TB_HF_SMOKE_FILES := $(HARDFLOAT_V) $(TB_DIR)/stage5/tb_hardfloat_smoke.sv
+sim-hf-smoke:
+	$(VERILATOR) --binary -Wno-lint -Wno-style --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/hf_smoke \
+	  --top-module tb_hardfloat_smoke $(TB_HF_SMOKE_FILES)
+	$(OBJ_DIR)/hf_smoke/Vtb_hardfloat_smoke
+
+include $(RTL_DIR)/../vendor/softfloat/file_list.mk
+TB_SF_SMOKE_FILES := $(RTL_DIR)/../vendor/softfloat/dpi/softfloat_dpi.svh \
+                     $(TB_DIR)/stage5/tb_softfloat_smoke.sv
+sim-sf-smoke: $(SF_LIB)
+	$(VERILATOR) --binary -Mdir $(OBJ_DIR)/sf_smoke \
+	  --top-module tb_softfloat_smoke \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" \
+	  -LDFLAGS "$(SF_LIB)" \
+	  $(TB_SF_SMOKE_FILES) $(SF_DPI_SRC)
+	$(OBJ_DIR)/sf_smoke/Vtb_softfloat_smoke
+
+TB_CSR_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage5/kronos_csr.sv \
+                   $(TB_DIR)/stage5/tb_csr_fp.sv
+sim-csr-fp:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/csr_fp \
+	  --top-module tb_csr_fp $(TB_CSR_FP_FILES)
+	$(OBJ_DIR)/csr_fp/Vtb_csr_fp
+
+TB_FPU_SB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
+                   $(TB_DIR)/stage5/tb_fpu_scoreboard.sv
+sim-fpu-scoreboard:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/fpu_sb \
+	  --top-module tb_fpu_scoreboard $(TB_FPU_SB_FILES)
+	$(OBJ_DIR)/fpu_sb/Vtb_fpu_scoreboard
+
+# -------------------- Task 8: FP decode TB --------------------
+TB_DECODE_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                      $(RTL_DIR)/stage5/kronos_decode.sv \
+                      $(TB_DIR)/stage5/tb_decode_fp.sv
+sim-decode-fp:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/decode_fp \
+	  --top-module tb_decode_fp $(TB_DECODE_FP_FILES)
+	$(OBJ_DIR)/decode_fp/Vtb_decode_fp
+
+# -------------------- FPU unit TBs (Tasks 9-13) --------------------
+# All FPU unit TBs include HardFloat stubs (behavioral ref) + SoftFloat DPI (oracle).
+FPU_COMMON_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                    $(RTL_DIR)/../vendor/softfloat/dpi/softfloat_dpi.svh \
+                    $(TB_DIR)/stage5/fp_tb_pkg.sv
+
+TB_FMISC_FILES := $(FPU_COMMON_FILES) \
+                  $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
+                  $(TB_DIR)/stage5/tb_fpu_fmisc.sv
+sim-fpu-fmisc: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fmisc --top-module tb_fpu_fmisc \
+	  $(HARDFLOAT_V) $(TB_FMISC_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fmisc/Vtb_fpu_fmisc
+
+TB_FCVT_FILES := $(FPU_COMMON_FILES) \
+                 $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
+                 $(TB_DIR)/stage5/tb_fpu_fcvt.sv
+sim-fpu-fcvt: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fcvt --top-module tb_fpu_fcvt \
+	  $(HARDFLOAT_V) $(TB_FCVT_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fcvt/Vtb_fpu_fcvt
+
+TB_FADD_FILES := $(FPU_COMMON_FILES) \
+                 $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
+                 $(TB_DIR)/stage5/tb_fpu_fadd.sv
+sim-fpu-fadd: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fadd --top-module tb_fpu_fadd \
+	  $(HARDFLOAT_V) $(TB_FADD_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fadd/Vtb_fpu_fadd
+
+TB_FMUL_FILES := $(FPU_COMMON_FILES) \
+                 $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
+                 $(TB_DIR)/stage5/tb_fpu_fmul.sv
+sim-fpu-fmul: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fmul --top-module tb_fpu_fmul \
+	  $(HARDFLOAT_V) $(TB_FMUL_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fmul/Vtb_fpu_fmul
+
+TB_FMA_FILES := $(FPU_COMMON_FILES) \
+                $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
+                $(TB_DIR)/stage5/tb_fpu_fma.sv
+sim-fpu-fma: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fma --top-module tb_fpu_fma \
+	  $(HARDFLOAT_V) $(TB_FMA_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fma/Vtb_fpu_fma
+
+TB_LSU_FP_FILES := $(AXI_PKG_SV) \
+                   $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage5/kronos_lsu.sv \
+                   $(TB_DIR)/stage5/tb_lsu_fp.sv
+sim-lsu-fp:
+	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --Wno-WIDTHTRUNC --Wno-PROCASSINIT \
+	  --top-module tb_lsu_fp $(TB_LSU_FP_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/lsu_fp
+	$(OBJ_DIR)/lsu_fp/Vtb_lsu_fp
+
+TB_FPU_TOP_FILES := $(FPU_COMMON_FILES) \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv \
+                    $(TB_DIR)/stage5/tb_fpu_top.sv
+sim-fpu-top: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_top --top-module tb_fpu_top \
+	  $(HARDFLOAT_V) $(TB_FPU_TOP_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_top/Vtb_fpu_top
+
+# ── Functional coverage (line coverage gate ≥95%) ─────────────────────────
+COV_FLAGS := --coverage-line
+COV_DIR   := $(OBJ_DIR)/coverage
+
+# Per-unit coverage builds (separate obj dirs so coverage.dat doesn't collide)
+sim-fpu-fmisc-cov: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fmisc_cov --top-module tb_fpu_fmisc \
+	  $(HARDFLOAT_V) $(TB_FMISC_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fmisc_cov/Vtb_fpu_fmisc \
+	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fmisc_cov/coverage.dat
+
+sim-fpu-fcvt-cov: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fcvt_cov --top-module tb_fpu_fcvt \
+	  $(HARDFLOAT_V) $(TB_FCVT_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fcvt_cov/Vtb_fpu_fcvt \
+	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fcvt_cov/coverage.dat
+
+sim-fpu-fadd-cov: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fadd_cov --top-module tb_fpu_fadd \
+	  $(HARDFLOAT_V) $(TB_FADD_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fadd_cov/Vtb_fpu_fadd \
+	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fadd_cov/coverage.dat
+
+sim-fpu-fmul-cov: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fmul_cov --top-module tb_fpu_fmul \
+	  $(HARDFLOAT_V) $(TB_FMUL_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fmul_cov/Vtb_fpu_fmul \
+	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fmul_cov/coverage.dat
+
+sim-fpu-fma-cov: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_fma_cov --top-module tb_fpu_fma \
+	  $(HARDFLOAT_V) $(TB_FMA_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_fma_cov/Vtb_fpu_fma \
+	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fma_cov/coverage.dat
+
+coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov sim-fpu-fma-cov
+	mkdir -p $(COV_DIR)
+	verilator_coverage --write-info $(COV_DIR)/merged.info \
+	  $(OBJ_DIR)/fpu_fmisc_cov/coverage.dat \
+	  $(OBJ_DIR)/fpu_fcvt_cov/coverage.dat \
+	  $(OBJ_DIR)/fpu_fadd_cov/coverage.dat \
+	  $(OBJ_DIR)/fpu_fmul_cov/coverage.dat \
+	  $(OBJ_DIR)/fpu_fma_cov/coverage.dat
+	python3 ../tools/coverage_gate.py $(COV_DIR)/merged.info 95
 
 clean:
 	rm -rf $(OBJ_DIR)
