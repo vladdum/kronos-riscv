@@ -111,7 +111,7 @@ digraph hazard_forward {
   hazard -> pc_reg [color="#eab308", style=dashed, tailport=nw, headport=s];
   hazard -> if_id  [color="#eab308", style=dashed, tailport=nw, headport=s];
   hazard -> id_ex  [color="#eab308", style=dashed, tailport=n,  headport=s];
-  hazard -> ex_mem [color="#eab308", style=dashed, tailport=ne, headport=s];
+  hazard -> ex_mem [color="#eab308", style=dashed, tailport=ne, headport=w];
   hazard -> mem_wb [color="#eab308", style=dashed, tailport=ne, headport=s];
 
   // ── Forward bundle (amber dashed, ABOVE pipe row) ─────────────

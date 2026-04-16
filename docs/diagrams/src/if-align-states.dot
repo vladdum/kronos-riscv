@@ -62,7 +62,7 @@ digraph if_align_states {
   normal_desc [pos="280,300!",
                label="Use rdata directly.\nFetch required.",
                shape=plaintext, style="", fontsize=12, fontcolor="#166534"];
-  needup_desc [pos="1080,300!",
+  needup_desc [pos="1200,350!",
                label="buf holds lower 16b of 32b instr.\nWaiting for next word.",
                shape=plaintext, style="", fontsize=12, fontcolor="#7f1d1d"];
   skip_desc [pos="680,60!",
@@ -117,9 +117,10 @@ digraph if_align_states {
   NEED_UPPER -> BUFFERED   [color="#3b82f6",  tailport=sw, headport=se, constraint=false];
 
   // Flush edges to SKIP_LOWER (dashed orange) — route around BUFFERED.
+  // tailport=s + headport=n forces a clean DOWN-then-LEFT L-shape for NEED_UPPER.
   NORMAL     -> SKIP_LOWER [color="#f97316", style=dashed, tailport=s, headport=w,  constraint=false];
   BUFFERED   -> SKIP_LOWER [color="#f97316", style=dashed, tailport=sw, headport=nw, constraint=false];
-  NEED_UPPER -> SKIP_LOWER [color="#f97316", style=dashed, tailport=s, headport=e,  constraint=false];
+  NEED_UPPER -> SKIP_LOWER [color="#f97316", style=dashed, tailport=s, headport=n,  constraint=false];
 
   SKIP_LOWER -> BUFFERED   [color="#3b82f6", tailport=ne, headport=se];
 }

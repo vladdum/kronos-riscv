@@ -15,53 +15,73 @@
 <path fill="none" stroke="#6b7280" stroke-width="2" d="M86,-258C86,-258 174,-258 174,-258"/>
 <polygon fill="#6b7280" stroke="#6b7280" stroke-width="2" points="174,-261.5 184,-258 174,-254.5 174,-261.5"/>
 </g>
-<!-- IDLE&#45;&gt;LOAD_ADDR -->
+<!-- IDLE&#45;&gt;wp_la -->
 <g id="edge2" class="edge">
-<title>IDLE:n&#45;&gt;LOAD_ADDR:w</title>
-<path fill="none" stroke="#22c55e" stroke-width="3" d="M263,-286C263,-286 589.33,-286 589.33,-286 589.33,-286 589.33,-428 589.33,-428"/>
-<polygon fill="#22c55e" stroke="#22c55e" stroke-width="3" points="585.83,-428 589.33,-438 592.83,-428 585.83,-428"/>
+<title>IDLE:e&#45;&gt;wp_la</title>
+<path fill="none" stroke="#22c55e" stroke-width="3" d="M342,-269C342,-269 549.4,-269 562.37,-269"/>
 </g>
-<!-- IDLE&#45;&gt;STORE_SEND -->
-<g id="edge6" class="edge">
-<title>IDLE:s&#45;&gt;STORE_SEND:w</title>
-<path fill="none" stroke="#f97316" stroke-width="3" d="M263,-229C263,-229 536.67,-229 536.67,-229 536.67,-229 536.67,-88 536.67,-88"/>
-<polygon fill="#f97316" stroke="#f97316" stroke-width="3" points="540.17,-88 536.67,-78 533.17,-88 540.17,-88"/>
+<!-- IDLE&#45;&gt;wp_ss -->
+<g id="edge8" class="edge">
+<title>IDLE:e&#45;&gt;wp_ss</title>
+<path fill="none" stroke="#f97316" stroke-width="3" d="M342,-195C342,-195 549.4,-195 562.37,-195"/>
 </g>
 <!-- LOAD_ADDR&#45;&gt;LOAD_DATA -->
-<g id="edge3" class="edge">
+<g id="edge4" class="edge">
 <title>LOAD_ADDR:e&#45;&gt;LOAD_DATA:w</title>
 <path fill="none" stroke="#16a34a" stroke-width="3" d="M642,-417C642,-417 794,-417 794,-417"/>
 <polygon fill="#16a34a" stroke="#16a34a" stroke-width="3" points="794,-420.5 804,-417 794,-413.5 794,-420.5"/>
 </g>
 <!-- LOAD_DATA&#45;&gt;LOAD_DONE -->
-<g id="edge4" class="edge">
+<g id="edge5" class="edge">
 <title>LOAD_DATA:e&#45;&gt;LOAD_DONE:w</title>
 <path fill="none" stroke="#15803d" stroke-width="3" d="M962,-417C962,-417 1114,-417 1114,-417"/>
 <polygon fill="#15803d" stroke="#15803d" stroke-width="3" points="1114,-420.5 1124,-417 1114,-413.5 1114,-420.5"/>
 </g>
-<!-- LOAD_DONE&#45;&gt;IDLE -->
-<g id="edge5" class="edge">
-<title>LOAD_DONE:s&#45;&gt;IDLE:n</title>
-<path fill="none" stroke="#22c55e" stroke-width="3" d="M1229.33,-395C1229.33,-395 1229.33,-267 1229.33,-267 1229.33,-267 273,-267 273,-267"/>
-<polygon fill="#22c55e" stroke="#22c55e" stroke-width="3" points="273,-263.5 263,-267 273,-270.5 273,-263.5"/>
+<!-- LOAD_DONE&#45;&gt;wp_ld -->
+<g id="edge6" class="edge">
+<title>LOAD_DONE&#45;&gt;wp_ld</title>
+<path fill="none" stroke="#22c55e" stroke-width="3" d="M1203,-394.95C1203,-340.47 1203,-252.71 1203,-244.6"/>
 </g>
 <!-- STORE_SEND&#45;&gt;STORE_RESP -->
-<g id="edge7" class="edge">
+<g id="edge10" class="edge">
 <title>STORE_SEND:e&#45;&gt;STORE_RESP:w</title>
 <path fill="none" stroke="#ea580c" stroke-width="3" d="M642,-78C642,-78 794,-78 794,-78"/>
 <polygon fill="#ea580c" stroke="#ea580c" stroke-width="3" points="794,-81.5 804,-78 794,-74.5 794,-81.5"/>
 </g>
 <!-- STORE_RESP&#45;&gt;STORE_DONE -->
-<g id="edge8" class="edge">
+<g id="edge11" class="edge">
 <title>STORE_RESP:e&#45;&gt;STORE_DONE:w</title>
 <path fill="none" stroke="#dc2626" stroke-width="3" d="M962,-78C962,-78 1114,-78 1114,-78"/>
 <polygon fill="#dc2626" stroke="#dc2626" stroke-width="3" points="1114,-81.5 1124,-78 1114,-74.5 1114,-81.5"/>
 </g>
-<!-- STORE_DONE&#45;&gt;IDLE -->
+<!-- STORE_DONE&#45;&gt;wp_sd -->
+<g id="edge12" class="edge">
+<title>STORE_DONE&#45;&gt;wp_sd</title>
+<path fill="none" stroke="#f97316" stroke-width="3" d="M1203,-121.07C1203,-159.94 1203,-212 1203,-218.36"/>
+</g>
+<!-- wp_la&#45;&gt;LOAD_ADDR -->
+<g id="edge3" class="edge">
+<title>wp_la&#45;&gt;LOAD_ADDR:s</title>
+<path fill="none" stroke="#22c55e" stroke-width="3" d="M563,-269.36C563,-269.36 563,-385 563,-385"/>
+<polygon fill="#22c55e" stroke="#22c55e" stroke-width="3" points="559.5,-385 563,-395 566.5,-385 559.5,-385"/>
+</g>
+<!-- wp_ss&#45;&gt;STORE_SEND -->
 <g id="edge9" class="edge">
-<title>STORE_DONE:n&#45;&gt;IDLE:s</title>
-<path fill="none" stroke="#f97316" stroke-width="3" d="M1176.67,-121C1176.67,-121 1176.67,-248 1176.67,-248 1176.67,-248 273,-248 273,-248"/>
-<polygon fill="#f97316" stroke="#f97316" stroke-width="3" points="273,-244.5 263,-248 273,-251.5 273,-244.5"/>
+<title>wp_ss&#45;&gt;STORE_SEND:n</title>
+<path fill="none" stroke="#f97316" stroke-width="3" d="M563,-194.53C563,-194.53 563,-131 563,-131"/>
+<polygon fill="#f97316" stroke="#f97316" stroke-width="3" points="566.5,-131 563,-121 559.5,-131 566.5,-131"/>
+</g>
+<!-- wp_ld&#45;&gt;IDLE -->
+<g id="edge7" class="edge">
+<title>wp_ld&#45;&gt;IDLE:e</title>
+<path fill="none" stroke="#22c55e" stroke-width="3" d="M1202.38,-244C1202.38,-244 352,-244 352,-244"/>
+<polygon fill="#22c55e" stroke="#22c55e" stroke-width="3" points="352,-240.5 342,-244 352,-247.5 352,-240.5"/>
+</g>
+<!-- wp_sd&#45;&gt;IDLE -->
+<g id="edge13" class="edge">
+<title>wp_sd&#45;&gt;IDLE:e</title>
+<path fill="none" stroke="#f97316" stroke-width="3" d="M1202.38,-219C1202.38,-219 352,-219 352,-219"/>
+<polygon fill="#f97316" stroke="#f97316" stroke-width="3" points="352,-215.5 342,-219 352,-222.5 352,-215.5"/>
 </g>
 <!-- title -->
 <g id="node1" class="node">
@@ -77,10 +97,10 @@
 <!-- IDLE -->
 <g id="node3" class="node">
 <title>IDLE</title>
-<path fill="#dcfce7" stroke="#22c55e" stroke-width="3" d="M330,-305C330,-305 196,-305 196,-305 190,-305 184,-299 184,-293 184,-293 184,-223 184,-223 184,-217 190,-211 196,-211 196,-211 330,-211 330,-211 336,-211 342,-217 342,-223 342,-223 342,-293 342,-293 342,-299 336,-305 330,-305"/>
-<text text-anchor="middle" x="263" y="-272.2" font-family="Helvetica,sans-Serif" font-size="16.00">IDLE</text>
-<text text-anchor="middle" x="263" y="-254.2" font-family="Helvetica,sans-Serif" font-size="16.00">capture</text>
-<text text-anchor="middle" x="263" y="-236.2" font-family="Helvetica,sans-Serif" font-size="16.00">addr / wdata</text>
+<path fill="#dcfce7" stroke="#22c55e" stroke-width="3" d="M330,-306C330,-306 196,-306 196,-306 190,-306 184,-300 184,-294 184,-294 184,-170 184,-170 184,-164 190,-158 196,-158 196,-158 330,-158 330,-158 336,-158 342,-164 342,-170 342,-170 342,-294 342,-294 342,-300 336,-306 330,-306"/>
+<text text-anchor="middle" x="263" y="-246.2" font-family="Helvetica,sans-Serif" font-size="16.00">IDLE</text>
+<text text-anchor="middle" x="263" y="-228.2" font-family="Helvetica,sans-Serif" font-size="16.00">capture</text>
+<text text-anchor="middle" x="263" y="-210.2" font-family="Helvetica,sans-Serif" font-size="16.00">addr / wdata</text>
 </g>
 <!-- LOAD_ADDR -->
 <g id="node4" class="node">
@@ -129,7 +149,7 @@
 <!-- lbl_load_addr -->
 <g id="node10" class="node">
 <title>lbl_load_addr</title>
-<text text-anchor="middle" x="413" y="-394.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#166534">req &amp; ~is_store</text>
+<text text-anchor="middle" x="453" y="-285.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#166534">req &amp; ~is_store</text>
 </g>
 <!-- lbl_ar_ready -->
 <g id="node11" class="node">
@@ -144,12 +164,12 @@
 <!-- lbl_load_back -->
 <g id="node13" class="node">
 <title>lbl_load_back</title>
-<text text-anchor="middle" x="883" y="-324.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#166534">always (return to IDLE)</text>
+<text text-anchor="middle" x="883" y="-260.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#166534">always (return to IDLE)</text>
 </g>
 <!-- lbl_store -->
 <g id="node14" class="node">
 <title>lbl_store</title>
-<text text-anchor="middle" x="413" y="-114.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#9a3412">req &amp; is_store</text>
+<text text-anchor="middle" x="453" y="-171.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#9a3412">req &amp; is_store</text>
 </g>
 <!-- lbl_aw_w -->
 <g id="node15" class="node">
@@ -164,7 +184,11 @@
 <!-- lbl_store_back -->
 <g id="node17" class="node">
 <title>lbl_store_back</title>
-<text text-anchor="middle" x="883" y="-184.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#9a3412">always (return to IDLE)</text>
+<text text-anchor="middle" x="883" y="-195.6" font-family="Helvetica,sans-Serif" font-size="13.00" fill="#9a3412">always (return to IDLE)</text>
 </g>
+<!-- wp_la -->
+<!-- wp_ss -->
+<!-- wp_ld -->
+<!-- wp_sd -->
 </g>
 </svg>

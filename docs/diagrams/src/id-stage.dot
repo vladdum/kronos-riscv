@@ -48,10 +48,10 @@ digraph id_stage {
              width=1.2, height=0.7, fixedsize=true];
 
   // ── ID internals (mirrored about y=300) ────────────────────────
-  decode  [pos="580,440!", label="kronos_decode\nRV32IMC decoder\n(control + imm)",
+  decode  [pos="580,440!", label="kronos_decode\nRV64IMAFDC decoder\n(control + imm + rm)",
            fillcolor="#bbf7d0", color="#4ade80", fontsize=15,
            width=2.6, height=1.1, fixedsize=true];
-  regfile [pos="580,160!", label="kronos_regfile\n32×32b async read\n(rs1, rs2)",
+  regfile [pos="580,160!", label="kronos_regfile\n32×64b async read\n(rs1, rs2)",
            fillcolor="#bbf7d0", color="#4ade80", fontsize=15,
            width=2.6, height=1.1, fixedsize=true];
 
@@ -62,6 +62,9 @@ digraph id_stage {
   wb_result  [pos="1080,0!", label="WB stage\nwb_result / wb_wen / rd",
               fillcolor="#f3e8ff", color="#a855f7", fontsize=15,
               width=2.8, height=1.0, fixedsize=true];
+  regfile_fp [pos="580,-160!", label="kronos_regfile_fp\n32×64b FP async read\n(fs1, fs2, fs3)",
+              fillcolor="#f3e8ff", color="#a855f7", fontsize=15,
+              width=2.6, height=1.1, fixedsize=true];
 
   // ── Edges (unlabeled — color + box labels carry meaning) ──────
   if_id_reg  -> decode  [tailport=e, headport=w];
@@ -73,4 +76,13 @@ digraph id_stage {
 
   // WB bypass (dashed purple) — enters bypass_mux from south
   wb_result -> bypass_mux [color="#a855f7", style=dashed, tailport=n, headport=s];
+
+  // Waypoint routes regfile_fp→id_ex_reg around the right side of bypass_mux and wb_result.
+  // x=1220 clears bypass_mux right face (1188) and wb_result right face (1181).
+  wp_fp_right [pos="1220,70!", style=invis, label="", shape=point, width=0.01, height=0.01];
+
+  // FP regfile reads — addresses from IF/ID, operands to ID/EX
+  if_id_reg   -> regfile_fp   [tailport=e, headport=w];
+  regfile_fp  -> wp_fp_right  [color="#a855f7", style=dashed, penwidth=2, arrowhead=none];
+  wp_fp_right -> id_ex_reg    [color="#a855f7", style=dashed, penwidth=2, headport=e, xlabel="fp ops"];
 }
