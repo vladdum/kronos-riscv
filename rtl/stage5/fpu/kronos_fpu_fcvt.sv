@@ -189,6 +189,18 @@ module kronos_fpu_fcvt
     logic [63:0] frac_mask;
     logic [6:0]  shift_r;
     logic [7:0]  frac_bits;   // number of bits shifted right (fraction width)
+    logic [63:0] mag;
+    logic        over_after_round;
+    logic [63:0] signed_val;
+
+    // Defaults for block-local variables
+    sig64            = '0;
+    frac_mask        = '0;
+    shift_r          = '0;
+    frac_bits        = '0;
+    mag              = '0;
+    over_after_round = 1'b0;
+    signed_val       = '0;
 
     // Decompose: build a 64-bit significand with implicit 1 at bit 63
     if (src_is_s) begin
@@ -314,10 +326,6 @@ module kronos_fpu_fcvt
       s2_fflags[FP_FFLAG_NV] = 1'b1;
     end else begin
       // Take |value| = int_rounded (up to 65 bits), then apply sign.
-      logic [63:0] mag;
-      logic        over_after_round;
-      logic [63:0] signed_val;
-
       mag = int_rounded[63:0];
       over_after_round = 1'b0;
 
