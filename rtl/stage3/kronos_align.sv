@@ -38,6 +38,12 @@ module kronos_align (
   logic [15:0] buf_data_q;
   logic        need_upper_q;
   logic        skip_lower_q;  // skip lower half of next fetched word (halfword-aligned flush)
+  // span_valid_q / span_instr_q: latch a spanning 32-bit instruction when the
+  // NEED_UPPER state update fires while the pipeline is stalled (stall_i=1).
+  // Prevents a permanent deadlock where need_upper_q gets stuck at 1 when a
+  // muldiv (or other multi-cycle) stall coincides with the r_valid pulse.
+  logic        span_valid_q;
+  logic [31:0] span_instr_q;
 
   // Combinational from decompress instances
   logic [31:0] decomp_lower, decomp_upper, decomp_buf;
@@ -69,7 +75,13 @@ module kronos_align (
     align_stall_o      = need_upper_q;
     align_need_upper_o = need_upper_q;
 
-    if (skip_lower_q) begin
+    if (span_valid_q) begin
+      // Latched spanning instruction: pipeline was stalled when NEED_UPPER
+      // received its r_valid. Serve from the latch.
+      instr_o       = span_instr_q;
+      instr_valid_o = 1'b1;
+      is_16b_o      = 1'b0;
+    end else if (skip_lower_q) begin
       // Waiting for first post-flush word, will skip lower half
       instr_valid_o = 1'b0;
     end else if (need_upper_q) begin
@@ -115,47 +127,63 @@ module kronos_align (
       buf_data_q   <= '0;
       need_upper_q <= 1'b0;
       skip_lower_q <= 1'b0;
+      span_valid_q <= 1'b0;
+      span_instr_q <= '0;
     end else if (flush_i) begin
       buf_valid_q  <= 1'b0;
       buf_data_q   <= '0;
       need_upper_q <= 1'b0;
       skip_lower_q <= pc_offset_i;
-    end else if (!stall_i) begin
-      // ---- Handle NEED_UPPER: clear on r_valid regardless of align_stall_o ----
-      // (align_stall_o = need_upper_q, so we must not gate on !align_stall_o here)
-      // After combining, the upper half of the fetched word is the start of the
-      // next instruction — buffer it to avoid re-fetching the same word.
-      if (need_upper_q) begin
-        if (rvalid_i) begin
-          buf_valid_q  <= 1'b1;
-          buf_data_q   <= rdata_i[31:16];
-          need_upper_q <= 1'b0;
+      span_valid_q <= 1'b0;
+    end else begin
+      // ---- Handle NEED_UPPER: always on r_valid, outside the stall gate ----
+      // If the pipeline is stalled (stall_i=1) when r_valid fires, the AXI
+      // beat is consumed by r_ready but the instruction data would otherwise be
+      // lost.  Latch the combined 32-bit instruction in span_instr_q so it can
+      // be served once the stall clears.  This prevents the need_upper_q ↔
+      // muldiv_stall deadlock that occurs when every re-fetch arrives while
+      // muldiv is still computing.
+      if (need_upper_q && rvalid_i) begin
+        buf_valid_q  <= 1'b1;
+        buf_data_q   <= rdata_i[31:16];
+        need_upper_q <= 1'b0;
+        if (stall_i) begin
+          span_instr_q <= {rdata_i[15:0], buf_data_q};
+          span_valid_q <= 1'b1;
         end
-      end else if (skip_lower_q) begin
-        // ---- skip_lower: buffer the upper half of first post-flush word ----
-        if (rvalid_i) begin
-          skip_lower_q <= 1'b0;
-          buf_valid_q  <= 1'b1;
-          buf_data_q   <= rdata_i[31:16];
-        end
-      end else if (!align_stall_o) begin
-        // ---- NORMAL / BUFFERED: advance state ----
-        if (buf_valid_q) begin
-          if (buf_data_q[1:0] != 2'b11) begin
-            // Consumed 16-bit from buffer; back to NORMAL
-            buf_valid_q <= 1'b0;
-          end else begin
-            // Buffer holds lower 16 of 32-bit spanning insn; transition to NEED_UPPER
-            need_upper_q <= 1'b1;
+      end else if (!stall_i) begin
+        // ---- span latch: clear once the pipeline accepts the instruction ----
+        if (span_valid_q) begin
+          span_valid_q <= 1'b0;
+          // buf already has the next instruction's lower 16 bits (set when
+          // need_upper_q was cleared).  Do not advance buf this cycle; let the
+          // normal BUFFERED path serve it on the next cycle.
+        end else if (skip_lower_q) begin
+          // ---- skip_lower: buffer the upper half of first post-flush word ----
+          if (rvalid_i) begin
+            skip_lower_q <= 1'b0;
+            buf_valid_q  <= 1'b1;
+            buf_data_q   <= rdata_i[31:16];
           end
-        end else if (rvalid_i) begin
-          // NORMAL: process incoming word
-          if (rdata_i[1:0] != 2'b11) begin
-            // 16-bit at lower half; buffer upper half
-            buf_valid_q <= 1'b1;
-            buf_data_q  <= rdata_i[31:16];
+        end else if (!align_stall_o) begin
+          // ---- NORMAL / BUFFERED: advance state ----
+          if (buf_valid_q) begin
+            if (buf_data_q[1:0] != 2'b11) begin
+              // Consumed 16-bit from buffer; back to NORMAL
+              buf_valid_q <= 1'b0;
+            end else begin
+              // Buffer holds lower 16 of 32-bit spanning insn; go to NEED_UPPER
+              need_upper_q <= 1'b1;
+            end
+          end else if (rvalid_i) begin
+            // NORMAL: process incoming word
+            if (rdata_i[1:0] != 2'b11) begin
+              // 16-bit at lower half; buffer upper half
+              buf_valid_q <= 1'b1;
+              buf_data_q  <= rdata_i[31:16];
+            end
+            // else: 32-bit non-spanning, no buffering needed
           end
-          // else: 32-bit, no buffering
         end
       end
     end
