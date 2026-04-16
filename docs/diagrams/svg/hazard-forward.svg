@@ -85,9 +85,9 @@
 </g>
 <!-- hazard&#45;&gt;ex_mem -->
 <g id="edge14" class="edge">
-<title>hazard:ne&#45;&gt;ex_mem:s</title>
-<path fill="none" stroke="#eab308" stroke-width="2" stroke-dasharray="5,2" d="M880.5,-368C880.5,-368 880.5,-476 880.5,-476 880.5,-476 1035,-476 1035,-476"/>
-<polygon fill="#eab308" stroke="#eab308" stroke-width="2" points="1035,-479.5 1045,-476 1035,-472.5 1035,-479.5"/>
+<title>hazard:ne&#45;&gt;ex_mem:w</title>
+<path fill="none" stroke="#eab308" stroke-width="2" stroke-dasharray="5,2" d="M880.5,-368C880.5,-368 880.5,-476 880.5,-476 880.5,-476 984,-476 984,-476"/>
+<polygon fill="#eab308" stroke="#eab308" stroke-width="2" points="984,-479.5 994,-476 984,-472.5 984,-479.5"/>
 </g>
 <!-- hazard&#45;&gt;mem_wb -->
 <g id="edge15" class="edge">

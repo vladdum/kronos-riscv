@@ -100,6 +100,10 @@ digraph top_level {
   data_axi  [pos="980,180!",  label="Data AXI4",   shape=hexagon, fillcolor="#d4edda", color="#16a34a", fontsize=18, width=2.2, height=0.9, fixedsize=true];
   ctrl      [pos="600,90!",   label="Control\n(hazard + forward)",
              fillcolor="#fef9c3", color="#eab308", fontsize=18, width=2.4, height=0.9, fixedsize=true];
+  fpu       [pos="940,0!",    label="FPU\n(6 units + scoreboard)",
+             fillcolor="#fef3c7", color="#d97706", fontsize=18, width=2.4, height=0.9, fixedsize=true];
+  regfile_fp [pos="1230,0!",  label="regfile_fp\n32×64b FP",
+             fillcolor="#f3e8ff", color="#a855f7", fontsize=18, width=2.2, height=0.9, fixedsize=true];
 
   // ────────────────────────────────────────────────────────────────
   // Datapath edges (solid black)
@@ -142,4 +146,14 @@ digraph top_level {
   ctrl -> id_ex  [color="#eab308", style=dotted, penwidth=2];
   ctrl -> ex_mem [color="#eab308", style=dotted, penwidth=2];
   ctrl -> mem_wb [color="#eab308", style=dotted, penwidth=2];
+
+  // Waypoint routes EX→FPU downward first (x=800 is right of irq/EX, y=220 is below EX row),
+  // so the horizontal segment runs at y=220 instead of y=288, avoiding the ctrl→ex_mem arrowhead.
+  wp_fpu_dispatch [pos="800,220!", style=invis, label="", shape=point, width=0.01, height=0.01];
+
+  // FPU dispatch (EX → FPU) and FP writeback (FPU → regfile_fp)
+  EX             -> wp_fpu_dispatch [color="#d97706", style=dashed, penwidth=2, arrowhead=none];
+  wp_fpu_dispatch -> fpu            [xlabel="dispatch", color="#d97706", style=dashed, penwidth=2, fontcolor="#92400e"];
+  fpu        -> regfile_fp [color="#a855f7", style=dashed, penwidth=2];
+  WB         -> regfile_fp [xlabel="FP WB\n(FLW/FLD)", color="#a855f7", style=dotted, penwidth=1, fontsize=14, fontcolor="#6b21a8"];
 }

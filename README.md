@@ -120,12 +120,7 @@ kronos-riscv/
 
 ## Documentation
 
-| Document | Audience | Description |
-|----------|----------|-------------|
-| [docs/stage0.md](docs/stage0.md) | Learners | Single-cycle golden model — fetch/decode/execute/writeback |
-| [docs/stage1.md](docs/stage1.md) | Learners | 5-stage pipeline — hazards, forwarding, stall/flush |
-| [docs/stage2.md](docs/stage2.md) | Learners | M extension — multi-cycle multiply/divide unit |
-| [docs/architecture.md](docs/architecture.md) | Advanced | Signal-level reference — interfaces, structs, timing, CSR map |
+See [`docs/architecture.md`](docs/architecture.md) for the full architecture reference covering all completed stages (0–5b).
 
 ## Building
 
