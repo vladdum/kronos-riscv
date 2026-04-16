@@ -413,7 +413,7 @@ module kronos_fpu_fmul
         shift_amt = 13'sd1 - s3_exp_norm_c;
         // clamp shift to avoid runaway; sh must hold values 0..64
         if (shift_amt >= 13'sd64) sh = 64;
-        else                       sh = shift_amt[6:0];
+        else                       sh = {25'd0, shift_amt[6:0]};
 
         // Build a 64-bit tail to simplify sticky computation:
         // [mant (53)] [g (1)] [r (1)] [s (1)] ...

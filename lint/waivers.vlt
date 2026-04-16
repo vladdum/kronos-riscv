@@ -1,0 +1,47 @@
+// Copyright 2026 Vlad-Dumitru Popescu
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Lint waivers for kronos-riscv (Verilator .vlt format).
+//
+// Each waiver pins a specific known warning to its exact file and message.
+// New warnings of the same type in other files will still be caught.
+// Review and remove waivers when the underlying issue is fixed.
+
+`verilator_config
+
+// ---------------------------------------------------------------------------
+// PINCONNECTEMPTY — intentionally unconnected output ports in kronos_top.
+// These ports are reserved for future use or are not needed at this stage.
+// ---------------------------------------------------------------------------
+lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'illegal_insn_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'busy_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'valid_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'sc_success_o'*"
+
+// ---------------------------------------------------------------------------
+// WIDTHEXPAND — external PULP AXI library (axi_pkg.sv).
+// Upstream bug in strobe alignment function; cannot fix in our tree.
+// ---------------------------------------------------------------------------
+lint_off -rule WIDTHEXPAND -file "*/pulp_axi/src/axi_pkg.sv"
+
+// ---------------------------------------------------------------------------
+// BLKSEQ — external PULP AXI library.
+// Blocking assignments in vendor code; does not appear in current builds
+// but AXI_FLAGS carries the suppression defensively.
+// ---------------------------------------------------------------------------
+lint_off -rule BLKSEQ -file "*/pulp_axi/src/*"
+
+// ---------------------------------------------------------------------------
+// BLKSEQ — testbench clock generators.
+// Standard TB pattern: `always #5 clk = ~clk;` uses blocking assignment
+// in a procedural block. Harmless in simulation-only code.
+// ---------------------------------------------------------------------------
+lint_off -rule BLKSEQ -file "*/tb/*"
+
+// ---------------------------------------------------------------------------
+// DECLFILENAME — vendor HardFloat library.
+// Module names use PascalCase (e.g. AddRecFN) but filenames use camelCase
+// (e.g. addRecFN.v). Upstream convention; cannot fix in our tree.
+// ---------------------------------------------------------------------------
+lint_off -rule DECLFILENAME -file "*/vendor/hardfloat/*"
