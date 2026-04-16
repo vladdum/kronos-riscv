@@ -170,6 +170,10 @@ module kronos_top
     .if_id_rs2_fp_i       ('0),
     .if_id_rs3_fp_i       ('0),
     .if_id_rs3_i          (5'd0),
+    .if_id_is_jalr_i      (id_dec.is_jalr),
+    .ex_mem_rd_i          (ex_mem_q.dec.rd),
+    .ex_mem_rd_wen_i      (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
+    .ex_mem_valid_i       (ex_mem_q.valid),
     .ex_redirect_i        (ex_redirect),
     .mem_stall_i          (combined_stall),
     .pc_en_o              (pc_en),
@@ -377,6 +381,7 @@ module kronos_top
   // =========================================================================
   // EX stage — 64-bit forwarding mux
   // =========================================================================
+
   always_comb begin
     unique case (id_ex_q.fwd_rs1_sel)
       FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data;

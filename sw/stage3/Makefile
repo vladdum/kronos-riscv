@@ -7,7 +7,7 @@ ARCH   := rv32imc
 ABI    := ilp32
 CFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostdlib -static -T../stage0/link.ld
 
-TESTS  := test_c_basic test_c_control test_bpred_loop
+TESTS  := test_c_basic test_c_control test_bpred_loop test_jalr_fwd_stall
 
 BUILD_DIR := build
 
