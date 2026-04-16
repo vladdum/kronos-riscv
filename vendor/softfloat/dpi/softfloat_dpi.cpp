@@ -89,6 +89,30 @@ uint64_t sf_f32_to_f64(uint32_t a) {
   float32_t fa = {a};
   return f32_to_f64(fa).v;
 }
+uint32_t sf_f32_div(uint32_t a, uint32_t b, uint8_t rm) {
+  reset_flags(); apply_rm(rm);
+  softfloat_detectTininess = softfloat_tininess_beforeRounding;
+  float32_t fa = {a}, fb = {b};
+  return f32_div(fa, fb).v;
+}
+uint64_t sf_f64_div(uint64_t a, uint64_t b, uint8_t rm) {
+  reset_flags(); apply_rm(rm);
+  softfloat_detectTininess = softfloat_tininess_beforeRounding;
+  float64_t fa = {a}, fb = {b};
+  return f64_div(fa, fb).v;
+}
+uint32_t sf_f32_sqrt(uint32_t a, uint8_t rm) {
+  reset_flags(); apply_rm(rm);
+  softfloat_detectTininess = softfloat_tininess_beforeRounding;
+  float32_t fa = {a};
+  return f32_sqrt(fa).v;
+}
+uint64_t sf_f64_sqrt(uint64_t a, uint8_t rm) {
+  reset_flags(); apply_rm(rm);
+  softfloat_detectTininess = softfloat_tininess_beforeRounding;
+  float64_t fa = {a};
+  return f64_sqrt(fa).v;
+}
 uint8_t sf_exceptions(void) {
   return (uint8_t)softfloat_exceptionFlags;
 }

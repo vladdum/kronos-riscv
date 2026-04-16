@@ -14,7 +14,12 @@ module kronos_fpu_scoreboard #(
   input  logic       int_dest_i,  // instruction writes integer regfile
   input  logic [2:0] latency_i,   // 1..DEPTH
   output logic       grant_comb_o, // combinational grant (for dispatch gating)
-  output logic       grant_o       // registered grant (stable post-posedge)
+  output logic       grant_o,      // registered grant (stable post-posedge)
+  // Late probe — iterative unit reserves a writeback slot at ROUND time
+  input  logic       late_req_i,
+  input  logic       late_fp_dest_i,
+  input  logic [2:0] late_latency_i,
+  output logic       late_grant_comb_o
 );
   typedef struct packed {
     logic fp;
@@ -41,6 +46,11 @@ module kronos_fpu_scoreboard #(
   // Target slot fields, selected by latency.
   logic target_fp, target_intr;
   logic collision;
+
+  // Late-probe signals.
+  logic late_target_fp;
+  logic late_collision;
+  logic late_grant_comb;
 
   always_comb begin
     // Select the target slot for the incoming dispatch (latency L → slot L-1).
@@ -84,6 +94,34 @@ module kronos_fpu_scoreboard #(
         default: ; // latency out of range, do nothing
       endcase
     end
+
+    // Late probe: iterative unit reserves a writeback slot at ROUND time.
+    // Collision check is FP-only (iterative unit always writes FP regfile).
+    late_target_fp = 1'b0;
+    unique case (late_latency_i)
+      3'd1:    late_target_fp = slots_q[0].fp;
+      3'd2:    late_target_fp = slots_q[1].fp;
+      3'd3:    late_target_fp = slots_q[2].fp;
+      3'd4:    late_target_fp = slots_q[3].fp;
+      3'd5:    late_target_fp = slots_q[4].fp;
+      default: late_target_fp = 1'b0;
+    endcase
+
+    late_collision  = late_req_i & (late_fp_dest_i & late_target_fp);
+    late_grant_comb = late_req_i & ~late_collision;
+
+    // On late grant, OR-in the reservation (mutually exclusive with dispatch
+    // at the system level, but structurally OR'd for safety).
+    if (late_grant_comb) begin
+      unique case (late_latency_i)
+        3'd1:    slots_n[0].fp = slots_n[0].fp | late_fp_dest_i;
+        3'd2:    slots_n[1].fp = slots_n[1].fp | late_fp_dest_i;
+        3'd3:    slots_n[2].fp = slots_n[2].fp | late_fp_dest_i;
+        3'd4:    slots_n[3].fp = slots_n[3].fp | late_fp_dest_i;
+        3'd5:    slots_n[4].fp = slots_n[4].fp | late_fp_dest_i;
+        default: ; // latency out of range, do nothing
+      endcase
+    end
   end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -96,7 +134,8 @@ module kronos_fpu_scoreboard #(
     end
   end
 
-  assign grant_comb_o = grant_comb;
-  assign grant_o      = grant_q;
+  assign grant_comb_o      = grant_comb;
+  assign grant_o           = grant_q;
+  assign late_grant_comb_o = late_grant_comb;
 
 endmodule

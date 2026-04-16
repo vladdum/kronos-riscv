@@ -379,8 +379,18 @@ module kronos_decode
                 illegal = 1'b1;
             end
           end
-          5'b00011: begin  // FDIV — not yet implemented (Stage 5b)
-            illegal = 1'b1;
+          5'b00011: begin  // FDIV.S/D
+            decoded_o.rs1_fp     = 1'b1;
+            decoded_o.rs2_fp     = 1'b1;
+            decoded_o.rd_fp      = 1'b1;
+            decoded_o.fp_op      = FP_FDIV;
+            begin
+              logic [2:0] rm_raw;
+              rm_raw = instr_i[14:12];
+              decoded_o.rm_resolved = (rm_raw == 3'b111) ? frm_i : rm_raw;
+              if (decoded_o.rm_resolved == 3'b101 || decoded_o.rm_resolved == 3'b110)
+                illegal = 1'b1;
+            end
           end
           5'b00100: begin  // FSGNJ.S/D, FSGNJN.S/D, FSGNJX.S/D
             decoded_o.rs1_fp = 1'b1;
@@ -419,8 +429,19 @@ module kronos_decode
                 illegal = 1'b1;
             end
           end
-          5'b01011: begin  // FSQRT — not yet implemented (Stage 5b)
-            illegal = 1'b1;
+          5'b01011: begin  // FSQRT.S/D
+            decoded_o.rs1_fp     = 1'b1;
+            decoded_o.rd_fp      = 1'b1;
+            decoded_o.fp_op      = FP_FSQRT;
+            begin
+              logic [2:0] rm_raw;
+              rm_raw = instr_i[14:12];
+              decoded_o.rm_resolved = (rm_raw == 3'b111) ? frm_i : rm_raw;
+              if (decoded_o.rm_resolved == 3'b101 || decoded_o.rm_resolved == 3'b110)
+                illegal = 1'b1;
+            end
+            // rs2 must be 00000 for FSQRT
+            if (instr_i[24:20] != 5'b00000) illegal = 1'b1;
           end
           5'b10100: begin  // FEQ/FLT/FLE (result to integer rd)
             decoded_o.rs1_fp = 1'b1;
