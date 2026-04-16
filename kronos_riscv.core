@@ -82,6 +82,10 @@ filesets:
       - rtl/stage4/kronos_top.sv
     file_type: systemVerilogSource
 
+  files_lint_waivers:
+    files:
+      - lint/waivers.vlt: {file_type: vlt}
+
   files_rtl_s5:
     depend:
       - pulp-platform.org::axi:0.39.9
@@ -129,12 +133,11 @@ targets:
     toplevel: kronos_top
 
   lint:
-    filesets: [files_rtl_s5]
+    filesets: [files_lint_waivers, files_rtl_s5]
     tools:
       verilator:
         mode: lint-only
-        verilator_options: [--Wall, --Wno-UNUSED, --Wno-WIDTHEXPAND,
-                            --Wno-WIDTHTRUNC, --Wno-PINCONNECTEMPTY]
+        verilator_options: [--Wall, --Wno-UNUSED]
     toplevel: kronos_top
     default_tool: verilator
 
@@ -175,12 +178,11 @@ targets:
     default_tool: verilator
 
   lint-s5:
-    filesets: [files_rtl_s5]
+    filesets: [files_lint_waivers, files_rtl_s5]
     tools:
       verilator:
         mode: lint-only
-        verilator_options: [--Wall, --Wno-UNUSED, --Wno-WIDTHEXPAND,
-                            --Wno-WIDTHTRUNC, --Wno-PINCONNECTEMPTY]
+        verilator_options: [--Wall, --Wno-UNUSED]
     toplevel: kronos_top
     default_tool: verilator
 

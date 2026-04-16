@@ -11,13 +11,17 @@ OBJ_DIR   := obj_dir
 VERILATOR := verilator
 CFLAGS    := -std=c++14
 
-# --Wno-WIDTHEXPAND: suppress upstream axi_pkg.sv:203 width warning (PULP library bug)
+# Per-instance lint waivers for external library warnings and intentional
+# unconnected ports. Using a waiver file instead of blanket --Wno-* flags
+# ensures new warnings of the same type in our code are still caught.
+WAIVER    := ../lint/waivers.vlt
+
 # PULP_AXI_INC / AXI_PKG_SV are required for all invocations: kronos_pkg.sv always
 # imports `AXI_TYPEDEF_ALL since the stage3 AXI switch plan.
 PULP_AXI_ROOT ?= /home/popes/opensoc/hw/ip/pulp_axi
 PULP_AXI_INC  := -I$(PULP_AXI_ROOT)/include
 AXI_PKG_SV    := $(PULP_AXI_ROOT)/src/axi_pkg.sv
-AXI_FLAGS     := $(PULP_AXI_INC) --Wno-WIDTHEXPAND --Wno-BLKSEQ
+AXI_FLAGS     := $(PULP_AXI_INC)
 
 TOP       := kronos_top
 SIM_BIN   := $(OBJ_DIR)/V$(TOP)
@@ -153,7 +157,7 @@ help:
 build: $(SIM_BIN)
 
 $(SIM_BIN): $(SV_FILES) $(abspath sim_main_obi.cpp)
-	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED \
 	  --top-module $(TOP) \
 	  $(SV_FILES) $(abspath sim_main_obi.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
@@ -163,7 +167,7 @@ $(SIM_BIN): $(SV_FILES) $(abspath sim_main_obi.cpp)
 build-s1: $(SIM_BIN_S1)
 
 $(SIM_BIN_S1): $(SV_FILES_S1) $(abspath sim_main_obi.cpp)
-	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED \
 	  --top-module kronos_top \
 	  $(SV_FILES_S1) $(abspath sim_main_obi.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
@@ -181,32 +185,32 @@ run-s1-%: build-s1
 	./$(SIM_BIN_S1) $(SW_DIR_S1)/build/$*.hex
 
 sim-alu:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
 	  --top-module tb_alu $(TB_ALU_FILES) $(AXI_FLAGS) -o tb_alu
 	./obj_dir/tb_alu
 
 sim-regfile:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
 	  --top-module tb_regfile $(TB_REGFILE_FILES) $(AXI_FLAGS) -o tb_regfile
 	./obj_dir/tb_regfile
 
 sim-decode:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
 	  --top-module tb_decode $(TB_DECODE_FILES) $(AXI_FLAGS) -o tb_decode
 	./obj_dir/tb_decode
 
 sim-lsu-s1:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
 	  --top-module tb_lsu_s1 $(TB_LSU_S1_FILES) $(AXI_FLAGS) -o tb_lsu_s1
 	./obj_dir/tb_lsu_s1
 
 sim-forward:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
 	  --top-module tb_forward $(TB_FWD_FILES) $(AXI_FLAGS) -o tb_forward
 	./obj_dir/tb_forward
 
 sim-hazard:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
 	  --top-module tb_hazard $(TB_HZ_FILES) $(AXI_FLAGS) -o tb_hazard
 	./obj_dir/tb_hazard
 
@@ -230,14 +234,14 @@ sim-compliance-s1: build-s1
 	[ $$fail -eq 0 ]
 
 sim-muldiv:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
 	  --top-module tb_muldiv $(TB_MULDIV_FILES) $(AXI_FLAGS) -o tb_muldiv
 	./obj_dir/tb_muldiv
 
 build-s2: $(SIM_BIN_S2)
 
 $(SIM_BIN_S2): $(SV_FILES_S2) $(abspath sim_main_obi.cpp)
-	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND \
 	  --top-module kronos_top \
 	  $(SV_FILES_S2) $(abspath sim_main_obi.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
@@ -291,7 +295,7 @@ TB_DECOMPRESS_FILES := $(AXI_PKG_SV) \
                        $(TB_DIR)/stage3/tb_decompress.sv
 
 sim-decompress:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_decompress $(TB_DECOMPRESS_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_decompress
 	./$(OBJ_DIR)/tb_decompress/Vtb_decompress
@@ -303,7 +307,7 @@ TB_ALIGN_FILES := $(AXI_PKG_SV) \
                   $(TB_DIR)/stage3/tb_align.sv
 
 sim-align:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND --Wno-BLKSEQ \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_align $(TB_ALIGN_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_align
 	./$(OBJ_DIR)/tb_align/Vtb_align
@@ -316,7 +320,7 @@ TB_LSU_S3_FILES := $(AXI_PKG_SV) \
 build-s3: $(SIM_BIN_S3)
 
 $(SIM_BIN_S3): $(SV_FILES_S3) $(abspath sim_main.cpp)
-	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --top-module $(TOP_S3) \
 	  $(SV_FILES_S3) $(abspath sim_main.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
@@ -331,7 +335,7 @@ run-s3-latency-%: build-s3
 	./$(SIM_BIN_S3) $(SW_DIR_S3)/build/$*.hex 2 4
 
 sim-lsu-s3:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND --Wno-BLKSEQ \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_lsu_s3 $(TB_LSU_S3_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_lsu_s3
 	./$(OBJ_DIR)/tb_lsu_s3/Vtb_lsu_s3
@@ -342,7 +346,7 @@ TB_BPRED_FILES := $(AXI_PKG_SV) \
                   $(TB_DIR)/stage3/tb_bpred.sv
 
 sim-bpred:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND --Wno-BLKSEQ \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_bpred $(TB_BPRED_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_bpred
 	./$(OBJ_DIR)/tb_bpred/Vtb_bpred
@@ -390,7 +394,7 @@ SIM_BIN_S4 := $(OBJ_DIR)/s4/V$(TOP_S4)
 build-s4: $(SIM_BIN_S4)
 
 $(SIM_BIN_S4): $(SV_FILES_S4) $(abspath sim_main.cpp)
-	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --top-module $(TOP_S4) \
 	  $(SV_FILES_S4) $(abspath sim_main.cpp) \
 	  -CFLAGS "$(CFLAGS)" \
@@ -442,7 +446,7 @@ TB_ALU_S4_FILES := $(AXI_PKG_SV) \
                    $(TB_DIR)/stage4/tb_alu_s4.sv
 
 sim-alu-s4:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_alu_s4 $(TB_ALU_S4_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_alu_s4
 	./$(OBJ_DIR)/tb_alu_s4/Vtb_alu_s4
@@ -453,7 +457,7 @@ TB_DECODE_S4_FILES := $(AXI_PKG_SV) \
                       $(TB_DIR)/stage4/tb_decode_s4.sv
 
 sim-decode-s4:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_decode_s4 $(TB_DECODE_S4_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_decode_s4
 	./$(OBJ_DIR)/tb_decode_s4/Vtb_decode_s4
@@ -464,7 +468,7 @@ TB_MULDIV_S4_FILES := $(AXI_PKG_SV) \
                       $(TB_DIR)/stage4/tb_muldiv_s4.sv
 
 sim-muldiv-s4:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_muldiv_s4 $(TB_MULDIV_S4_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_muldiv_s4
 	./$(OBJ_DIR)/tb_muldiv_s4/Vtb_muldiv_s4
@@ -475,7 +479,7 @@ TB_LSU_S4_FILES := $(AXI_PKG_SV) \
                    $(TB_DIR)/stage4/tb_lsu_s4.sv
 
 sim-lsu-s4:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --top-module tb_lsu_s4 $(TB_LSU_S4_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_lsu_s4
 	./$(OBJ_DIR)/tb_lsu_s4/Vtb_lsu_s4
@@ -555,8 +559,8 @@ SIM_BIN_S5 := $(OBJ_DIR)/s5/V$(TOP_S5)
 build-s5: $(SIM_BIN_S5)
 
 $(SIM_BIN_S5): $(SV_FILES_S5) $(abspath sim_main.cpp)
-	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-WIDTHTRUNC \
-	  --Wno-PINCONNECTEMPTY --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND \
+	  --Wno-TIMESCALEMOD \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S5) $(abspath sim_main.cpp) \
 	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \
@@ -571,8 +575,7 @@ run-s5-%: build-s5
 TB_CORE_FP_BASIC_FILES := $(SV_FILES_S5) \
                           $(TB_DIR)/stage5/tb_core_fp_basic.sv
 sim-core-fp-basic:
-	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
-	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
 	  --top-module tb_core_fp_basic $(TB_CORE_FP_BASIC_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_basic
 	$(OBJ_DIR)/core_fp_basic/Vtb_core_fp_basic
@@ -580,8 +583,7 @@ sim-core-fp-basic:
 TB_CORE_FP_FORWARDING_FILES := $(SV_FILES_S5) \
                                 $(TB_DIR)/stage5/tb_core_fp_forwarding.sv
 sim-core-fp-forwarding:
-	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
-	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
 	  --top-module tb_core_fp_forwarding $(TB_CORE_FP_FORWARDING_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_forwarding
 	$(OBJ_DIR)/core_fp_forwarding/Vtb_core_fp_forwarding
@@ -627,7 +629,7 @@ sim-compliance-d: build-s5
 TB_PKG_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv $(TB_DIR)/stage5/tb_pkg_fp.sv
 
 sim-pkg-fp:
-	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/pkg_fp \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/pkg_fp \
 	  --top-module tb_pkg_fp $(TB_PKG_FP_FILES)
 	$(OBJ_DIR)/pkg_fp/Vtb_pkg_fp
 
@@ -635,14 +637,14 @@ TB_REGFILE_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                        $(RTL_DIR)/stage5/kronos_regfile_fp.sv \
                        $(TB_DIR)/stage5/tb_regfile_fp.sv
 sim-regfile-fp:
-	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/regfile_fp \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/regfile_fp \
 	  --top-module tb_regfile_fp $(TB_REGFILE_FP_FILES)
 	$(OBJ_DIR)/regfile_fp/Vtb_regfile_fp
 
 include $(RTL_DIR)/../vendor/hardfloat/file_list.mk
 TB_HF_SMOKE_FILES := $(HARDFLOAT_V) $(TB_DIR)/stage5/tb_hardfloat_smoke.sv
 sim-hf-smoke:
-	$(VERILATOR) --binary -Wno-lint -Wno-style --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/hf_smoke \
+	$(VERILATOR) $(WAIVER) --binary --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/hf_smoke \
 	  --top-module tb_hardfloat_smoke $(TB_HF_SMOKE_FILES)
 	$(OBJ_DIR)/hf_smoke/Vtb_hardfloat_smoke
 
@@ -650,7 +652,7 @@ include $(RTL_DIR)/../vendor/softfloat/file_list.mk
 TB_SF_SMOKE_FILES := $(RTL_DIR)/../vendor/softfloat/dpi/softfloat_dpi.svh \
                      $(TB_DIR)/stage5/tb_softfloat_smoke.sv
 sim-sf-smoke: $(SF_LIB)
-	$(VERILATOR) --binary -Mdir $(OBJ_DIR)/sf_smoke \
+	$(VERILATOR) $(WAIVER) --binary -Mdir $(OBJ_DIR)/sf_smoke \
 	  --top-module tb_softfloat_smoke \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" \
 	  -LDFLAGS "$(SF_LIB)" \
@@ -661,7 +663,7 @@ TB_CSR_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/kronos_csr.sv \
                    $(TB_DIR)/stage5/tb_csr_fp.sv
 sim-csr-fp:
-	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/csr_fp \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/csr_fp \
 	  --top-module tb_csr_fp $(TB_CSR_FP_FILES)
 	$(OBJ_DIR)/csr_fp/Vtb_csr_fp
 
@@ -669,7 +671,7 @@ TB_FPU_SB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
                    $(TB_DIR)/stage5/tb_fpu_scoreboard.sv
 sim-fpu-scoreboard:
-	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/fpu_sb \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/fpu_sb \
 	  --top-module tb_fpu_scoreboard $(TB_FPU_SB_FILES)
 	$(OBJ_DIR)/fpu_sb/Vtb_fpu_scoreboard
 
@@ -678,7 +680,7 @@ TB_DECODE_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                       $(RTL_DIR)/stage5/kronos_decode.sv \
                       $(TB_DIR)/stage5/tb_decode_fp.sv
 sim-decode-fp:
-	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/decode_fp \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/decode_fp \
 	  --top-module tb_decode_fp $(TB_DECODE_FP_FILES)
 	$(OBJ_DIR)/decode_fp/Vtb_decode_fp
 
@@ -692,7 +694,7 @@ TB_FMISC_FILES := $(FPU_COMMON_FILES) \
                   $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
                   $(TB_DIR)/stage5/tb_fpu_fmisc.sv
 sim-fpu-fmisc: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fmisc --top-module tb_fpu_fmisc \
 	  $(HARDFLOAT_V) $(TB_FMISC_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -702,7 +704,7 @@ TB_FCVT_FILES := $(FPU_COMMON_FILES) \
                  $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
                  $(TB_DIR)/stage5/tb_fpu_fcvt.sv
 sim-fpu-fcvt: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fcvt --top-module tb_fpu_fcvt \
 	  $(HARDFLOAT_V) $(TB_FCVT_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -712,7 +714,7 @@ TB_FADD_FILES := $(FPU_COMMON_FILES) \
                  $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
                  $(TB_DIR)/stage5/tb_fpu_fadd.sv
 sim-fpu-fadd: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fadd --top-module tb_fpu_fadd \
 	  $(HARDFLOAT_V) $(TB_FADD_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -722,7 +724,7 @@ TB_FMUL_FILES := $(FPU_COMMON_FILES) \
                  $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
                  $(TB_DIR)/stage5/tb_fpu_fmul.sv
 sim-fpu-fmul: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fmul --top-module tb_fpu_fmul \
 	  $(HARDFLOAT_V) $(TB_FMUL_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -732,7 +734,7 @@ TB_FMA_FILES := $(FPU_COMMON_FILES) \
                 $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
                 $(TB_DIR)/stage5/tb_fpu_fma.sv
 sim-fpu-fma: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fma --top-module tb_fpu_fma \
 	  $(HARDFLOAT_V) $(TB_FMA_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -743,8 +745,8 @@ TB_LSU_FP_FILES := $(AXI_PKG_SV) \
                    $(RTL_DIR)/stage5/kronos_lsu.sv \
                    $(TB_DIR)/stage5/tb_lsu_fp.sv
 sim-lsu-fp:
-	$(VERILATOR) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
-	  --Wno-WIDTHTRUNC --Wno-PROCASSINIT \
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --Wno-PROCASSINIT \
 	  --top-module tb_lsu_fp $(TB_LSU_FP_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/lsu_fp
 	$(OBJ_DIR)/lsu_fp/Vtb_lsu_fp
@@ -759,7 +761,7 @@ TB_FPU_TOP_FILES := $(FPU_COMMON_FILES) \
                     $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv \
                     $(TB_DIR)/stage5/tb_fpu_top.sv
 sim-fpu-top: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_top --top-module tb_fpu_top \
 	  $(HARDFLOAT_V) $(TB_FPU_TOP_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -771,7 +773,7 @@ COV_DIR   := $(OBJ_DIR)/coverage
 
 # Per-unit coverage builds (separate obj dirs so coverage.dat doesn't collide)
 sim-fpu-fmisc-cov: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fmisc_cov --top-module tb_fpu_fmisc \
 	  $(HARDFLOAT_V) $(TB_FMISC_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -779,7 +781,7 @@ sim-fpu-fmisc-cov: $(SF_LIB)
 	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fmisc_cov/coverage.dat
 
 sim-fpu-fcvt-cov: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fcvt_cov --top-module tb_fpu_fcvt \
 	  $(HARDFLOAT_V) $(TB_FCVT_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -787,7 +789,7 @@ sim-fpu-fcvt-cov: $(SF_LIB)
 	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fcvt_cov/coverage.dat
 
 sim-fpu-fadd-cov: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fadd_cov --top-module tb_fpu_fadd \
 	  $(HARDFLOAT_V) $(TB_FADD_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -795,7 +797,7 @@ sim-fpu-fadd-cov: $(SF_LIB)
 	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fadd_cov/coverage.dat
 
 sim-fpu-fmul-cov: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fmul_cov --top-module tb_fpu_fmul \
 	  $(HARDFLOAT_V) $(TB_FMUL_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
@@ -803,7 +805,7 @@ sim-fpu-fmul-cov: $(SF_LIB)
 	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fmul_cov/coverage.dat
 
 sim-fpu-fma-cov: $(SF_LIB)
-	$(VERILATOR) --binary $(AXI_FLAGS) $(COV_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
 	  -Mdir $(OBJ_DIR)/fpu_fma_cov --top-module tb_fpu_fma \
 	  $(HARDFLOAT_V) $(TB_FMA_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"

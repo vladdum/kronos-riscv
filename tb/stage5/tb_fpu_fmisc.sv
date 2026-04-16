@@ -386,7 +386,7 @@ module tb_fpu_fmisc;
         end
       end
 
-      if (rand_errors)
+      if (|rand_errors)
         $fatal(1, "random fmisc: %0d/%0d errors", rand_errors, rand_total);
       $display("random fmisc: %0d checks passed", rand_total);
     end

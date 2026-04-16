@@ -179,7 +179,7 @@ module kronos_fpu_fma
 
     // Biased exponent of product (before normalize of significand).
     // Product significand lies in [1,4): we'll handle the extra bit in stage 4.
-    s1_prod_exp = s1_a_exp + s1_b_exp - (fmt_d_i ? D_BIAS : S_BIAS);
+    s1_prod_exp = s1_a_exp + s1_b_exp - 13'(fmt_d_i ? D_BIAS : S_BIAS);
     s1_prod_zero = s1_a_zero || s1_b_zero;
 
     // ---------- Special-case resolution ----------
@@ -422,8 +422,8 @@ module kronos_fpu_fma
     end else if (exp_diff >= 0) begin
       // product >= addend: keep product, shift addend right by exp_diff.
       shift_amt = exp_diff;
-      if (shift_amt > (SUM_W - 1)) sh = SUM_W - 1;
-      else                         sh = shift_amt[9:0];
+      if (shift_amt > 14'(SUM_W - 1)) sh = SUM_W - 1;
+      else                              sh = {22'd0, shift_amt[9:0]};
       shifted = c_extended >> sh;
       // Sticky-OR the bits that fell off.
       sticky = 1'b0;
@@ -439,8 +439,8 @@ module kronos_fpu_fma
     end else begin
       // addend > product: shift product right by -exp_diff.
       shift_amt = -exp_diff;
-      if (shift_amt > (SUM_W - 1)) sh = SUM_W - 1;
-      else                         sh = shift_amt[9:0];
+      if (shift_amt > 14'(SUM_W - 1)) sh = SUM_W - 1;
+      else                              sh = {22'd0, shift_amt[9:0]};
       shifted = p_extended >> sh;
       sticky = 1'b0;
       if (sh > 0) begin
@@ -551,7 +551,7 @@ module kronos_fpu_fma
       exp = '0;
       s4_norm_mag_comb = '0;
     end else begin
-      exp = s4_base_exp + (msb_pos - ref_pos);
+      exp = s4_base_exp + 13'(msb_pos - ref_pos);
       s4_norm_mag_comb = mag;
     end
 
@@ -632,8 +632,8 @@ module kronos_fpu_fma
   always_comb begin
     automatic int unsigned        frac_w;
     automatic int signed          bias;
-    automatic int signed          emin;     // min normal biased exponent (=1)
-    automatic int signed          emax;     // max normal biased exponent
+    automatic logic signed [12:0]  emin;     // min normal biased exponent (=1)
+    automatic logic signed [12:0]  emax;     // max normal biased exponent
     automatic logic [52:0]        raw_sig;  // hidden + fraction bits
     automatic logic [SUM_W-1:0]   mag;
     automatic logic signed [12:0] exp;
@@ -685,13 +685,13 @@ module kronos_fpu_fma
       if (s5_fmt_d) begin
         frac_w = 52;
         bias   = D_BIAS;
-        emax   = 2046; // largest finite biased exp
+        emax   = 13'sd2046; // largest finite biased exp
       end else begin
         frac_w = 23;
         bias   = S_BIAS;
-        emax   = 254;
+        emax   = 13'sd254;
       end
-      emin = 1;
+      emin = 13'sd1;
 
       mag = s5_norm_mag;
       exp = s5_norm_exp;
@@ -699,14 +699,14 @@ module kronos_fpu_fma
       // Hidden bit (MSB of mag) is at index s5_msb_pos.  Shift it down to
       // position frac_w: shift_right_amt = msb_pos - frac_w.  For subnormal
       // outputs (exp < emin), shift by an extra (emin - exp) and force exp=0.
-      if ($signed({1'b0, s5_msb_pos}) >= $signed(frac_w))
-        shift_right_amt = s5_msb_pos - frac_w;
+      if ({1'b0, s5_msb_pos} >= 10'(frac_w))
+        shift_right_amt = {23'd0, s5_msb_pos} - frac_w;
       else
         shift_right_amt = 0;
 
       tiny = 1'b0;
       if (exp < emin) begin
-        shift_right_amt = shift_right_amt + (emin - exp);
+        shift_right_amt = shift_right_amt + 32'(emin - exp);
         exp  = 0;
         tiny = 1'b1;
       end
@@ -780,7 +780,7 @@ module kronos_fpu_fma
 
       // Overflow: final_exp >= emax+1 (i.e. all-ones field)
       overflow_ovf = 1'b0;
-      if (final_exp >= (emax + 1)) begin
+      if (final_exp >= (emax + 13'sd1)) begin
         overflow_ovf = 1'b1;
       end
 

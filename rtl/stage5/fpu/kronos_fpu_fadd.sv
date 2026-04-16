@@ -394,13 +394,13 @@ module kronos_fpu_fadd
       if (a_is_big) begin
         big_raw   = s1_q.a_sig;
         small_raw = s1_q.b_sig;
-        shift_amt = (exp_diff >= 0) ? int'(exp_diff) : int'(-exp_diff);
+        shift_amt = (exp_diff >= 0) ? int'(exp_diff) : -(int'(exp_diff));
         s2_d.res_exp  = s1_q.a_exp;
         s2_d.res_sign = s1_q.a_sign;
       end else begin
         big_raw   = s1_q.b_sig;
         small_raw = s1_q.a_sig;
-        shift_amt = (exp_diff >= 0) ? int'(exp_diff) : int'(-exp_diff);
+        shift_amt = (exp_diff >= 0) ? int'(exp_diff) : -(int'(exp_diff));
         s2_d.res_exp  = s1_q.b_exp;
         s2_d.res_sign = s1_q.b_sign;
       end
@@ -503,7 +503,7 @@ module kronos_fpu_fadd
         end else begin
           result_zero = 1'b0;
           norm_sig    = sum_sig << lzc;
-          norm_exp    = s3_d.res_exp - lzc;
+          norm_exp    = s3_d.res_exp - 13'($signed(lzc));
         end
         s3_d.res_sig = norm_sig;
         s3_d.res_exp = norm_exp;
@@ -624,7 +624,7 @@ module kronos_fpu_fadd
       //     exp == emin, accumulating dropped bits into G/R/S.
       if (cur_exp < emin) begin
         grs_vec = {g, r, st};
-        sh = int'(emin - cur_exp);
+        sh = {19'd0, 13'(emin - cur_exp)};
         // Pull guard/round/sticky back into significand LSBs so we can reuse
         // the same shifter.
         // We'll iterate shifting right 1 bit at a time.
