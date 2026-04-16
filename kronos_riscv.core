@@ -109,6 +109,9 @@ filesets:
       - rtl/stage5/fpu/kronos_fpu_fadd.sv
       - rtl/stage5/fpu/kronos_fpu_fmul.sv
       - rtl/stage5/fpu/kronos_fpu_fma.sv
+      - rtl/stage5/fpu/kronos_fpu_fdiv_core.sv
+      - rtl/stage5/fpu/kronos_fpu_fsqrt_core.sv
+      - rtl/stage5/fpu/kronos_fpu_iter.sv
       - rtl/stage5/fpu/kronos_fpu_top.sv
       - rtl/stage5/kronos_top.sv
     file_type: systemVerilogSource

@@ -5,7 +5,8 @@ SW_DIR_S1 := ../sw/stage1
 SW_DIR_S2 := ../sw/stage2
 SW_DIR_S3 := ../sw/stage3
 SW_DIR_S4 := ../sw/stage4
-SW_DIR_S5 := ../sw/stage5
+SW_DIR_S5  := ../sw/stage5
+SW_DIR_S5B := ../sw/stage5b
 OBJ_DIR   := obj_dir
 
 VERILATOR := verilator
@@ -108,9 +109,11 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-pkg-fp sim-regfile-fp sim-hf-smoke sim-sf-smoke \
         sim-csr-fp sim-fpu-scoreboard \
         sim-decode-fp sim-fpu-fmisc sim-fpu-fcvt sim-fpu-fadd sim-fpu-fmul \
-        sim-fpu-fma sim-fpu-top \
+        sim-fpu-fma sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-iter-skeleton sim-fpu-top \
+        sim-fpu-top-iter \
         sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov \
-        sim-fpu-fma-cov coverage
+        sim-fpu-fma-cov coverage \
+        sim-s5b
 
 .DEFAULT_GOAL := help
 
@@ -551,6 +554,9 @@ SV_FILES_S5 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
                $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
                $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
+               $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
                $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv
 
 TOP_S5     := sim_top
@@ -615,6 +621,33 @@ sim-s5: build-s5
 	[ $$fail -eq 0 ]
 	$(MAKE) sim-core-fp-basic
 	$(MAKE) sim-core-fp-forwarding
+
+# ── Stage 5b regression (FDIV/FSQRT assembly tests) ──────────────────────────
+sim-s5b: build-s5
+	@$(MAKE) -C $(SW_DIR_S5B) all > /dev/null 2>&1; \
+	tmpdir=$$(mktemp -d); pids=""; \
+	for hex in $(SW_DIR_S5B)/build/*.hex; do \
+	  [ -f "$$hex" ] || continue; \
+	  name=$$(basename $$hex .hex); \
+	  { out=$$(./$(SIM_BIN_S5) $$hex 2>&1); \
+	    x10=$$(echo "$$out" | grep -oP 'x10 = \K[0-9]+'); \
+	    echo "$$hex $$x10"; } > $$tmpdir/$$name & \
+	  pids="$$pids $$!"; \
+	done; \
+	wait $$pids; \
+	pass=0; fail=0; \
+	for f in $$tmpdir/*; do \
+	  [ -f "$$f" ] || continue; \
+	  read hex x10 < $$f; \
+	  if [ "$$x10" = "0" ]; then \
+	    pass=$$((pass+1)); \
+	  else \
+	    echo "FAIL: $$hex (x10=$$x10)"; fail=$$((fail+1)); \
+	  fi; \
+	done; \
+	rm -rf $$tmpdir; \
+	echo "Stage 5b assembly: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ] || [ $$pass -eq 0 -a $$fail -eq 0 ]
 
 # ── riscv-arch-test F and D compliance (requires separate clone) ───────────
 # Clone: git clone https://github.com/riscv-non-isa/riscv-arch-test /home/popes/riscv-arch-test
@@ -740,6 +773,51 @@ sim-fpu-fma: $(SF_LIB)
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
 	$(OBJ_DIR)/fpu_fma/Vtb_fpu_fma
 
+TB_FPU_FDIV_CORE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                          $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
+                          $(TB_DIR)/stage5/tb_fpu_fdiv_core.sv
+sim-fpu-fdiv-core:
+	cd ../tb/stage5/ref && python3 gen_fdiv_vectors.py
+	cp ../tb/stage5/ref/fdiv_vectors.hex .
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-lint -Wno-style \
+	  -Mdir $(OBJ_DIR)/fpu_fdiv_core --top-module tb_fpu_fdiv_core \
+	  $(TB_FPU_FDIV_CORE_FILES)
+	$(OBJ_DIR)/fpu_fdiv_core/Vtb_fpu_fdiv_core
+
+TB_FPU_FSQRT_CORE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                           $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
+                           $(TB_DIR)/stage5/tb_fpu_fsqrt_core.sv
+sim-fpu-fsqrt-core:
+	cd ../tb/stage5/ref && python3 gen_fsqrt_vectors.py
+	cp ../tb/stage5/ref/fsqrt_vectors.hex .
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-lint -Wno-style \
+	  -Mdir $(OBJ_DIR)/fpu_fsqrt_core --top-module tb_fpu_fsqrt_core \
+	  $(TB_FPU_FSQRT_CORE_FILES)
+	$(OBJ_DIR)/fpu_fsqrt_core/Vtb_fpu_fsqrt_core
+
+TB_FPU_ITER_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
+                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
+                     $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
+                     $(TB_DIR)/stage5/tb_fpu_iter.sv
+sim-fpu-iter-skeleton:
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-lint -Wno-style \
+	  -Mdir $(OBJ_DIR)/fpu_iter --top-module tb_fpu_iter \
+	  $(TB_FPU_ITER_FILES)
+	$(OBJ_DIR)/fpu_iter/Vtb_fpu_iter
+
+TB_FPU_ITER_SF_FILES := $(FPU_COMMON_FILES) \
+                        $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
+                        $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
+                        $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
+                        $(TB_DIR)/stage5/tb_fpu_iter.sv
+sim-fpu-iter: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-lint -Wno-style \
+	  -Mdir $(OBJ_DIR)/fpu_iter_sf --top-module tb_fpu_iter \
+	  $(TB_FPU_ITER_SF_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_iter_sf/Vtb_fpu_iter
+
 TB_LSU_FP_FILES := $(AXI_PKG_SV) \
                    $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/kronos_lsu.sv \
@@ -758,6 +836,9 @@ TB_FPU_TOP_FILES := $(FPU_COMMON_FILES) \
                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
                     $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv \
                     $(TB_DIR)/stage5/tb_fpu_top.sv
 sim-fpu-top: $(SF_LIB)
@@ -766,6 +847,25 @@ sim-fpu-top: $(SF_LIB)
 	  $(HARDFLOAT_V) $(TB_FPU_TOP_FILES) $(SF_DPI_SRC) \
 	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
 	$(OBJ_DIR)/fpu_top/Vtb_fpu_top
+
+TB_FPU_TOP_ITER_FILES := $(FPU_COMMON_FILES) \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
+                    $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv \
+                    $(TB_DIR)/stage5/tb_fpu_top_iter.sv
+sim-fpu-top-iter: $(SF_LIB)
+	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \
+	  -Mdir $(OBJ_DIR)/fpu_top_iter --top-module tb_fpu_top_iter \
+	  $(HARDFLOAT_V) $(TB_FPU_TOP_ITER_FILES) $(SF_DPI_SRC) \
+	  -CFLAGS "$(CFLAGS) $(SF_INCS)" -LDFLAGS "$(SF_LIB)"
+	$(OBJ_DIR)/fpu_top_iter/Vtb_fpu_top_iter
 
 # ── Functional coverage (line coverage gate ≥95%) ─────────────────────────
 COV_FLAGS := --coverage-line

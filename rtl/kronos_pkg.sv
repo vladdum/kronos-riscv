@@ -80,7 +80,7 @@ package kronos_pkg;
     FP_FCVT_F_W, FP_FCVT_F_WU, FP_FCVT_F_L, FP_FCVT_F_LU,
     FP_FCVT_S_D, FP_FCVT_D_S,
     // Arith
-    FP_FADD, FP_FSUB, FP_FMUL,
+    FP_FADD, FP_FSUB, FP_FMUL, FP_FDIV, FP_FSQRT,
     // FMA
     FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB
   } fp_op_e;

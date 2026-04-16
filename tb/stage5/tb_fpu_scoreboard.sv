@@ -10,10 +10,16 @@ module tb_fpu_scoreboard;
 
   logic dispatch_ok_comb;
 
+  logic       late_req, late_fp;
+  logic [2:0] late_latency;
+  logic       late_grant_comb;
+
   kronos_fpu_scoreboard u_dut (
     .clk_i(clk), .rst_ni(rst_n), .flush_i(flush),
     .req_i(dispatch_req), .fp_dest_i(dispatch_fp), .int_dest_i(dispatch_int),
-    .latency_i(dispatch_latency), .grant_comb_o(dispatch_ok_comb), .grant_o(dispatch_ok)
+    .latency_i(dispatch_latency), .grant_comb_o(dispatch_ok_comb), .grant_o(dispatch_ok),
+    .late_req_i(late_req), .late_fp_dest_i(late_fp),
+    .late_latency_i(late_latency), .late_grant_comb_o(late_grant_comb)
   );
   always #5 clk = ~clk;
 
@@ -30,6 +36,7 @@ module tb_fpu_scoreboard;
 
   initial begin
     dispatch_req = 0; dispatch_fp = 0; dispatch_int = 0; dispatch_latency = 0;
+    late_req = 0; late_fp = 0; late_latency = 0;
     #12 rst_n = 1;
 
     // FMA (lat=5) then FCVT (lat=2): writeback cycles 5 and 2 — no collision.
@@ -50,6 +57,46 @@ module tb_fpu_scoreboard;
     // Flush clears the reservation vector.
     @(negedge clk) flush = 1; @(negedge clk) flush = 0;
     dispatch(1, 0, 1, 1'b1);
+
+    // ---- Late-probe tests ----
+    // late_grant_comb_o is purely combinational, so we sample it mid-cycle
+    // (negedge + #1) while slots_q still reflects the pre-posedge state.
+
+    // Reset state for late-probe tests.
+    @(negedge clk) rst_n = 0; @(negedge clk) rst_n = 1;
+
+    // Test 1: late_req=1, target slot free → grant=1, reservation appears.
+    @(negedge clk) late_req = 1; late_fp = 1; late_latency = 3'd2;
+    #1;
+    if (late_grant_comb !== 1'b1)
+      $fatal(1, "late-probe free: expected grant=1, got=%b", late_grant_comb);
+    // Let the posedge commit the reservation, then deassert.
+    @(posedge clk) #1;
+    @(negedge clk) late_req = 0; late_fp = 0;
+
+    // Verify the reservation landed: dispatch with lat=1 that would collide
+    // with the now-reserved slot (which shifted to slot[0] after one cycle).
+    dispatch(1, 0, 1, 1'b0);
+
+    // Test 2: late_req=1, target slot occupied → grant=0.
+    @(negedge clk) rst_n = 0; @(negedge clk) rst_n = 1;
+    // First, occupy slot via normal dispatch at lat=2.
+    dispatch(1, 0, 2, 1'b1);
+    // Now late-probe at lat=1: after the shift, the dispatch reservation that
+    // was at slot[1] moved to slot[0]. Late probe at lat=1 targets slot[0].
+    @(negedge clk) late_req = 1; late_fp = 1; late_latency = 3'd1;
+    #1;
+    if (late_grant_comb !== 1'b0)
+      $fatal(1, "late-probe occupied: expected grant=0, got=%b", late_grant_comb);
+    @(negedge clk) late_req = 0; late_fp = 0;
+
+    // Test 3: late_req=0 → grant=0 always.
+    @(negedge clk) rst_n = 0; @(negedge clk) rst_n = 1;
+    @(negedge clk) late_req = 0; late_fp = 1; late_latency = 3'd2;
+    #1;
+    if (late_grant_comb !== 1'b0)
+      $fatal(1, "late-probe no-req: expected grant=0, got=%b", late_grant_comb);
+    @(negedge clk) late_fp = 0;
 
     $display("tb_fpu_scoreboard PASS");
     $finish;

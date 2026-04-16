@@ -2,9 +2,9 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// FPU dispatch wrapper: routes in_valid_i to one of the five execution units,
+// FPU dispatch wrapper: routes in_valid_i to one of the six execution units,
 // embeds the scoreboard for write-back hazard detection, and mux-reduces the
-// five out_valid/result/fflags/tag buses onto a single shared output bus.
+// six out_valid/result/fflags/tag buses onto a single shared output bus.
 //
 // Latency table (clock cycles from dispatch to out_valid):
 //   FMISC  1  (FSGNJ*, FMIN, FMAX, FCLASS, FEQ, FLT, FLE, FMV.*)
@@ -12,6 +12,7 @@
 //   FADD   4  (FADD, FSUB)
 //   FMUL   4  (FMUL)
 //   FMA    5  (FMADD, FMSUB, FNMADD, FNMSUB)
+//   ITER   variable (FDIV, FSQRT) — late-reservation via scoreboard
 //
 // busy_o is asserted when in_valid_i is high and the scoreboard detects a
 // write-back collision for the incoming operation.  The upstream stage must
@@ -43,7 +44,7 @@ module kronos_fpu_top
   // Dispatch routing: determine unit and latency from op_i
   // ---------------------------------------------------------------------------
   logic [2:0] dispatch_latency;
-  logic       sel_fmisc, sel_fcvt, sel_fadd, sel_fmul, sel_fma;
+  logic       sel_fmisc, sel_fcvt, sel_fadd, sel_fmul, sel_fma, sel_iter;
 
   always_comb begin
     sel_fmisc        = 1'b0;
@@ -51,6 +52,7 @@ module kronos_fpu_top
     sel_fadd         = 1'b0;
     sel_fmul         = 1'b0;
     sel_fma          = 1'b0;
+    sel_iter         = 1'b0;
     dispatch_latency = 3'd0;
 
     unique case (op_i)
@@ -80,6 +82,10 @@ module kronos_fpu_top
         sel_fma          = 1'b1;
         dispatch_latency = 3'd5;
       end
+      FP_FDIV, FP_FSQRT: begin
+        sel_iter         = 1'b1;
+        dispatch_latency = 3'd0;  // not registered at dispatch (late-reservation)
+      end
       default: begin
         // Unknown op: route nowhere, scoreboard will ignore (latency=0)
         sel_fmisc        = 1'b0;
@@ -93,19 +99,28 @@ module kronos_fpu_top
   // ---------------------------------------------------------------------------
   logic grant_comb, grant;
 
+  // Late-probe signals from iterative unit to scoreboard
+  logic iter_late_req, iter_late_fp_dest, iter_late_grant;
+  logic iter_busy;
+
   kronos_fpu_scoreboard #(.DEPTH(5)) u_scoreboard (
-    .clk_i        (clk_i),
-    .rst_ni       (rst_ni),
-    .flush_i      (flush_i),
-    .req_i        (in_valid_i),
-    .fp_dest_i    (tag_i.fp_dest),
-    .int_dest_i   (~tag_i.fp_dest),
-    .latency_i    (dispatch_latency),
-    .grant_comb_o (grant_comb),
-    .grant_o      (grant)
+    .clk_i             (clk_i),
+    .rst_ni            (rst_ni),
+    .flush_i           (flush_i),
+    .req_i             (in_valid_i),
+    .fp_dest_i         (tag_i.fp_dest),
+    .int_dest_i        (~tag_i.fp_dest),
+    .latency_i         (dispatch_latency),
+    .grant_comb_o      (grant_comb),
+    .grant_o           (grant),
+    .late_req_i        (iter_late_req),
+    .late_fp_dest_i    (iter_late_fp_dest),
+    .late_latency_i    (3'd1),
+    .late_grant_comb_o (iter_late_grant)
   );
 
-  assign busy_o = in_valid_i & ~grant_comb;
+  // busy_o: scoreboard collision OR iterative unit busy (can't accept new op)
+  assign busy_o = (in_valid_i & ~grant_comb) | (sel_iter & in_valid_i & iter_busy);
 
   // Gate in_valid to each unit: only the selected unit receives it, and only
   // when the scoreboard grants the dispatch.
@@ -213,13 +228,40 @@ module kronos_fpu_top
     .tag_o      (fma_tag)
   );
 
+  // Iterative unit (FDIV, FSQRT) — variable latency, late-reservation
+  logic        iter_out_valid;
+  logic [63:0] iter_result;
+  logic [4:0]  iter_fflags;
+  fpu_tag_t    iter_tag;
+
+  kronos_fpu_iter u_iter (
+    .clk_i           (clk_i),
+    .rst_ni          (rst_ni),
+    .flush_i         (flush_i),
+    .in_valid_i      (dispatch_ok & sel_iter & ~iter_busy),
+    .op_i            (op_i),
+    .fmt_d_i         (fmt_d_i),
+    .rm_i            (rm_i),
+    .a_i             (a_i),
+    .b_i             (b_i),
+    .tag_i           (tag_i),
+    .busy_o          (iter_busy),
+    .out_valid_o     (iter_out_valid),
+    .result_o        (iter_result),
+    .fflags_o        (iter_fflags),
+    .tag_o           (iter_tag),
+    .sb_late_req_o   (iter_late_req),
+    .sb_late_fp_dest_o(iter_late_fp_dest),
+    .sb_late_grant_i (iter_late_grant)
+  );
+
   // ---------------------------------------------------------------------------
   // Output mux: at most one unit produces out_valid per cycle (scoreboard
   // invariant). Priority encode to form a single output bus.
   // ---------------------------------------------------------------------------
   always_comb begin
     out_valid_o = fmisc_out_valid | fcvt_out_valid | fadd_out_valid
-                | fmul_out_valid  | fma_out_valid;
+                | fmul_out_valid  | fma_out_valid  | iter_out_valid;
     if (fmisc_out_valid) begin
       result_o = fmisc_result;
       fflags_o = fmisc_fflags;
@@ -236,10 +278,14 @@ module kronos_fpu_top
       result_o = fmul_result;
       fflags_o = fmul_fflags;
       tag_o    = fmul_tag;
-    end else begin
+    end else if (fma_out_valid) begin
       result_o = fma_result;
       fflags_o = fma_fflags;
       tag_o    = fma_tag;
+    end else begin
+      result_o = iter_result;
+      fflags_o = iter_fflags;
+      tag_o    = iter_tag;
     end
   end
 

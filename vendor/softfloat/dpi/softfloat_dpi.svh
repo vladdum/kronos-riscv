@@ -34,6 +34,13 @@ package softfloat_dpi_pkg;
   // f32_to_f64 is exact (no rounding); rm parameter intentionally omitted.
   import "DPI-C" function longint unsigned sf_f32_to_f64(int unsigned a);
 
+  import "DPI-C" function int unsigned sf_f32_div(int unsigned a, int unsigned b,
+                                                   byte unsigned rm);
+  import "DPI-C" function longint unsigned sf_f64_div(longint unsigned a,
+                                                      longint unsigned b, byte unsigned rm);
+  import "DPI-C" function int unsigned sf_f32_sqrt(int unsigned a, byte unsigned rm);
+  import "DPI-C" function longint unsigned sf_f64_sqrt(longint unsigned a, byte unsigned rm);
+
   import "DPI-C" function byte unsigned sf_exceptions();
 
 endpackage

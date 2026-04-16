@@ -26,7 +26,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 3     | AXI4 switch + C extension + branch predictor   | RV32IMC          | AXI4    | Complete    |
 | 4     | RV64I + A extension                             | RV64IMAC         | AXI4    | Complete    |
 | 5a    | F/D extensions (pipelined, no FDIV/FSQRT)       | RV64IMAFD        | AXI4    | Complete    |
-| 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4    | Planned     |
+| 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4    | Complete    |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
@@ -88,7 +88,10 @@ kronos-riscv/
 │           ├── kronos_fpu_fmul.sv   # 4-cycle: FMUL
 │           ├── kronos_fpu_fma.sv    # 5-cycle: FMADD/FMSUB/FNMADD/FNMSUB
 │           ├── kronos_fpu_scoreboard.sv # WAW busy-table + WB port reservation
-│           └── kronos_fpu_top.sv    # FPU dispatch wrapper
+│           ├── kronos_fpu_top.sv    # FPU dispatch wrapper
+│           ├── kronos_fpu_iter.sv   # FDIV/FSQRT wrapper FSM (variable latency)
+│           ├── kronos_fpu_fdiv_core.sv  # Radix-2 SRT division core
+│           └── kronos_fpu_fsqrt_core.sv # Radix-2 SRT square root core
 ├── tb/
 │   ├── tb_pkg.sv              # Shared testbench utilities
 │   ├── stage0/                # Stage 0 testbenches
@@ -103,7 +106,8 @@ kronos-riscv/
 │   ├── stage2/                # Stage 2 M-extension test programs
 │   ├── stage3/                # Stage 3 test programs
 │   ├── stage4/                # Stage 4 test programs (RV64IMAC)
-│   └── stage5/                # Stage 5 FP test programs (RV64IMAFD)
+│   ├── stage5/                # Stage 5a FP test programs (RV64IMAFD)
+│   └── stage5b/               # Stage 5b FDIV/FSQRT test programs
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
 │   └── sim_main.cpp           # C++ simulation driver
@@ -150,6 +154,10 @@ cd sim && make sim-fpu-fcvt    # FCVT (int↔FP, S↔D)
 cd sim && make sim-fpu-fadd    # FADD/FSUB (4-stage)
 cd sim && make sim-fpu-fmul    # FMUL (4-stage)
 cd sim && make sim-fpu-fma     # FMA (5-stage)
+cd sim && make sim-fpu-fdiv-core   # FDIV radix-2 SRT core
+cd sim && make sim-fpu-fsqrt-core  # FSQRT radix-2 SRT core
+cd sim && make sim-fpu-iter    # FDIV/FSQRT wrapper (SoftFloat-verified)
+cd sim && make sim-fpu-top-iter # iter integration in FPU top
 
 # Stage 5 integration testbenches
 cd sim && make sim-core-fp-basic       # basic FMV + FADD end-to-end
@@ -157,6 +165,7 @@ cd sim && make sim-core-fp-forwarding  # FMUL→FADD with forwarding
 
 # Stage 5 full regression + coverage gate (≥95% line coverage)
 cd sim && make sim-s5
+cd sim && make sim-s5b    # Stage 5b FDIV/FSQRT assembly tests
 cd sim && make coverage
 
 # Stage 4 regression
