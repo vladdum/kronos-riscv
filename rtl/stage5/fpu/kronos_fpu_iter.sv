@@ -254,8 +254,8 @@ module kronos_fpu_iter
   localparam logic [63:0] S_NZERO = 64'hFFFF_FFFF_8000_0000;
 
   // Flag bits
-  localparam logic [4:0] FL_NV = 5'b10000;
-  localparam logic [4:0] FL_DZ = 5'b01000;
+  localparam logic [4:0] FL_NV = 5'(1) << FP_FFLAG_NV;
+  localparam logic [4:0] FL_DZ = 5'(1) << FP_FFLAG_DZ;
 
   // Specials helper signals
   logic        sp_result_sign;
