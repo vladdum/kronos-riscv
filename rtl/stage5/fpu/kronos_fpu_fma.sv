@@ -370,14 +370,21 @@ module kronos_fpu_fma
   logic                s3_eff_sub_comb;
 
   always_comb begin
-    automatic logic signed [13:0] exp_diff;
-    automatic logic signed [13:0] shift_amt;
-    automatic logic [SUM_W-1:0]   c_extended;
-    automatic logic [SUM_W-1:0]   p_extended;
-    automatic int unsigned        sh;
-    automatic logic [SUM_W-1:0]   shifted;
-    automatic logic               sticky;
-    automatic int unsigned        i;
+    logic signed [13:0] exp_diff;
+    logic signed [13:0] shift_amt;
+    logic [SUM_W-1:0]   c_extended;
+    logic [SUM_W-1:0]   p_extended;
+    int unsigned        sh;
+    logic [SUM_W-1:0]   shifted;
+    logic               sticky;
+    int unsigned        i;
+
+    // Defaults — prevents latches in branches that don't touch these.
+    exp_diff  = '0;
+    shift_amt = '0;
+    sh        = 0;
+    shifted   = '0;
+    sticky    = 1'b0;
 
     s3_eff_sub_comb = s3_prod_sign ^ s3_addend_sign;
 
