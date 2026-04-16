@@ -518,14 +518,19 @@ module kronos_fpu_fma
   logic [SUM_W-1:0]    s4_norm_mag_comb;
 
   always_comb begin
-    automatic logic [SUM_W-1:0]   diff;
-    automatic logic [SUM_W-1:0]   mag;
-    automatic logic               sign;
-    automatic int                 msb_pos;
-    automatic int unsigned        i;
-    automatic logic signed [12:0] exp;
-    automatic int                 ref_pos;
+    logic [SUM_W-1:0]   diff;
+    logic [SUM_W-1:0]   mag;
+    logic               sign;
+    int                 msb_pos;
+    int unsigned        i;
+    logic signed [12:0] exp;
+    int                 ref_pos;
 
+    diff    = '0;
+    mag     = '0;
+    sign    = 1'b0;
+    msb_pos = -1;
+    exp     = '0;
     ref_pos = SUM_W - 3;  // 157
 
     if (!s4_eff_sub) begin
@@ -570,8 +575,9 @@ module kronos_fpu_fma
   // another LZC pass; but to avoid re-doing the loop there, propagate it.
   logic [8:0] s4_msb_pos_comb;
   always_comb begin
-    automatic int        i;
-    automatic int        m;
+    int        i;
+    int        m;
+    i = 0;
     m = -1;
     for (i = 0; i < SUM_W; i = i + 1) begin
       if (s4_norm_mag_comb[i] && (m < $signed(i))) m = i;
@@ -637,28 +643,51 @@ module kronos_fpu_fma
   logic [4:0]  s5_flags_comb;
 
   always_comb begin
-    automatic int unsigned        frac_w;
-    automatic int signed          bias;
-    automatic logic signed [12:0]  emin;     // min normal biased exponent (=1)
-    automatic logic signed [12:0]  emax;     // max normal biased exponent
-    automatic logic [52:0]        raw_sig;  // hidden + fraction bits
-    automatic logic [SUM_W-1:0]   mag;
-    automatic logic signed [12:0] exp;
-    automatic logic               guard;
-    automatic logic               round_b;
-    automatic logic               sticky;
-    automatic logic               round_up;
-    automatic logic [52:0]        rounded_sig;
-    automatic logic               inexact;
-    automatic logic               overflow_ovf;
-    automatic logic               tiny;
-    automatic int unsigned        shift_right_amt;
-    automatic int unsigned        i;
-    automatic logic [SUM_W-1:0]   pre_mag;
-    automatic logic [52:0]        final_sig;
-    automatic logic signed [12:0] final_exp;
-    automatic logic [10:0]        exp_field_d;
-    automatic logic [7:0]         exp_field_s;
+    int unsigned        frac_w;
+    int signed          bias;
+    logic signed [12:0] emin;
+    logic signed [12:0] emax;
+    logic [52:0]        raw_sig;
+    logic [SUM_W-1:0]   mag;
+    logic signed [12:0] exp;
+    logic               guard;
+    logic               round_b;
+    logic               sticky;
+    logic               round_up;
+    logic [52:0]        rounded_sig;
+    logic               inexact;
+    logic               overflow_ovf;
+    logic               tiny;
+    int unsigned        shift_right_amt;
+    int unsigned        i;
+    logic [SUM_W-1:0]   pre_mag;
+    logic [52:0]        final_sig;
+    logic signed [12:0] final_exp;
+    logic [10:0]        exp_field_d;
+    logic [7:0]         exp_field_s;
+
+    frac_w        = 0;
+    bias          = 0;
+    emin          = '0;
+    emax          = '0;
+    raw_sig       = '0;
+    mag           = '0;
+    exp           = '0;
+    guard         = 1'b0;
+    round_b       = 1'b0;
+    sticky        = 1'b0;
+    round_up      = 1'b0;
+    rounded_sig   = '0;
+    inexact       = 1'b0;
+    overflow_ovf  = 1'b0;
+    tiny          = 1'b0;
+    shift_right_amt = 0;
+    i             = 0;
+    pre_mag       = '0;
+    final_sig     = '0;
+    final_exp     = '0;
+    exp_field_d   = '0;
+    exp_field_s   = '0;
 
     s5_result_comb = '0;
     s5_flags_comb  = s5_special_flags;
