@@ -334,6 +334,28 @@ module kronos_fpu_fmul
     // Wide product, left-shifted to bring the leading 1 to bit PROD_W-2.
     // After left-shifting by (lz-1), all products have their hidden bit at bit 104.
     logic [PROD_W-1:0] prod_norm;
+    // Hoisted from subnormal sub-blocks
+    logic signed [EXP_EXT_W-1:0] shift_amt;
+    logic [SIG_W-1:0] mant_fullw;
+    logic g_in, r_in, s_in;
+    int unsigned sh;
+    logic [63:0] tail;
+    logic [63:0] shifted;
+    logic [63:0] lost_mask;
+
+    // Defaults
+    lz         = '0;
+    exp_adj    = '0;
+    prod_norm  = '0;
+    shift_amt  = '0;
+    mant_fullw = '0;
+    g_in       = 1'b0;
+    r_in       = 1'b0;
+    s_in       = 1'b0;
+    sh         = 0;
+    tail       = '0;
+    shifted    = '0;
+    lost_mask  = '0;
 
     // Start from the wide product.
     s3_prod = s2_prod_q;
@@ -382,11 +404,6 @@ module kronos_fpu_fmul
     // Subnormal handling: if s3_exp_norm_c <= 0, shift the mantissa right by
     // (1 - s3_exp_norm_c) to denormalize, accumulating into sticky.
     begin
-      logic signed [EXP_EXT_W-1:0] shift_amt;
-      logic [SIG_W-1:0] mant_fullw;
-      logic g_in, r_in, s_in;
-      int unsigned sh;
-
       mant_fullw = s3_mant_c;
       g_in = s3_guard_c;
       r_in = s3_round_c;
@@ -401,9 +418,6 @@ module kronos_fpu_fmul
         // Build a 64-bit tail to simplify sticky computation:
         // [mant (53)] [g (1)] [r (1)] [s (1)] ...
         begin
-          logic [63:0] tail;
-          logic [63:0] shifted;
-          logic [63:0] lost_mask;
           tail = {mant_fullw, g_in, r_in, s_in, 8'd0};
           if (sh >= 64) begin
             shifted   = 64'd0;

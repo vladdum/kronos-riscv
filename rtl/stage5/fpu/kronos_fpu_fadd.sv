@@ -181,6 +181,10 @@ module kronos_fpu_fadd
   logic b_sign_pre;  // sign of b after FSUB flip
 
   always_comb begin
+    // Block-local hoisted from specials sub-block
+    logic zero_sign;
+    zero_sign = 1'b0;
+
     // --- Double decomposition ---
     a_d_sign = a_i[63];
     b_d_sign = b_i[63];
@@ -334,7 +338,6 @@ module kronos_fpu_fadd
         // it's -0; else +0.
         s1_d.is_special = 1'b1;
         begin
-          logic zero_sign;
           if (!eff_sub_early) begin
             // Additive zero: both signs must match for a signed zero; otherwise
             // the sign is +0 except in RDN.
@@ -452,6 +455,12 @@ module kronos_fpu_fadd
       logic                    result_zero;
       logic                    small_sticky;
 
+      sum_sig      = '0;
+      carry_out    = 1'b0;
+      lzc          = 0;
+      norm_sig     = '0;
+      norm_exp     = '0;
+      result_zero  = 1'b0;
       small_sticky = s2_q.small_sticky_extra;
 
       if (!s2_q.op_sub) begin
@@ -523,8 +532,65 @@ module kronos_fpu_fadd
   logic [4:0]  s4_flags;
 
   always_comb begin
-    s4_result = '0;
-    s4_flags  = 5'd0;
+    // Hoisted locals from pack / subnormal / round / overflow sub-blocks
+    int unsigned             mant_w;
+    int unsigned             exp_w;
+    logic signed [EXP_W-1:0] emin;
+    logic signed [EXP_W-1:0] emax;
+    logic signed [EXP_W-1:0] bias;
+    logic signed [EXP_W-1:0] cur_exp;
+    logic [SIG_W-1:0]        cur_sig;
+    logic                    g, r, st;
+    int unsigned             sub_shift;
+    int unsigned             i;
+    logic                    lsb;
+    logic                    round_up;
+    logic [SIG_W-1:0]        rounded_sig;
+    logic                    carry_up;
+    logic [51:0]             out_mant_d;
+    logic [22:0]             out_mant_s;
+    logic [10:0]             out_expf_d;
+    logic [7:0]              out_expf_s;
+    logic                    overflow;
+    logic                    is_subnormal_out;
+    logic                    inexact;
+    int unsigned             sh;
+    logic [2:0]              grs_vec;
+    logic [SIG_W:0]          incremented;
+    logic [SIG_W-1:0]        mask_one;
+    logic                    to_inf;
+
+    // Defaults
+    s4_result        = '0;
+    s4_flags         = 5'd0;
+    mant_w           = 0;
+    exp_w            = 0;
+    emin             = '0;
+    emax             = '0;
+    bias             = '0;
+    cur_exp          = '0;
+    cur_sig          = '0;
+    g                = 1'b0;
+    r                = 1'b0;
+    st               = 1'b0;
+    sub_shift        = 0;
+    i                = 0;
+    lsb              = 1'b0;
+    round_up         = 1'b0;
+    rounded_sig      = '0;
+    carry_up         = 1'b0;
+    out_mant_d       = '0;
+    out_mant_s       = '0;
+    out_expf_d       = '0;
+    out_expf_s       = '0;
+    overflow         = 1'b0;
+    is_subnormal_out = 1'b0;
+    inexact          = 1'b0;
+    sh               = 0;
+    grs_vec          = '0;
+    incremented      = '0;
+    mask_one         = '0;
+    to_inf           = 1'b0;
 
     if (s3_q.is_special) begin
       s4_result = s3_q.special_res;
@@ -533,27 +599,6 @@ module kronos_fpu_fadd
       if (s3_q.fmt_d) s4_result = {s3_q.res_sign, 63'd0};
       else            s4_result = {FP_NANBOX_UPPER, s3_q.res_sign, 31'd0};
     end else begin : pack
-      int unsigned             mant_w;
-      int unsigned             exp_w;
-      logic signed [EXP_W-1:0] emin;   // unbiased min normal exponent
-      logic signed [EXP_W-1:0] emax;   // unbiased max normal exponent
-      logic signed [EXP_W-1:0] bias;
-      logic signed [EXP_W-1:0] cur_exp;
-      logic [SIG_W-1:0]        cur_sig;
-      logic                    g, r, st;
-      int unsigned             sub_shift;
-      int unsigned             i;
-      logic                    lsb;
-      logic                    round_up;
-      logic [SIG_W-1:0]        rounded_sig;
-      logic                    carry_up;
-      logic [51:0]             out_mant_d;
-      logic [22:0]             out_mant_s;
-      logic [10:0]             out_expf_d;
-      logic [7:0]              out_expf_s;
-      logic                    overflow;
-      logic                    is_subnormal_out;
-      logic                    inexact;
 
       if (s3_q.fmt_d) begin
         mant_w = 52;
@@ -578,8 +623,6 @@ module kronos_fpu_fadd
       // --- Subnormal flush: if exp < emin, shift significand right until
       //     exp == emin, accumulating dropped bits into G/R/S.
       if (cur_exp < emin) begin
-        int unsigned sh;
-        logic [2:0]  grs_vec;
         grs_vec = {g, r, st};
         sh = int'(emin - cur_exp);
         // Pull guard/round/sticky back into significand LSBs so we can reuse
@@ -640,8 +683,6 @@ module kronos_fpu_fadd
 
       // Add 1 at position (SIG_W-1-mant_w) if rounding up.
       begin
-        logic [SIG_W:0] incremented;
-        logic [SIG_W-1:0] mask_one;
         mask_one = '0;
         mask_one[SIG_W - 1 - mant_w] = 1'b1;
         if (round_up)
@@ -668,7 +709,6 @@ module kronos_fpu_fadd
         s4_flags[FP_FFLAG_NX] = 1'b1;
         // RTZ / (RDN for pos) / (RUP for neg) → max finite; else ±Inf.
         begin
-          logic to_inf;
           unique case (s3_q.rm)
             FP_RM_RNE: to_inf = 1'b1;
             FP_RM_RTZ: to_inf = 1'b0;

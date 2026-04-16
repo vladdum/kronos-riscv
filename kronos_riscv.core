@@ -134,7 +134,7 @@ targets:
       verilator:
         mode: lint-only
         verilator_options: [--Wall, --Wno-UNUSED, --Wno-WIDTHEXPAND,
-                            --Wno-WIDTHTRUNC, --Wno-LATCH, --Wno-PINCONNECTEMPTY]
+                            --Wno-WIDTHTRUNC, --Wno-PINCONNECTEMPTY]
     toplevel: kronos_top
     default_tool: verilator
 
@@ -180,7 +180,7 @@ targets:
       verilator:
         mode: lint-only
         verilator_options: [--Wall, --Wno-UNUSED, --Wno-WIDTHEXPAND,
-                            --Wno-WIDTHTRUNC, --Wno-LATCH, --Wno-PINCONNECTEMPTY]
+                            --Wno-WIDTHTRUNC, --Wno-PINCONNECTEMPTY]
     toplevel: kronos_top
     default_tool: verilator
 

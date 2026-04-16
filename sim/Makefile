@@ -556,7 +556,7 @@ build-s5: $(SIM_BIN_S5)
 
 $(SIM_BIN_S5): $(SV_FILES_S5) $(abspath sim_main.cpp)
 	$(VERILATOR) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-WIDTHTRUNC \
-	  --Wno-PINCONNECTEMPTY --Wno-LATCH --Wno-TIMESCALEMOD \
+	  --Wno-PINCONNECTEMPTY --Wno-TIMESCALEMOD \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S5) $(abspath sim_main.cpp) \
 	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \
@@ -572,7 +572,7 @@ TB_CORE_FP_BASIC_FILES := $(SV_FILES_S5) \
                           $(TB_DIR)/stage5/tb_core_fp_basic.sv
 sim-core-fp-basic:
 	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
-	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY --Wno-LATCH \
+	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY \
 	  --top-module tb_core_fp_basic $(TB_CORE_FP_BASIC_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_basic
 	$(OBJ_DIR)/core_fp_basic/Vtb_core_fp_basic
@@ -581,7 +581,7 @@ TB_CORE_FP_FORWARDING_FILES := $(SV_FILES_S5) \
                                 $(TB_DIR)/stage5/tb_core_fp_forwarding.sv
 sim-core-fp-forwarding:
 	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
-	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY --Wno-LATCH \
+	  --Wno-WIDTHTRUNC --Wno-PINCONNECTEMPTY \
 	  --top-module tb_core_fp_forwarding $(TB_CORE_FP_FORWARDING_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_forwarding
 	$(OBJ_DIR)/core_fp_forwarding/Vtb_core_fp_forwarding
