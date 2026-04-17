@@ -21,8 +21,10 @@ module tb_forward;
     .id_ex_rd_i       (id_ex_rd_i),
     .id_ex_rd_wen_i   (id_ex_rd_wen_i),
     .id_ex_is_load_i  (id_ex_is_load_i),
+    .id_ex_rd_fp_i    (1'b0),
     .ex_mem_rd_i      (ex_mem_rd_i),
     .ex_mem_rd_wen_i  (ex_mem_rd_wen_i),
+    .ex_mem_rd_fp_i   (1'b0),
     .fwd_rs1_sel_o    (fwd_rs1_sel_o),
     .fwd_rs2_sel_o    (fwd_rs2_sel_o)
   );

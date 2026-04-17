@@ -11,63 +11,74 @@ submodule, replacing the Ibex core.
 
 Development follows a staged learning progression:
 
-| Stage | Description                          | ISA              | Status      |
-|-------|--------------------------------------|------------------|-------------|
-| 0     | Single-cycle golden model            | RV32I            | Complete    |
-| 1     | 5-stage in-order pipeline            | RV32I            | In progress |
-| 2     | M extension + CSR hardening          | RV32IM           | Planned     |
-| 3     | C extension + branch predictor       | RV32IMC          | Planned     |
-| 4     | RV64I + A extension                  | RV64IMAC         | Planned     |
-| 5     | F/D extensions (floating point)      | RV64IMAFDС       | Planned     |
-| 6     | Out-of-order execution (BOOM style)  | RV64IMAFDС       | Planned     |
+| Stage | Description                                     | ISA              | Bus  | Status   |
+|-------|-------------------------------------------------|------------------|------|----------|
+| 0     | Single-cycle golden model                       | RV32I            | OBI  | Complete |
+| 1     | 5-stage in-order pipeline                       | RV32I            | OBI  | Complete |
+| 2     | M extension + CSR hardening                     | RV32IM           | OBI  | Complete |
+| 3     | AXI4 switch + C extension + branch predictor    | RV32IMC          | AXI4 | Complete |
+| 4     | RV64I + A extension                             | RV64IMAC         | AXI4 | Complete |
+| 5a    | F/D extensions (pipelined, no FDIV/FSQRT)       | RV64IMAFD        | AXI4 | Complete |
+| 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4 | Complete |
+| 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4 | Planned  |
+
+All five completed stages pass the full `riscv-arch-test` (ACT4) compliance
+suite. See *ACT4 compliance* below.
 
 ## Repository Structure
 
+See `README.md` for the full tree. In brief:
+
 ```
 kronos-riscv/
-├── rtl/
-│   ├── kronos_pkg.sv          # Shared enums, structs, types
-│   └── stage0/                # Stage 0: single-cycle golden model
-├── tb/
-│   ├── tb_pkg.sv              # Shared testbench tasks
-│   └── stage0/                # Stage 0 testbenches
-├── sw/
-│   └── stage0/                # Stage 0 test programs (assembly)
+├── rtl/{kronos_pkg.sv, stage0/ … stage5/}   # per-stage RTL + shared pkg
+├── tb/{tb_pkg.sv, stage0/ … stage5/}        # per-stage testbenches
+├── sw/{stage0/ … stage5b/}                  # RISC-V assembly tests
 ├── sim/
-│   ├── Makefile               # Verilator build and run
-│   └── sim_main.cpp           # C++ simulation driver (OBI memory model)
-├── docs/
-│   └── superpowers/           # Design specs and plans (gitignored)
-└── kronos_riscv.core          # FuseSoC core descriptor
+│   ├── Makefile                             # Verilator build + test targets
+│   ├── sim_main.cpp / sim_main_obi.cpp      # AXI4 / OBI memory models
+│   ├── run_arch_test_s{1..5}.sh             # ACT4 per-test runner (+ timeout)
+│   └── obj_dir/                             # build artifacts
+├── riscv-arch-test/                         # git submodule (ACT4)
+├── .github/workflows/sim.yml                # sim-all + compliance matrix CI
+├── docs/                                    # specs (gitignored content)
+└── kronos_riscv.core                        # FuseSoC core descriptor
 ```
 
 ## Bus Interface
 
-**Stages 0–5:** OBI (Open Bus Interface) — req/gnt/rvalid handshake, one
+**Stages 0–2:** OBI (Open Bus Interface) — req/gnt/rvalid handshake, one
 outstanding transaction per port. Two ports: instruction fetch (read-only) and
 data (read/write).
 
-**Stage 6:** Native AXI4 — the OOO LSU needs multiple outstanding requests.
-The core will connect directly to the OpenSoC AXI crossbar at that stage.
+**Stages 3–5:** Native AXI4 — single-outstanding AXI4 master ports (one
+in-flight transaction per channel), instruction and data on separate ports.
+
+**Stage 6:** Native AXI4 with multiple outstanding IDs — the OOO LSU issues
+multiple in-flight memory requests with tagged, out-of-order responses.
 
 ## Build Commands
 
 All builds use FuseSoC and Verilator running under WSL/Linux.
 
 ```bash
-# Lint RTL
-fusesoc --cores-root=. run --target=lint opensoc:ip:kronos_riscv
+# Lint RTL (stage 5 is the default target)
+fusesoc --cores-root=. run --target=lint  opensoc:ip:kronos_riscv
+fusesoc --cores-root=. run --target=lint-s4 opensoc:ip:kronos_riscv
+fusesoc --cores-root=. run --target=lint-s3 opensoc:ip:kronos_riscv
 
-# Build simulator (from sim/ directory)
-cd sim && make build
+# Build per-stage simulators (from sim/)
+cd sim && make build-s1   # RV32I
+cd sim && make build-s2   # RV32IM
+cd sim && make build-s3   # RV32IMC + AXI4
+cd sim && make build-s4   # RV64IMAC
+cd sim && make build-s5   # RV64IMAFD
 
-# Run a specific test
-cd sim && make run-<test_name>
+# Full parallel regression (unit TBs + stage-4 assembly tests)
+cd sim && make sim-all
 
-# Run all unit tests
-cd sim && make sim-alu
-cd sim && make sim-decode
-cd sim && make sim-regfile
+# ACT4 compliance (see section below)
+cd sim && make sim-arch-test-s1   # through -s5
 ```
 
 ## Toolchain
@@ -76,7 +87,9 @@ cd sim && make sim-regfile
 - RISC-V compiler: `riscv64-unknown-elf-gcc`
   - RV32I programs: `-march=rv32i -mabi=ilp32`
   - RV64 programs (Stage 4+): `-march=rv64imac -mabi=lp64`
-- Compliance tests: `riscv-arch-test` (gitignored, clone separately)
+- Compliance tests: `riscv-arch-test` — tracked as a git submodule at
+  `riscv-arch-test/`. ELF generation requires `uv` and the Sail reference
+  model (`sail_riscv_sim` plus the `sail_riscv_sim_timeout` wrapper).
 
 ## Stage Development Rules
 
@@ -89,9 +102,49 @@ cd sim && make sim-regfile
 ## Testing Strategy
 
 - Unit testbenches: one per RTL module (tb/stage0/tb_alu.sv, etc.)
-- Integration: `sim/sim_main.cpp` (C++ Verilator driver) runs assembly programs via the OBI memory model
+- Integration: `sim/sim_main.cpp` (AXI4) and `sim/sim_main_obi.cpp` (OBI) —
+  C++ Verilator drivers run assembly programs via the appropriate memory model
 - Self-checking assembly: test programs store failure count in x10; x10=0 = pass
 - Golden model diffing: from Stage 1 onward, diff register state against Stage 0
+- ACT4 compliance: every stage passes the official `riscv-arch-test` suite
+  (see *ACT4 compliance* below)
+
+## ACT4 compliance
+
+The `riscv-arch-test` submodule is built and run via `sim/Makefile`:
+
+```bash
+cd sim && make sim-arch-test-s1   # 46 tests   (RV32I)
+cd sim && make sim-arch-test-s2   # 54 tests   (RV32IM)
+cd sim && make sim-arch-test-s3   # 81 tests   (RV32IMC)
+cd sim && make sim-arch-test-s4   # 104 tests  (RV64IMAC)
+cd sim && make sim-arch-test-s5   # 303 tests  (RV64IMAFDC)
+```
+
+Each target calls `uv run act …` to regenerate ELFs (needs `sail_riscv_sim`
+on PATH) and then `run_tests.py` to execute them.
+
+Per-test timeouts are enforced by `sim/run_arch_test_s<N>.sh`:
+- `SIM_MAX_CYCLES=5000000` (override via env) — ≈4× the slowest observed test
+- Wall-clock `timeout 60s` — safety net under `run_tests.py`'s 5-minute bound
+
+The same targets run as a matrix job in `.github/workflows/sim.yml`
+(`compliance-s1` … `compliance-s5`).  On failure, logs from
+`riscv-arch-test/work/*/logs` are uploaded as a GitHub Actions artifact.
+
+## Debugging Simulations
+
+When debugging, always enable verbose simulation output from the start rather than running a plain simulation first. Use the appropriate environment variables:
+
+```bash
+# Stage 5 (AXI, sim_main.cpp):
+SIM_DEBUG=1 SIM_PC_RANGE=<lo_hex>-<hi_hex> ./sim/obj_dir/s5/Vsim_top <hex> [instr_lat] [data_lat]
+
+# ACT4 compliance runner (sim_main_obi.cpp) — set SIM_DEBUG in the shell before running make:
+SIM_DEBUG=1 make run-s5-<test>
+```
+
+Never run a simulation twice in a row just to get different output — set the debug flags before the first run.
 
 ## Worktrees
 

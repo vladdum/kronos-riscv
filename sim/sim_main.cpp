@@ -12,12 +12,17 @@
 #include "Vsim_top.h"
 #include "Vsim_top___024root.h"
 #include "verilated.h"
+#if VM_TRACE
+#include "verilated_vcd_c.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 
-// 256 KB memory (byte-addressable, word-aligned access)
-static uint32_t mem[65536];
+// 2 MB memory (byte-addressable, word-aligned access). ACT4 FMA tests carry
+// multi-hundred-KB .data tables (FP edge-case vectors), so 256 KB wraps and
+// corrupts the reset vector. 2 MB comfortably holds every current test.
+static uint32_t mem[524288]; // 524288 words = 2 MB
 
 // Parse Intel HEX format (unchanged from stage2)
 static void load_hex(const char* path) {
@@ -36,7 +41,7 @@ static void load_hex(const char* path) {
             uint32_t full_addr = base_addr + addr16;
             for (unsigned i = 0; i < byte_count; i++) {
                 unsigned byte = 0; sscanf(line + 9 + i*2, "%02x", &byte);
-                uint32_t wi = (full_addr/4) & 0xFFFF, bo = full_addr%4;
+                uint32_t wi = (full_addr/4) & 0x7FFFF, bo = full_addr%4;
                 mem[wi] = (mem[wi] & ~(0xFFu << (bo*8))) | ((uint32_t)byte << (bo*8));
                 full_addr++;
             }
@@ -80,6 +85,25 @@ int main(int argc, char** argv) {
 
     Vsim_top* top = new Vsim_top;
 
+#if VM_TRACE
+    VerilatedVcdC* vcd = nullptr;
+    uint32_t vcd_lo = 0, vcd_hi = 0xFFFFFFFFu;
+    const char* vcd_path = getenv("SIM_VCD");
+    const char* vcd_range = getenv("SIM_VCD_CYCLES");
+    if (vcd_path) {
+        if (vcd_range) {
+            unsigned lo = 0, hi = 0;
+            if (sscanf(vcd_range, "%u-%u", &lo, &hi) == 2) {
+                vcd_lo = lo; vcd_hi = hi;
+            }
+        }
+        Verilated::traceEverOn(true);
+        vcd = new VerilatedVcdC;
+        top->trace(vcd, 99);
+        vcd->open(vcd_path);
+    }
+#endif
+
     // Initialise all inputs
     top->clk_i           = 0;
     top->rst_ni          = 0;
@@ -104,7 +128,9 @@ int main(int argc, char** argv) {
     AxiRead  instr_r, data_r;
     AxiWrite data_w;
 
-    const int MAX_CYCLES = 20000000;
+    int MAX_CYCLES = 20000000;
+    const char* max_env = getenv("SIM_MAX_CYCLES");
+    if (max_env) MAX_CYCLES = atoi(max_env);
     int halted = 0;
     uint32_t halt_x10 = 0;
     // irq_countdown: cycles remaining for irq_timer_i to stay asserted.
@@ -114,6 +140,14 @@ int main(int argc, char** argv) {
     const int IRQ_HOLD = INSTR_LAT * 4 + DATA_LAT + 4;
 
     bool debug = (getenv("SIM_DEBUG") != nullptr);
+    uint32_t dbg_pc_lo = 0, dbg_pc_hi = 0xFFFFFFFFu;
+    const char* pc_range_env = getenv("SIM_PC_RANGE");
+    if (pc_range_env) {
+        unsigned lo = 0, hi = 0;
+        if (sscanf(pc_range_env, "%x-%x", &lo, &hi) == 2) {
+            dbg_pc_lo = lo; dbg_pc_hi = hi;
+        }
+    }
 
     for (int cycle = 0; cycle < MAX_CYCLES && !halted; cycle++) {
 
@@ -161,6 +195,7 @@ int main(int argc, char** argv) {
 
         if (debug) {
             uint32_t pc   = top->rootp->sim_top__DOT__u_top__DOT__pc_q;
+            if (pc >= dbg_pc_lo && pc <= dbg_pc_hi) {
             uint8_t  al_v = top->rootp->sim_top__DOT__u_top__DOT__align_instr_valid;
             uint32_t ins  = top->rootp->sim_top__DOT__u_top__DOT__align_instr;
             uint8_t  redir = top->rootp->sim_top__DOT__u_top__DOT__ex_redirect;
@@ -181,6 +216,7 @@ int main(int argc, char** argv) {
             printf("C%05d: pc=%08x al_v=%d ins=%08x redir=%d epc=%08x\n",
                    cycle, pc, al_v, ins, redir, epc);
 #endif
+            } // end pc range check
         }
 
         // ---- Detect handshakes from pre-clock combinatorial state ----
@@ -192,7 +228,7 @@ int main(int argc, char** argv) {
                         cycle, (unsigned)top->instr_ar_addr_o);
                 return 1;
             }
-            uint32_t wa = (top->instr_ar_addr_o >> 2) & 0xFFFF;
+            uint32_t wa = (top->instr_ar_addr_o >> 2) & 0x7FFFF;
             instr_r.pending = true;
             instr_r.data    = mem[wa];
             instr_r.fire_at = cycle + INSTR_LAT;
@@ -209,10 +245,16 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "[AXI] FATAL: duplicate data AR at cycle %d\n", cycle);
                 return 1;
             }
-            uint32_t wa = (top->data_ar_addr_o >> 2) & 0xFFFF;
+            uint32_t wa = (top->data_ar_addr_o >> 2) & 0x7FFFF;
             data_r.pending = true;
             data_r.data    = mem[wa];
             data_r.fire_at = cycle + DATA_LAT;
+            if (debug) {
+                uint32_t addr = top->data_ar_addr_o;
+                uint32_t pc = top->rootp->sim_top__DOT__u_top__DOT__pc_q;
+                fprintf(stderr, "[MEM] C%05d pc=%08x R  addr=%08x data=%08x\n",
+                        cycle, pc, addr, mem[wa]);
+            }
         }
 
         // Data R handshake complete
@@ -254,7 +296,7 @@ int main(int argc, char** argv) {
                 printf("[sim] halt at cycle %d, x10 = %u\n", cycle, wdat);
                 halted = 1;
             } else {
-                uint32_t wi  = (waddr >> 2) & 0xFFFF;
+                uint32_t wi  = (waddr >> 2) & 0x7FFFF;
                 uint32_t cur = mem[wi];
                 if (be & 1) cur = (cur & ~0x000000FFu) | (wdat & 0x000000FFu);
                 if (be & 2) cur = (cur & ~0x0000FF00u) | (wdat & 0x0000FF00u);
@@ -283,16 +325,29 @@ int main(int argc, char** argv) {
         // ---- Rising edge ----
         top->clk_i = 1;
         top->eval();
+#if VM_TRACE
+        if (vcd && (unsigned)cycle >= vcd_lo && (unsigned)cycle <= vcd_hi) {
+            vcd->dump((vluint64_t)cycle * 10);
+        }
+#endif
 
         // ---- Falling edge ----
         top->clk_i = 0;
         top->eval();
+#if VM_TRACE
+        if (vcd && (unsigned)cycle >= vcd_lo && (unsigned)cycle <= vcd_hi) {
+            vcd->dump((vluint64_t)cycle * 10 + 5);
+        }
+#endif
     }
 
     if (!halted) {
         fprintf(stderr, "[sim] TIMEOUT after %d cycles\n", MAX_CYCLES);
     }
 
+#if VM_TRACE
+    if (vcd) { vcd->close(); delete vcd; }
+#endif
     top->final();
     delete top;
     return (halted && halt_x10 == 0) ? 0 : 1;

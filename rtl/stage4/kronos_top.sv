@@ -148,6 +148,8 @@ module kronos_top
     .id_ex_is_load_i  (id_ex_q.dec.wb_sel == WB_MEM),
     .ex_mem_rd_i      (ex_mem_q.dec.rd),
     .ex_mem_rd_wen_i  (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
+    .id_ex_rd_fp_i    (1'b0),
+    .ex_mem_rd_fp_i   (1'b0),
     .fwd_rs1_sel_o    (fwd_rs1_sel),
     .fwd_rs2_sel_o    (fwd_rs2_sel)
   );
@@ -213,7 +215,12 @@ module kronos_top
   kronos_csr #(.MISA_EXT(26'h1105)) u_csr (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
-    .req_i         (id_ex_q.valid & id_ex_q.dec.is_csr),
+    // Gate req_i with ~combined_stall too: without this, the CSR write
+    // fires every cycle the pipeline stalls, so a second firing reloads
+    // rdata_o with the already-written value.  The EX/MEM latch then
+    // captures the post-write value instead of the pre-write one, which
+    // breaks csrrw/csrrs/csrrc semantics.
+    .req_i         (id_ex_q.valid & id_ex_q.dec.is_csr & ~combined_stall),
     .addr_i        (id_ex_q.dec.csr_addr),
     .funct3_i      (id_ex_q.dec.csr_funct3),
     .use_imm_i     (id_ex_q.dec.csr_use_imm),
@@ -385,13 +392,15 @@ module kronos_top
   always_comb begin
     unique case (id_ex_q.fwd_rs1_sel)
       FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data;
-      FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result;
+      FWD_EXMEM: fwd_rs1_data = (ex_mem_q.dec.wb_sel == WB_CSR)
+                                 ? ex_mem_q.csr_rdata : ex_mem_q.alu_result;
       FWD_MEMWB: fwd_rs1_data = wb_result_64;
       default:   fwd_rs1_data = id_ex_q.rs1_data;
     endcase
     unique case (id_ex_q.fwd_rs2_sel)
       FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data;
-      FWD_EXMEM: fwd_rs2_data = ex_mem_q.alu_result;
+      FWD_EXMEM: fwd_rs2_data = (ex_mem_q.dec.wb_sel == WB_CSR)
+                                 ? ex_mem_q.csr_rdata : ex_mem_q.alu_result;
       FWD_MEMWB: fwd_rs2_data = wb_result_64;
       default:   fwd_rs2_data = id_ex_q.rs2_data;
     endcase
@@ -511,13 +520,39 @@ module kronos_top
   end
 
   // =========================================================================
-  // WB→ID bypass (64-bit)
+  // ID-stage integer bypass (64-bit)
   // =========================================================================
+  // Priority: EX-stage > MEM-stage > WB-stage > regfile.
+  // Captures the producer's current value into id_ex_q.rs1/rs2_data when the
+  // pipeline advances, so stalls between ID and EX never read a stale regfile
+  // value.  rd_wen guards against B-type (BRANCH) / S-type (STORE) rd fields
+  // which hold immediate bits, not a real destination.
   assign wb_writing  = mem_wb_q.valid & mem_wb_q.dec.rd_wen & (mem_wb_q.dec.rd != 5'd0);
-  assign rs1_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs1)
-                         ? wb_result_64 : rs1_rdata_64;
-  assign rs2_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs2)
-                         ? wb_result_64 : rs2_rdata_64;
+
+  // Exclude WB_MEM producers (LOAD, LR, SC, AMO) from the EX/MEM bypasses —
+  // their rd value comes from memory, not ex_result/alu_result.  WB-stage
+  // bypass (wb_writing) handles them correctly via wb_result_64.
+  assign rs1_data_id =
+      (id_ex_q.valid & id_ex_q.dec.rd_wen & (id_ex_q.dec.wb_sel != WB_MEM) &
+       (id_ex_q.dec.rd != 5'd0) & (id_ex_q.dec.rd == id_dec.rs1))   ?
+           (id_ex_q.dec.wb_sel == WB_CSR ? csr_rdata : ex_result)   :
+      (ex_mem_q.valid & ex_mem_q.dec.rd_wen & (ex_mem_q.dec.wb_sel != WB_MEM) &
+       (ex_mem_q.dec.rd != 5'd0) & (ex_mem_q.dec.rd == id_dec.rs1)) ?
+           (ex_mem_q.dec.wb_sel == WB_CSR
+              ? ex_mem_q.csr_rdata : ex_mem_q.alu_result)           :
+      (wb_writing && mem_wb_q.dec.rd == id_dec.rs1)                 ? wb_result_64 :
+                                                                      rs1_rdata_64;
+
+  assign rs2_data_id =
+      (id_ex_q.valid & id_ex_q.dec.rd_wen & (id_ex_q.dec.wb_sel != WB_MEM) &
+       (id_ex_q.dec.rd != 5'd0) & (id_ex_q.dec.rd == id_dec.rs2))   ?
+           (id_ex_q.dec.wb_sel == WB_CSR ? csr_rdata : ex_result)   :
+      (ex_mem_q.valid & ex_mem_q.dec.rd_wen & (ex_mem_q.dec.wb_sel != WB_MEM) &
+       (ex_mem_q.dec.rd != 5'd0) & (ex_mem_q.dec.rd == id_dec.rs2)) ?
+           (ex_mem_q.dec.wb_sel == WB_CSR
+              ? ex_mem_q.csr_rdata : ex_mem_q.alu_result)           :
+      (wb_writing && mem_wb_q.dec.rd == id_dec.rs2)                 ? wb_result_64 :
+                                                                      rs2_rdata_64;
 
   // =========================================================================
   // WB stage (64-bit)

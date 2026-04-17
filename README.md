@@ -110,7 +110,11 @@ kronos-riscv/
 │   └── stage5b/               # Stage 5b FDIV/FSQRT test programs
 ├── sim/
 │   ├── Makefile               # Verilator build and run targets
-│   └── sim_main.cpp           # C++ simulation driver
+│   ├── sim_main.cpp           # AXI4 C++ simulation driver (stages 3–5)
+│   ├── sim_main_obi.cpp       # OBI C++ simulation driver (stages 0–2)
+│   └── run_arch_test_s{1..5}.sh   # ACT4 per-test runner (SIM_MAX_CYCLES + timeout)
+├── riscv-arch-test/           # git submodule (official ACT4 compliance suite)
+├── .github/workflows/sim.yml  # sim-all + compliance-s{1..5} matrix CI
 ├── tools/
 │   └── coverage_gate.py       # LCOV line-coverage gate (≥95% threshold)
 ├── kronos_riscv.core          # FuseSoC core descriptor (active: stage5)
@@ -185,6 +189,43 @@ cd sim && make sim-forward   # forwarding unit
 cd sim && make sim-hazard    # hazard/stall control
 cd sim && make sim-lsu-s1    # LSU OBI FSM
 ```
+
+## ACT4 compliance
+
+All five completed stages pass the official
+[`riscv-arch-test`](https://github.com/riscv-non-isa/riscv-arch-test) (ACT4)
+suite, tracked as a git submodule at `riscv-arch-test/`.
+
+| Stage | Config                | Tests   |
+|-------|-----------------------|---------|
+| s1    | `kronos-rv32i`        | 46/46   |
+| s2    | `kronos-rv32im`       | 54/54   |
+| s3    | `kronos-rv32imc`      | 81/81   |
+| s4    | `kronos-rv64imac`     | 104/104 |
+| s5    | `kronos-rv64imafd`    | 303/303 |
+
+```bash
+cd sim && make sim-arch-test-s1    # …-s2 …-s3 …-s4 …-s5
+```
+
+Each `sim-arch-test-s<N>` target regenerates ELFs via `uv run act …` (requires
+the [Sail reference model](https://github.com/riscv/sail-riscv) with a
+`sail_riscv_sim_timeout` wrapper on `$PATH`) and then runs every ELF through
+the per-stage Verilator binary. Per-test limits live in
+`sim/run_arch_test_s<N>.sh`:
+
+- `SIM_MAX_CYCLES=5_000_000` — ≈4× the slowest observed test, override via env
+- `timeout 60s` — wall-clock safety net under `run_tests.py`'s 5 min bound
+
+## Continuous integration
+
+`.github/workflows/sim.yml` runs on every push and PR:
+
+- `sim-all` — Verilator lint, unit TBs, stage-4 regression
+- `compliance-s{1..5}` — matrix job; installs Verilator, the official RISC-V
+  GCC release, the Sail reference model and `uv`, then runs
+  `make sim-arch-test-s<N>` for its stage. On failure, the per-stage
+  `riscv-arch-test/work/*/logs` directory is uploaded as an artifact.
 
 ## Integration with OpenSoC
 

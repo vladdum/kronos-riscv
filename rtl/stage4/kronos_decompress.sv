@@ -107,18 +107,18 @@ module kronos_decompress (
         unique case (funct3)
 
           3'b000: begin  // C.NOP / C.ADDI → ADDI rd, rd, nzimm
-            nzimm = {{26{instr16_i[12]}}, instr16_i[6:2]};
+            nzimm = {{27{instr16_i[12]}}, instr16_i[6:2]};
             instr32_o = {nzimm[11:0], rd, 3'b000, rd, OP_IMM};
           end
 
           3'b001: begin  // RV64C: C.ADDIW → ADDIW rd, rd, imm  (C.JAL removed in RV64)
-            imm = {{26{instr16_i[12]}}, instr16_i[6:2]};
+            imm = {{27{instr16_i[12]}}, instr16_i[6:2]};
             if (rd == 5'd0) illegal_o = 1'b1;
             else instr32_o = {imm[11:0], rd, 3'b000, rd, OP_IMM_32};
           end
 
           3'b010: begin  // C.LI → ADDI rd, x0, imm
-            imm = {{26{instr16_i[12]}}, instr16_i[6:2]};
+            imm = {{27{instr16_i[12]}}, instr16_i[6:2]};
             instr32_o = {imm[11:0], 5'd0, 3'b000, rd, OP_IMM};
           end
 
@@ -152,7 +152,7 @@ module kronos_decompress (
               end
 
               2'b10: begin  // C.ANDI → ANDI rs1', rs1', imm
-                imm = {{26{instr16_i[12]}}, instr16_i[6:2]};
+                imm = {{27{instr16_i[12]}}, instr16_i[6:2]};
                 instr32_o = {imm[11:0], rs1_full, 3'b111, rs1_full, OP_IMM};
               end
 
@@ -187,7 +187,7 @@ module kronos_decompress (
           end
 
           3'b101: begin  // C.J → JAL x0, offset
-            imm = {{10{instr16_i[12]}}, instr16_i[8], instr16_i[10:9],
+            imm = {{21{instr16_i[12]}}, instr16_i[8], instr16_i[10:9],
                    instr16_i[6], instr16_i[7], instr16_i[2], instr16_i[11],
                    instr16_i[5:3], 1'b0};
             instr32_o = {imm[20], imm[10:1], imm[11], imm[19:12],

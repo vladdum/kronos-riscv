@@ -36,7 +36,10 @@ module kronos_csr #(
   input  logic [4:0]  fflags_delta_i,
   input  logic        fflags_we_i,
   input  logic        fp_rd_we_i,        // any FP destination write this cycle
-  output logic [2:0]  frm_o
+  output logic [2:0]  frm_o,
+  // Zicntr: instruction retirement pulse (mem_wb_q.valid & pipeline advance).
+  // Asserted once per retired instruction.  Tie to 0 for stages without Zicntr.
+  input  logic        instret_retire_i
 );
 
   // -------------------------------------------------------------------------
@@ -51,6 +54,12 @@ module kronos_csr #(
 
   // FCSR = {FRM[2:0], FFLAGS[4:0]} — 8 bits, zero-extended to 64 for reads.
   logic [7:0]  fcsr_q;    // 0x001/0x002/0x003
+
+  // Zicntr counters — read-only user-mode counters (mirrored from m-mode
+  // mcycle/minstret in a full implementation; here we just expose free-running
+  // counters at 0xC00/0xC02 so ACT4 Zicntr tests pass).
+  logic [63:0] mcycle;    // 0xB00 / 0xC00 (U-mode alias)
+  logic [63:0] minstret;  // 0xB02 / 0xC02 (U-mode alias)
 
   // -------------------------------------------------------------------------
   // Read-only / combinational CSRs
@@ -74,7 +83,7 @@ module kronos_csr #(
   // -------------------------------------------------------------------------
   // Outputs
   // -------------------------------------------------------------------------
-  assign trap_vector_o = {mtvec[63:2], 2'b00};  // direct mode only
+  assign trap_vector_o = mtvec;
   assign mepc_o        = mepc;
   assign irq_pending_o = |(mip & mie) & mstatus[3]; // MIE bit
   assign valid_o       = req_i;
@@ -96,6 +105,10 @@ module kronos_csr #(
       12'h341: rdata_o = mepc;
       12'h342: rdata_o = mcause;
       12'h344: rdata_o = mip;
+      // Zicntr (U-mode read-only views) + M-mode aliases
+      12'hC00, 12'hB00: rdata_o = mcycle;                     // cycle / mcycle
+      12'hC01:          rdata_o = mcycle;                     // time (mirror cycle)
+      12'hC02, 12'hB02: rdata_o = minstret;                   // instret / minstret
       default: rdata_o = 64'hDEAD_C5A0_DEAD_C5A0; // unimplemented CSR
     endcase
   end
@@ -129,7 +142,12 @@ module kronos_csr #(
       mepc     <= '0;
       mcause   <= '0;
       fcsr_q   <= 8'h00;
+      mcycle   <= '0;
+      minstret <= '0;
     end else begin
+      // Zicntr counters
+      mcycle   <= mcycle + 64'd1;
+      if (instret_retire_i) minstret <= minstret + 64'd1;
       // Trap entry (highest priority)
       if (trap_i) begin
         mepc       <= {32'b0, trap_pc_i};

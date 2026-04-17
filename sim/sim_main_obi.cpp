@@ -129,7 +129,9 @@ int main(int argc, char** argv) {
     fetch_instr();
     prefetch_data();
 
-    const int MAX_CYCLES = 20000000;
+    int MAX_CYCLES = 20000000;
+    const char* max_env = getenv("SIM_MAX_CYCLES");
+    if (max_env) MAX_CYCLES = atoi(max_env);
     int halted = 0;
     uint32_t halt_x10 = 0;
     bool fire_irq = false;
