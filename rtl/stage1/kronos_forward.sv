@@ -25,16 +25,25 @@ module kronos_forward
   // Producer in MEM (will be in WB next cycle — MEM/WB forward)
   input  logic [4:0] ex_mem_rd_i,
   input  logic       ex_mem_rd_wen_i,
+  // FP destination flags: tie 0 in pre-stage5 integer-only pipelines. Suppresses
+  // bypass when the producer writes the FP regfile while the consumer reads
+  // the integer regfile (shared rd index — e.g. FLW ft11 = f31 and ADDI t6 = x31).
+  input  logic       id_ex_rd_fp_i,
+  input  logic       ex_mem_rd_fp_i,
   // Outputs: stored into id_ex_q.fwd_rs1_sel / id_ex_q.fwd_rs2_sel
   output fwd_sel_e   fwd_rs1_sel_o,
   output fwd_sel_e   fwd_rs2_sel_o
 );
 
+  // Integer-forward predicates. rd_fp suppresses bypass so a shared rd index
+  // (e.g. FLW to ft11 = f31 and ADDI to t6 = x31) does not poison the
+  // integer consumer with the FP producer's value.
   logic ex_can_fwd;
-  assign ex_can_fwd = id_ex_rd_wen_i && !id_ex_is_load_i && (id_ex_rd_i != 5'd0);
+  assign ex_can_fwd = id_ex_rd_wen_i && !id_ex_rd_fp_i && !id_ex_is_load_i
+                      && (id_ex_rd_i != 5'd0);
 
   logic mem_can_fwd;
-  assign mem_can_fwd = ex_mem_rd_wen_i && (ex_mem_rd_i != 5'd0);
+  assign mem_can_fwd = ex_mem_rd_wen_i && !ex_mem_rd_fp_i && (ex_mem_rd_i != 5'd0);
 
   always_comb begin
     fwd_rs1_sel_o = FWD_NONE;

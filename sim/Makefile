@@ -170,6 +170,7 @@ $(SIM_BIN): $(SV_FILES) $(abspath sim_main_obi.cpp)
 build-s1: $(SIM_BIN_S1)
 
 $(SIM_BIN_S1): $(SV_FILES_S1) $(abspath sim_main_obi.cpp)
+	mkdir -p $(OBJ_DIR)/s1
 	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED \
 	  --top-module kronos_top \
 	  $(SV_FILES_S1) $(abspath sim_main_obi.cpp) \
@@ -244,6 +245,7 @@ sim-muldiv:
 build-s2: $(SIM_BIN_S2)
 
 $(SIM_BIN_S2): $(SV_FILES_S2) $(abspath sim_main_obi.cpp)
+	mkdir -p $(OBJ_DIR)/s2
 	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND \
 	  --top-module kronos_top \
 	  $(SV_FILES_S2) $(abspath sim_main_obi.cpp) \
@@ -323,6 +325,7 @@ TB_LSU_S3_FILES := $(AXI_PKG_SV) \
 build-s3: $(SIM_BIN_S3)
 
 $(SIM_BIN_S3): $(SV_FILES_S3) $(abspath sim_main.cpp)
+	mkdir -p $(OBJ_DIR)/s3
 	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --top-module $(TOP_S3) \
 	  $(SV_FILES_S3) $(abspath sim_main.cpp) \
@@ -397,6 +400,7 @@ SIM_BIN_S4 := $(OBJ_DIR)/s4/V$(TOP_S4)
 build-s4: $(SIM_BIN_S4)
 
 $(SIM_BIN_S4): $(SV_FILES_S4) $(abspath sim_main.cpp)
+	mkdir -p $(OBJ_DIR)/s4
 	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --top-module $(TOP_S4) \
 	  $(SV_FILES_S4) $(abspath sim_main.cpp) \
@@ -565,7 +569,9 @@ SIM_BIN_S5 := $(OBJ_DIR)/s5/V$(TOP_S5)
 build-s5: $(SIM_BIN_S5)
 
 $(SIM_BIN_S5): $(SV_FILES_S5) $(abspath sim_main.cpp)
-	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED \
+	mkdir -p $(OBJ_DIR)/s5
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	  --trace --public-flat-rw \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S5) $(abspath sim_main.cpp) \
 	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \

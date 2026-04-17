@@ -555,24 +555,27 @@ module kronos_fpu_fcvt
         if (sd_smant[22] == 1'b0) fs_flags[FP_FFLAG_NV] = 1'b1;
         d_result = FP_CANON_QNAN_D;
       end else if (sd_sexp == 8'd0) begin
-        // Subnormal single -> normalised double (always exact, fits)
-        // Find leading 1 in mantissa
+        // Subnormal single -> normalised double (always exact, fits).
+        // If the leading 1 of the 23-bit mantissa is at bit k, shift left by
+        // (22 - k) so that m[k] lands at bit 52 of new_mant (the implicit
+        // leading 1, discarded on output). The result's unbiased exponent
+        // is k - 149 + 0, i.e. biased = k + 874 = 896 - (22 - k).
         integer k;
         logic [22:0] m;
         integer shift_amt;
         m = sd_smant;
-        k = 0;
+        shift_amt = 22;
         for (k = 22; k >= 0; k = k - 1) begin
           if (m[k]) begin
-            shift_amt = 23 - k;
+            shift_amt = 22 - k;
             break;
           end
         end
         begin
           logic [52:0] new_mant;
           logic [10:0] new_exp;
-          new_mant = {m, 30'd0} << shift_amt; // shift so implicit 1 leaves bit 52
-          new_exp  = 11'd1023 - 11'd127 + 11'd1 - shift_amt[10:0];
+          new_mant = {m, 30'd0} << shift_amt;
+          new_exp  = 11'd896 - shift_amt[10:0];
           d_result = {sd_sign, new_exp, new_mant[51:0]};
         end
       end else begin
@@ -600,12 +603,25 @@ module kronos_fpu_fcvt
         // Normal/subnormal double. Exponent range of single: [-126, 127].
         // Build 24-bit sig (with leading 1)
         if (ds_dexp == 11'd0) begin
-          // Subnormal double - effectively zero at single precision if exponent < -126
-          // In practice: underflow/inexact -> zero or subnormal
-          // Simpler: treat as zero with UF+NX
-          s_result = {ds_sign, 31'd0};
-          fs_flags[FP_FFLAG_UF] = 1'b1;
-          fs_flags[FP_FFLAG_NX] = 1'b1;
+          // Subnormal double's magnitude is always strictly less than 0.5 ulp
+          // of the smallest single subnormal (double_subn < 2^-1022 while
+          // 0.5*single_ulp = 2^-150). Rounding is purely direction-driven:
+          //   RUP  + positive  -> +0x00000001
+          //   RDN  + negative  -> 0x80000001 (= sign|0x00000001)
+          //   RNE / RTZ / RMM  -> +/-0 (value is far below the tie point)
+          logic nz_in;
+          nz_in = |ds_dmant; // any non-zero mantissa -> inexact, UF candidate
+          unique case (s1_rm_q)
+            3'b010: s_result = (ds_sign  && nz_in) ? {1'b1, 8'd0, 23'd1}
+                                                   : {ds_sign, 31'd0};
+            3'b011: s_result = (!ds_sign && nz_in) ? {1'b0, 8'd0, 23'd1}
+                                                   : {ds_sign, 31'd0};
+            default: s_result = {ds_sign, 31'd0};
+          endcase
+          if (nz_in) begin
+            fs_flags[FP_FFLAG_UF] = 1'b1;
+            fs_flags[FP_FFLAG_NX] = 1'b1;
+          end
         end else if (ds_unbiased > 13'sd127) begin
           // Overflow
           fs_flags[FP_FFLAG_OF] = 1'b1;

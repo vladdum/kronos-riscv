@@ -171,12 +171,13 @@ module kronos_fpu_fmisc
     cmp_le_d = (!a_nan_d && !b_nan_d) && (a_lt_b_d || cmp_eq_d);
 
     // FCLASS one-hot bits (single or double)
+    // RISC-V spec: bit 8 = signalling NaN, bit 9 = quiet NaN.
     if (fmt_d_i) begin
       // Double
       if (is_snan_d(a_i[62:0]))
-        fclass_bits = 10'b10_0000_0000; // bit 9: sNaN
+        fclass_bits = 10'b01_0000_0000; // bit 8: sNaN
       else if (is_qnan_d(a_i[62:0]))
-        fclass_bits = 10'b01_0000_0000; // bit 8: qNaN
+        fclass_bits = 10'b10_0000_0000; // bit 9: qNaN
       else if (a_i[63] && (a_i[62:52] == 11'h7FF))
         fclass_bits = 10'b00_0000_0001; // bit 0: -inf
       else if (!a_i[63] && (a_i[62:52] == 11'h7FF))
@@ -196,9 +197,9 @@ module kronos_fpu_fmisc
     end else begin
       // Single (use unboxed a_s)
       if (is_snan_s(a_s))
-        fclass_bits = 10'b10_0000_0000; // bit 9: sNaN
+        fclass_bits = 10'b01_0000_0000; // bit 8: sNaN
       else if (is_qnan_s(a_s))
-        fclass_bits = 10'b01_0000_0000; // bit 8: qNaN
+        fclass_bits = 10'b10_0000_0000; // bit 9: qNaN
       else if (a_s[31] && (a_s[30:23] == 8'hFF))
         fclass_bits = 10'b00_0000_0001; // bit 0: -inf
       else if (!a_s[31] && (a_s[30:23] == 8'hFF))
@@ -252,11 +253,16 @@ module kronos_fpu_fmisc
       end
 
       // --- Min/Max ---
+      // Per RISC-V F/D spec (and IEEE 754-2008 minNum/maxNum):
+      //   - Signalling NaN on either operand raises NV, but the result is
+      //     the non-NaN operand unless BOTH are NaN, in which case it is
+      //     the canonical qNaN.
+      //   - Quiet NaN on one operand silently returns the other.
       FP_FMIN: begin
         if (fmt_d_i) begin
-          if (a_snan_d || b_snan_d) begin
+          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_d && b_nan_d) begin
             result_comb = FP_CANON_QNAN_D;
-            fflags_comb[FP_FFLAG_NV] = 1'b1;
           end else if (a_nan_d) begin
             result_comb = b_i;
           end else if (b_nan_d) begin
@@ -270,9 +276,9 @@ module kronos_fpu_fmisc
             end
           end
         end else begin
-          if (a_snan_s || b_snan_s) begin
+          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_s && b_nan_s) begin
             result_comb = {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-            fflags_comb[FP_FFLAG_NV] = 1'b1;
           end else if (a_nan_s) begin
             result_comb = {FP_NANBOX_UPPER, b_s};
           end else if (b_nan_s) begin
@@ -291,9 +297,9 @@ module kronos_fpu_fmisc
 
       FP_FMAX: begin
         if (fmt_d_i) begin
-          if (a_snan_d || b_snan_d) begin
+          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_d && b_nan_d) begin
             result_comb = FP_CANON_QNAN_D;
-            fflags_comb[FP_FFLAG_NV] = 1'b1;
           end else if (a_nan_d) begin
             result_comb = b_i;
           end else if (b_nan_d) begin
@@ -307,9 +313,9 @@ module kronos_fpu_fmisc
             end
           end
         end else begin
-          if (a_snan_s || b_snan_s) begin
+          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_s && b_nan_s) begin
             result_comb = {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-            fflags_comb[FP_FFLAG_NV] = 1'b1;
           end else if (a_nan_s) begin
             result_comb = {FP_NANBOX_UPPER, b_s};
           end else if (b_nan_s) begin

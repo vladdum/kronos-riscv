@@ -212,9 +212,11 @@ module kronos_top
     .if_id_rs2_used_i (id_dec.rs2_used),
     .id_ex_rd_i       (id_ex_q.dec.rd),
     .id_ex_rd_wen_i   (id_ex_q.dec.rd_wen & id_ex_q.valid),
+    .id_ex_rd_fp_i    (id_ex_q.dec.rd_fp),
     .id_ex_is_load_i  (id_ex_q.dec.wb_sel == WB_MEM),
     .ex_mem_rd_i      (ex_mem_q.dec.rd),
     .ex_mem_rd_wen_i  (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
+    .ex_mem_rd_fp_i   (ex_mem_q.dec.rd_fp),
     .fwd_rs1_sel_o    (fwd_rs1_sel),
     .fwd_rs2_sel_o    (fwd_rs2_sel)
   );
@@ -295,7 +297,7 @@ module kronos_top
   kronos_csr #(.MISA_EXT(26'h112D)) u_csr (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
-    .req_i         (id_ex_q.valid & id_ex_q.dec.is_csr),
+    .req_i         (id_ex_q.valid & id_ex_q.dec.is_csr & ~combined_stall),
     .addr_i        (id_ex_q.dec.csr_addr),
     .funct3_i      (id_ex_q.dec.csr_funct3),
     .use_imm_i     (id_ex_q.dec.csr_use_imm),
@@ -320,7 +322,11 @@ module kronos_top
     .fflags_delta_i (fpu_out_valid ? fpu_fflags : 5'b0),
     .fflags_we_i    (fpu_out_valid),
     .fp_rd_we_i     (fp_we),                // drives mstatus.FS=11 on FP writeback
-    .frm_o          (frm)
+    .frm_o          (frm),
+    // Zicntr: pulse once per retired instruction.  Count at the EX→MEM
+    // transition so the count is visible to a csrrc-instret two instructions
+    // later (matches the SAIL reference-model semantics used by ACT4).
+    .instret_retire_i (ex_mem_en & id_ex_q.valid & ~combined_stall)
   );
 
   // STAGE4: 64-bit LSU with AXI4 interface and A-extension stubs.
@@ -565,14 +571,17 @@ module kronos_top
       // MEM/WB bypass: FP result (arithmetic or load) reaching WB
       (id_dec.rs1_fp & fp_we & (fp_wa == id_dec.rs1))           ? fp_wd :
       id_dec.rs1_fp                                              ? fp_rd1 :
-      // Integer EX bypass (0-gap): non-FP, non-load, non-muldiv integer in EX
-      (~id_dec.rs1_fp & id_ex_q.valid & ~id_ex_q.dec.rd_fp &
+      // Integer EX bypass (0-gap): non-FP, non-load, non-muldiv integer in EX.
+      // rd_wen guards against the `rd` field of B-type (BRANCH) and S-type
+      // (STORE) encodings — where instr[11:7] holds immediate bits, not a
+      // real destination — spuriously matching a following rs1.
+      (~id_dec.rs1_fp & id_ex_q.valid & id_ex_q.dec.rd_wen & ~id_ex_q.dec.rd_fp &
        ~id_ex_q.dec.is_load & ~id_ex_q.dec.is_fp &
        (id_ex_q.dec.rd != 5'd0) & (id_ex_q.dec.rd == id_dec.rs1)) ?
            (id_ex_q.dec.wb_sel == WB_CSR ? csr_rdata : ex_result) :
       // Integer MEM bypass: non-load integer result in MEM stage (covers CSR
       // reads and FP→int instructions like fmv.x.w, feq.s, fcvt.w.s)
-      (~id_dec.rs1_fp & ex_mem_q.valid & ~ex_mem_q.dec.rd_fp &
+      (~id_dec.rs1_fp & ex_mem_q.valid & ex_mem_q.dec.rd_wen & ~ex_mem_q.dec.rd_fp &
        ~ex_mem_q.dec.is_load & (ex_mem_q.dec.rd != 5'd0) &
        (ex_mem_q.dec.rd == id_dec.rs1))                         ?
            (ex_mem_q.dec.wb_sel == WB_CSR ? ex_mem_q.csr_rdata : ex_mem_q.alu_result) :
@@ -586,13 +595,14 @@ module kronos_top
        (ex_mem_q.dec.rd == id_dec.rs2))                         ? ex_mem_q.alu_result :
       (id_dec.rs2_fp & fp_we & (fp_wa == id_dec.rs2))           ? fp_wd :
       id_dec.rs2_fp                                              ? fp_rd2 :
-      // Integer EX bypass (0-gap): non-FP, non-load integer in EX stage
-      (~id_dec.rs2_fp & id_ex_q.valid & ~id_ex_q.dec.rd_fp &
+      // Integer EX bypass (0-gap): non-FP, non-load integer in EX stage.
+      // See rs1 path above for the rd_wen guard rationale.
+      (~id_dec.rs2_fp & id_ex_q.valid & id_ex_q.dec.rd_wen & ~id_ex_q.dec.rd_fp &
        ~id_ex_q.dec.is_load & ~id_ex_q.dec.is_fp &
        (id_ex_q.dec.rd != 5'd0) & (id_ex_q.dec.rd == id_dec.rs2)) ?
            (id_ex_q.dec.wb_sel == WB_CSR ? csr_rdata : ex_result) :
       // Integer MEM bypass: non-load integer result in MEM stage
-      (~id_dec.rs2_fp & ex_mem_q.valid & ~ex_mem_q.dec.rd_fp &
+      (~id_dec.rs2_fp & ex_mem_q.valid & ex_mem_q.dec.rd_wen & ~ex_mem_q.dec.rd_fp &
        ~ex_mem_q.dec.is_load & (ex_mem_q.dec.rd != 5'd0) &
        (ex_mem_q.dec.rd == id_dec.rs2))                         ?
            (ex_mem_q.dec.wb_sel == WB_CSR ? ex_mem_q.csr_rdata : ex_mem_q.alu_result) :

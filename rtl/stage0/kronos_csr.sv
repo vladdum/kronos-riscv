@@ -58,7 +58,11 @@ module kronos_csr #(
   // -------------------------------------------------------------------------
   // Outputs
   // -------------------------------------------------------------------------
-  assign trap_vector_o = {mtvec[31:2], 2'b00};  // direct mode only
+  // Pass mtvec through unchanged.  The ACT4 test framework's RVMODEL_BOOT may
+  // install _kronos_trap_handler at a 2-byte boundary when `j _kronos_boot_done`
+  // is compressed to c.j despite `.option norvc`, so bit[1] of mtvec is part
+  // of the actual handler address, not a MODE field.
+  assign trap_vector_o = mtvec;
   assign mepc_o        = mepc;
   assign irq_pending_o = |(mip & mie) & mstatus[3]; // MIE bit
   assign valid_o       = req_i;

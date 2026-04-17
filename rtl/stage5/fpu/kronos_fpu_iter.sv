@@ -311,8 +311,14 @@ module kronos_fpu_iter
         is_special     = 1'b1;
         special_result = sp_qnan;
         special_fflags = FL_NV;
+      end else if (a_class.is_inf) begin
+        // inf / x (x finite, incl. zero) -> signed inf, no flags.
+        // Must precede b_class.is_zero so inf/0 does NOT raise DZ.
+        is_special     = 1'b1;
+        special_result = sp_signed_inf;
+        special_fflags = '0;
       end else if (b_class.is_zero) begin
-        // x / 0 (x finite, non-zero) -> signed inf, DZ
+        // x / 0 (x finite non-zero) -> signed inf, DZ
         is_special     = 1'b1;
         special_result = sp_signed_inf;
         special_fflags = FL_DZ;
@@ -320,11 +326,6 @@ module kronos_fpu_iter
         // 0 / x (x finite, non-zero) -> signed zero
         is_special     = 1'b1;
         special_result = sp_signed_zero;
-        special_fflags = '0;
-      end else if (a_class.is_inf) begin
-        // inf / x (x finite) -> signed inf
-        is_special     = 1'b1;
-        special_result = sp_signed_inf;
         special_fflags = '0;
       end else if (b_class.is_inf) begin
         // x / inf (x finite) -> signed zero

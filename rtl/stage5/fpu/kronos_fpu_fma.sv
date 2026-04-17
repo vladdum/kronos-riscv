@@ -171,8 +171,10 @@ module kronos_fpu_fma
       s1_c_snan = is_snan_s(c_s);
     end
 
+    // FMADD = a*b + c, FMSUB = a*b - c, FNMSUB = -(a*b) + c, FNMADD = -(a*b) - c.
+    // FNMADD needs both the product AND the addend negated.
     s1_negate_product = (op_i == FP_FNMADD) || (op_i == FP_FNMSUB);
-    s1_negate_addend  = (op_i == FP_FMSUB)  || (op_i == FP_FNMSUB);
+    s1_negate_addend  = (op_i == FP_FMSUB)  || (op_i == FP_FNMADD);
 
     s1_prod_sign   = s1_a_sign ^ s1_b_sign ^ s1_negate_product;
     s1_addend_sign = s1_c_sign ^ s1_negate_addend;
@@ -650,21 +652,32 @@ module kronos_fpu_fma
     logic [52:0]        raw_sig;
     logic [SUM_W-1:0]   mag;
     logic signed [12:0] exp;
+    logic signed [12:0] exp_pre_tiny;
     logic               guard;
     logic               round_b;
     logic               sticky;
     logic               round_up;
-    logic [52:0]        rounded_sig;
+    logic [53:0]        rounded_sig; // 54 bits so carry-out of rounding survives
     logic               inexact;
     logic               overflow_ovf;
     logic               tiny;
     int unsigned        shift_right_amt;
+    int unsigned        normal_shift;
     int unsigned        i;
     logic [SUM_W-1:0]   pre_mag;
     logic [52:0]        final_sig;
     logic signed [12:0] final_exp;
     logic [10:0]        exp_field_d;
     logic [7:0]         exp_field_s;
+    // IEEE 754(b) normal-scale rounding (for UF detection):
+    //   "tininess after rounding" uses rounding with unbounded exponent
+    //   range.  If normal-scale rounding carries from all-1s mantissa up
+    //   to 2.0, the rounded value sits at exactly 2^emin and is NOT tiny.
+    logic [52:0]        raw_sig_n;
+    logic               guard_n, round_n, sticky_n;
+    logic               round_up_n;
+    logic               carry_n;
+    logic [SUM_W-1:0]   pre_mag_n;
 
     frac_w        = 0;
     bias          = 0;
@@ -673,6 +686,7 @@ module kronos_fpu_fma
     raw_sig       = '0;
     mag           = '0;
     exp           = '0;
+    exp_pre_tiny  = '0;
     guard         = 1'b0;
     round_b       = 1'b0;
     sticky        = 1'b0;
@@ -682,12 +696,20 @@ module kronos_fpu_fma
     overflow_ovf  = 1'b0;
     tiny          = 1'b0;
     shift_right_amt = 0;
+    normal_shift  = 0;
     i             = 0;
     pre_mag       = '0;
     final_sig     = '0;
     final_exp     = '0;
     exp_field_d   = '0;
     exp_field_s   = '0;
+    raw_sig_n     = '0;
+    guard_n       = 1'b0;
+    round_n       = 1'b0;
+    sticky_n      = 1'b0;
+    round_up_n    = 1'b0;
+    carry_n       = 1'b0;
+    pre_mag_n     = '0;
 
     s5_result_comb = '0;
     s5_flags_comb  = s5_special_flags;
@@ -736,11 +758,13 @@ module kronos_fpu_fma
       // position frac_w: shift_right_amt = msb_pos - frac_w.  For subnormal
       // outputs (exp < emin), shift by an extra (emin - exp) and force exp=0.
       if ({1'b0, s5_msb_pos} >= 10'(frac_w))
-        shift_right_amt = {23'd0, s5_msb_pos} - frac_w;
+        normal_shift = {23'd0, s5_msb_pos} - frac_w;
       else
-        shift_right_amt = 0;
+        normal_shift = 0;
+      shift_right_amt = normal_shift;
 
       tiny = 1'b0;
+      exp_pre_tiny = exp;
       if (exp < emin) begin
         shift_right_amt = shift_right_amt + 32'(emin - exp);
         exp  = 0;
@@ -797,14 +821,14 @@ module kronos_fpu_fma
         default: round_up = 1'b0;
       endcase
 
-      rounded_sig = raw_sig + (round_up ? 53'd1 : 53'd0);
+      rounded_sig = {1'b0, raw_sig} + (round_up ? 54'd1 : 54'd0);
       final_exp   = exp;
-      final_sig   = rounded_sig;
+      final_sig   = rounded_sig[52:0];
 
       // If rounding overflowed the significand (now has bit frac_w+1),
       // shift right by 1 and bump exponent.
       if (rounded_sig[frac_w + 1]) begin
-        final_sig = rounded_sig >> 1;
+        final_sig = rounded_sig[53:1];
         final_exp = exp + 1;
       end
 
@@ -820,10 +844,70 @@ module kronos_fpu_fma
         overflow_ovf = 1'b1;
       end
 
-      // Underflow flag: tiny AND inexact (IEEE 754 tininess after rounding is
-      // detected by final_sig[frac_w] being 0 after rounding).
-      if (tiny && inexact && !final_sig[frac_w]) begin
-        s5_flags_comb[FP_FFLAG_UF] = 1'b1;
+      // Underflow flag: RISC-V uses "tininess after rounding" (IEEE 754
+      // alternative (b) -- round with the format precision but unbounded
+      // exponent range, then check if the rounded magnitude is strictly
+      // below 2^emin).  When the subnormal-scale rounding differs from
+      // the normal-scale rounding (i.e. when the 24/53-bit normal-scale
+      // mantissa is all ones and rounds up, carrying to 2.0), the
+      // unbounded-exponent rounded value lands exactly at 2^emin and is
+      // NOT tiny -- even though the subnormal encoding bumps to the
+      // smallest normal.
+      if (tiny && inexact) begin
+        // Extract normal-scale round bits from mag at normal_shift.
+        if (normal_shift >= SUM_W) begin
+          raw_sig_n = '0;
+          guard_n   = 1'b0;
+          round_n   = 1'b0;
+          sticky_n  = (mag != '0);
+        end else begin
+          pre_mag_n = mag >> normal_shift;
+          raw_sig_n = pre_mag_n[52:0];
+          if (normal_shift == 0) begin
+            guard_n  = 1'b0;
+            round_n  = 1'b0;
+            sticky_n = 1'b0;
+          end else if (normal_shift == 1) begin
+            guard_n  = mag[0];
+            round_n  = 1'b0;
+            sticky_n = 1'b0;
+          end else if (normal_shift == 2) begin
+            guard_n  = mag[1];
+            round_n  = mag[0];
+            sticky_n = 1'b0;
+          end else begin
+            guard_n  = mag[normal_shift - 1];
+            round_n  = mag[normal_shift - 2];
+            sticky_n = 1'b0;
+            for (i = 0; i < SUM_W; i = i + 1) begin
+              if (i + 2 < normal_shift) begin
+                sticky_n = sticky_n | mag[i];
+              end
+            end
+          end
+        end
+
+        unique case (s5_rm)
+          FP_RM_RNE: round_up_n = guard_n & (round_n | sticky_n | raw_sig_n[0]);
+          FP_RM_RTZ: round_up_n = 1'b0;
+          FP_RM_RDN: round_up_n = (guard_n | round_n | sticky_n) &  s5_res_sign;
+          FP_RM_RUP: round_up_n = (guard_n | round_n | sticky_n) & ~s5_res_sign;
+          FP_RM_RMM: round_up_n = guard_n;
+          default:   round_up_n = 1'b0;
+        endcase
+
+        // Carry-out: mantissa (hidden+fraction) is all ones and rounds up.
+        if (s5_fmt_d)
+          carry_n = round_up_n & (&raw_sig_n[52:0]);
+        else
+          carry_n = round_up_n & (&raw_sig_n[23:0]);
+
+        // Tiny after rounding iff exp_pre_tiny + carry_n < emin.
+        // `tiny` means exp_pre_tiny < emin already, so this collapses to
+        // "NOT (carry_n AND exp_pre_tiny == emin - 1)".
+        if (!(carry_n && (exp_pre_tiny + 13'sd1 == emin))) begin
+          s5_flags_comb[FP_FFLAG_UF] = 1'b1;
+        end
       end
 
       if (inexact) s5_flags_comb[FP_FFLAG_NX] = 1'b1;
