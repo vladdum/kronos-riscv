@@ -459,9 +459,10 @@ module kronos_lsu
   // on STORE_DONE, after the write-back beat returns. mem_stall_o stays
   // asserted through AMO_COMPUTE/STORE_SEND/STORE_RESP/STORE_DONE for the
   // same reason.
-  assign mem_stall_o = req_i & (state_q != LOAD_DONE || is_amo_q) &
-                              (state_q != STORE_DONE) &
-                              (state_q != SC_FAIL);
+  assign mem_stall_o = req_i
+                     & ((state_q != LOAD_DONE) || is_amo_q)
+                     & (state_q != STORE_DONE)
+                     & (state_q != SC_FAIL);
   assign valid_o     = ((state_q == LOAD_DONE) & ~is_amo_q) |
                        (state_q == STORE_DONE) |
                        (state_q == SC_FAIL);

@@ -36,6 +36,8 @@ module kronos_decompress (
   localparam logic [6:0] OP_BRNCH = 7'b110_0011;
   localparam logic [6:0] OP_REG     = 7'b011_0011;
   localparam logic [6:0] OP_IMM_32 = 7'b001_1011;  // RV64 OP-IMM-32 (ADDIW/SLLIW/etc.)
+  localparam logic [6:0] OP_LOAD_FP  = 7'b000_0111;  // FLD / FLW
+  localparam logic [6:0] OP_STORE_FP = 7'b010_0111;  // FSD / FSW
 
   // Temporary signals for immediate assembly (shared across case arms — only one active at a time)
   logic [11:0] uimm;
@@ -63,9 +65,9 @@ module kronos_decompress (
             else instr32_o = {uimm, 5'd2, 3'b000, rd_full, OP_IMM};
           end
 
-          3'b001: begin  // RV64C: C.LD → LD rd', uimm(rs1')
+          3'b001: begin  // RV64C: C.FLD → FLD fd', uimm(rs1')
             uimm = {4'b0, instr16_i[6:5], instr16_i[12:10], 3'b0};
-            instr32_o = {uimm, rs1_full, 3'b011, rd_full, OP_LOAD};
+            instr32_o = {uimm, rs1_full, 3'b011, rd_full, OP_LOAD_FP};
           end
 
           3'b010: begin  // C.LW → LW rd', offset(rs1')
@@ -78,10 +80,10 @@ module kronos_decompress (
             instr32_o = {uimm, rs1_full, 3'b011, rd_full, OP_LOAD};
           end
 
-          3'b101: begin  // RV64C: C.SD → SD rs2', uimm(rs1')
+          3'b101: begin  // RV64C: C.FSD → FSD fs2', uimm(rs1')
             uimm = {4'b0, instr16_i[6:5], instr16_i[12:10], 3'b0};
             instr32_o = {uimm[11:5], rs2_full, rs1_full, 3'b011,
-                         uimm[4:0], OP_STORE};
+                         uimm[4:0], OP_STORE_FP};
           end
 
           3'b111: begin  // RV64C: C.SD (also via funct3=111 in RV64) → SD rs2', uimm(rs1')
@@ -224,6 +226,11 @@ module kronos_decompress (
             else instr32_o = {6'b000_000, shamt, rd, 3'b001, rd, OP_IMM};
           end
 
+          3'b001: begin  // RV64C: C.FLDSP → FLD fd, uimm(x2)
+            uimm = {3'b0, instr16_i[4:2], instr16_i[12], instr16_i[6:5], 3'b0};
+            instr32_o = {uimm, 5'd2, 3'b011, rd, OP_LOAD_FP};
+          end
+
           3'b011: begin  // RV64C: C.LDSP → LD rd, uimm(x2)
             uimm = {3'b0, instr16_i[4:2], instr16_i[12], instr16_i[6:5], 3'b0};
             if (rd == 5'd0) illegal_o = 1'b1;
@@ -256,6 +263,11 @@ module kronos_decompress (
                 illegal_o = 1'b1;
               end
             end
+          end
+
+          3'b101: begin  // RV64C: C.FSDSP → FSD fs2, uimm(x2)
+            uimm = {3'b0, instr16_i[9:7], instr16_i[12:10], 3'b0};
+            instr32_o = {uimm[11:5], rs2, 5'd2, 3'b011, uimm[4:0], OP_STORE_FP};
           end
 
           3'b111: begin  // RV64C: C.SDSP → SD rs2, uimm(x2)

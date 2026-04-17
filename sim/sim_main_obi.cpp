@@ -10,6 +10,7 @@
 // Usage: Vkronos_top <hex_file>
 
 #include "Vkronos_top.h"
+#include "Vkronos_top___024root.h"
 #include "verilated.h"
 #include <cstdio>
 #include <cstring>
@@ -128,9 +129,11 @@ int main(int argc, char** argv) {
     fetch_instr();
     prefetch_data();
 
-    const int MAX_CYCLES = 100000;
+    const int MAX_CYCLES = 20000000;
     int halted = 0;
+    uint32_t halt_x10 = 0;
     bool fire_irq = false;
+    bool debug = (getenv("SIM_DEBUG") != nullptr);
 
     for (int cycle = 0; cycle < MAX_CYCLES && !halted; cycle++) {
         top->irq_timer_i = fire_irq ? 1 : 0;
@@ -139,13 +142,25 @@ int main(int argc, char** argv) {
         top->clk_i = 1;
         top->eval();
 
+        if (debug) {
+            uint32_t pc = top->rootp->kronos_top__DOT__pc_q;
+            printf("C%06d: pc=%08x instr_addr=%08x\n",
+                   cycle, pc, (unsigned)top->instr_addr_o);
+        }
+
         if (top->data_req_o && top->data_we_o) {
             uint32_t be   = top->data_be_o;
             uint32_t wdat = top->data_wdata_o;
 
             if (top->data_addr_o == 0x80000000u) {
                 fire_irq = true;
+            } else if (top->data_addr_o == 0x10000000u) {
+                for (int i = 0; i < 4; i++)
+                    if (be & (1u << i))
+                        putchar((wdat >> (i * 8)) & 0xFF);
+                fflush(stdout);
             } else if ((top->data_addr_o & 0xC0000000u) == 0x40000000u) {
+                halt_x10 = wdat;
                 printf("[sim] halt at cycle %d, x10 = %u\n", cycle, wdat);
                 halted = 1;
                 break;
@@ -173,5 +188,5 @@ int main(int argc, char** argv) {
 
     top->final();
     delete top;
-    return halted ? 0 : 1;
+    return (halted && halt_x10 == 0) ? 0 : 1;
 }

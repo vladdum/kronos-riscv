@@ -9,5 +9,7 @@ obj_dir/
 *.log
 docs/superpowers/
 __pycache__/
-riscv-arch-test/
+riscv-arch-test/*
+!riscv-arch-test/config/
+!riscv-arch-test/work/
 .claude/

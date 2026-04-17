@@ -521,6 +521,18 @@ module kronos_fpu_fcvt
     logic [23:0] ds_sig; // 1.xxx (24 bits)
     logic        ds_g, ds_sticky, ds_lsb, ds_round_up;
     logic [24:0] ds_rounded;
+    // D->S subnormal-rounding working signals
+    logic [9:0]  subn_shift_amt;     // 1..896 within the underflow branch
+                                     // (subnormals at <=25; deeper underflow handled
+                                     //  by the >=25 flush-to-zero arm)
+    logic [23:0] subn_sig24;         // pre-shift 24-bit significand (with implicit 1)
+    logic [23:0] subn_sig;           // post-shift significand (LSB = subnormal LSB)
+    logic        subn_g;             // guard bit
+    logic        subn_sticky;        // sticky from bits past guard
+    logic        subn_round_up;
+    logic [23:0] subn_rounded;       // 24-bit rounded subnormal mantissa
+    logic [22:0] subn_mant;
+    logic [7:0]  subn_exp;
 
     fs_flags = '0;
     d_result = '0;
@@ -607,11 +619,67 @@ module kronos_fpu_fcvt
             default: s_result = {ds_sign, 8'hFF, 23'd0};
           endcase
         end else if (ds_unbiased < -13'sd126) begin
-          // Underflow -> zero or subnormal single
-          // For now treat as zero (full subnormal handling is complex, rarely tested here)
-          s_result = {ds_sign, 31'd0};
-          fs_flags[FP_FFLAG_UF] = 1'b1;
-          fs_flags[FP_FFLAG_NX] = 1'b1;
+          // D->S: result is in single subnormal range or below.
+          // Build a 24-bit significand sig24 = {1'b1, ds_dmant[51:29]}, then
+          // right-shift by (-126 - ds_unbiased) to align the implicit-1 into
+          // the subnormal field. OR-collect dropped bits into sticky and RNE-
+          // round into the 23-bit subnormal mantissa.
+          //   ds_unbiased = -127  -> shift_amt = 1
+          //   ds_unbiased = -149  -> shift_amt = 23
+          //   ds_unbiased <= -150 -> shift_amt >= 24 -> rounds to +/-0
+          //   ds_unbiased = -1022 -> shift_amt = 896 (deepest double subnormal)
+          // shift_amt = -126 - ds_unbiased; in this branch this is in [1, 896].
+          // The 10-bit width fits the full range; the >= 25 guard below saturates
+          // deeply-tiny inputs to +/-0 (and the branch entry guarantees > 0).
+          subn_shift_amt = 10'(-(ds_unbiased + 13'sd126));
+          subn_sig24     = {1'b1, ds_dmant[51:29]};
+
+          if (subn_shift_amt >= 10'd25) begin
+            // Beyond the smallest representable subnormal: rounds to +/-0.
+            subn_sig    = '0;
+            subn_g      = 1'b0;
+            subn_sticky = (subn_sig24 != 24'd0) | (|ds_dmant[28:0]);
+          end else begin
+            subn_sig    = subn_sig24 >> subn_shift_amt;
+            subn_g      = (subn_shift_amt == 10'd0)
+                          ? 1'b0
+                          : subn_sig24[subn_shift_amt[4:0] - 5'd1];
+            subn_sticky = (subn_shift_amt < 10'd2)
+                          ? (|ds_dmant[28:0])
+                          : (|(subn_sig24
+                                 & ((24'd1 << (subn_shift_amt - 10'd1)) - 24'd1)))
+                            | (|ds_dmant[28:0]);
+          end
+
+          // Rounding decision (mirrors normal-range rm handling above).
+          subn_round_up = 1'b0;
+          unique case (s1_rm_q)
+            3'b000: subn_round_up = subn_g && (subn_sticky || subn_sig[0]);
+            3'b001: subn_round_up = 1'b0;
+            3'b010: subn_round_up = ds_sign && (subn_g || subn_sticky);
+            3'b011: subn_round_up = !ds_sign && (subn_g || subn_sticky);
+            3'b100: subn_round_up = subn_g;
+            default: subn_round_up = subn_g && (subn_sticky || subn_sig[0]);
+          endcase
+
+          subn_rounded = subn_sig + (subn_round_up ? 24'd1 : 24'd0);
+          if (subn_g | subn_sticky) fs_flags[FP_FFLAG_NX] = 1'b1;
+
+          if (subn_rounded[23]) begin
+            // Round-up promoted the subnormal to the smallest normal: exp=1.
+            subn_mant = '0;
+            subn_exp  = 8'd1;
+          end else begin
+            subn_mant = subn_rounded[22:0];
+            subn_exp  = 8'd0;
+          end
+          s_result = {ds_sign, subn_exp, subn_mant};
+
+          // IEEE 754 7.5: UF only if the rounded result is tiny AND inexact.
+          // A result that lands on the smallest normal (subn_exp == 1) is no
+          // longer tiny, so suppress UF in that case.
+          if ((subn_g | subn_sticky) && (subn_exp == 8'd0))
+            fs_flags[FP_FFLAG_UF] = 1'b1;
         end else begin
           // Normal range: round 52-bit mantissa to 23 bits
           // mant = 1.xxx (implicit 1), take top 24 bits (1 + 23 explicit)

@@ -4,6 +4,12 @@
 //
 // Lint waivers for kronos-riscv (Verilator .vlt format).
 //
+// Glob convention: paths are matched against the source path as Verilator sees
+// it, which depends on the working directory of the invocation. The sim/
+// Makefile invokes Verilator from sim/, so paths arrive as `../rtl/...` (the
+// `*/` prefix in each rule below is what tolerates this). If the build moves,
+// update the globs or pass `+incdir+...` flags accordingly.
+//
 // Each waiver pins a specific known warning to its exact file and message.
 // New warnings of the same type in other files will still be caught.
 // Review and remove waivers when the underlying issue is fixed.

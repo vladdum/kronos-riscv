@@ -35,6 +35,7 @@ module kronos_csr #(
   // Stage 5a: FP CSR interface
   input  logic [4:0]  fflags_delta_i,
   input  logic        fflags_we_i,
+  input  logic        fp_rd_we_i,        // any FP destination write this cycle
   output logic [2:0]  frm_o
 );
 
@@ -68,6 +69,7 @@ module kronos_csr #(
   // -------------------------------------------------------------------------
   logic [63:0] csr_wdata;
   logic [63:0] csr_new_val;
+  logic        fp_csr_sw_write;
 
   // -------------------------------------------------------------------------
   // Outputs
@@ -108,6 +110,12 @@ module kronos_csr #(
       default: csr_new_val = rdata_o;
     endcase
   end
+
+  // SW write to any FP CSR (fflags=0x001, frm=0x002, fcsr=0x003) marks FS=Dirty.
+  assign fp_csr_sw_write = req_i &
+                           (addr_i == 12'h001
+                          | addr_i == 12'h002
+                          | addr_i == 12'h003);
 
   // -------------------------------------------------------------------------
   // Sequential logic
@@ -151,6 +159,12 @@ module kronos_csr #(
       end
       // Sticky FFLAGS accumulation from FPU writeback (OR on top of CSR writes)
       if (fflags_we_i) fcsr_q[4:0] <= fcsr_q[4:0] | fflags_delta_i;
+      // mstatus.FS becomes Dirty (11) on any FP register or fcsr write.
+      // Placed after the CSR-write case so HW-set wins over a same-cycle SW
+      // write that would otherwise leave FS at a non-Dirty value.
+      if (fp_rd_we_i || fflags_we_i || fp_csr_sw_write) begin
+        mstatus[14:13] <= 2'b11;
+      end
     end
   end
 

@@ -186,17 +186,18 @@ module kronos_fpu_fsqrt_core (
       fmt_d_q <= 1'b0;
     end else begin
       state_q <= state_n;
-      r_q     <= r_n;
-      q_q     <= q_n;
-      ctr_q   <= ctr_n;
-
-      // Latch inputs on start.
+      // Latch inputs and clear scratch state on start; otherwise advance the
+      // datapath registers from the combinational next-state.
       if (start_i && (state_q == ST_IDLE)) begin
         a_q     <= a_i;
         fmt_d_q <= fmt_d_i;
         r_q     <= '0;
         q_q     <= '0;
         ctr_q   <= '0;
+      end else begin
+        r_q     <= r_n;
+        q_q     <= q_n;
+        ctr_q   <= ctr_n;
       end
     end
   end

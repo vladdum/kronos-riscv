@@ -10,8 +10,9 @@
 // UNPACK: Classify operands, detect specials (bypass to PACK),
 //         normalize subnormals, compute result exponent, start cores.
 // ITER:   Wait for fdiv/fsqrt core done signal.
-// ROUND:  (placeholder — Task 11)
-// PACK:   (placeholder — Task 12)
+// ROUND:  One cycle of round/pack prep; reserves the writeback slot via the
+//         scoreboard's late-grant interface and stalls until granted.
+// PACK:   Drive out_valid_o, hand result/fflags/tag to the output mux.
 
 module kronos_fpu_iter
   import kronos_pkg::*;
@@ -34,7 +35,7 @@ module kronos_fpu_iter
   output logic [4:0]  fflags_o,
   output fpu_tag_t    tag_o,
 
-  // Late-reservation to scoreboard (wired in Task 14-15)
+  // Late-reservation handshake to scoreboard (request slot, wait for grant).
   output logic        sb_late_req_o,
   output logic        sb_late_fp_dest_o,
   input  logic        sb_late_grant_i
@@ -764,7 +765,7 @@ module kronos_fpu_iter
       IDLE:   if (in_valid_i) state_d = UNPACK;
       UNPACK: state_d = is_special ? PACK : ITER;
       ITER:   if (core_done) state_d = ROUND;
-      ROUND:  state_d = PACK;    // placeholder: one cycle
+      ROUND:  if (sb_late_grant_i) state_d = PACK;  // hold if scoreboard denies the slot
       PACK:   state_d = IDLE;
       default: state_d = IDLE;
     endcase
@@ -874,8 +875,9 @@ module kronos_fpu_iter
   assign tag_o       = tag_q;
 
   // Late-reservation: request scoreboard slot one cycle before writeback.
-  // ROUND state lasts one cycle, then transitions to PACK (out_valid).
-  // Latency=1 means the scoreboard reserves the slot that fires next cycle.
+  // ROUND lasts one or more cycles: request the slot every cycle, advance to
+  // PACK on grant. Latency=1 means the scoreboard reserves the slot that fires
+  // next cycle.
   assign sb_late_req_o     = (state_q == ROUND);
   assign sb_late_fp_dest_o = tag_q.fp_dest;
 

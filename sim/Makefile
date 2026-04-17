@@ -105,7 +105,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-compliance-s3 build-s4 run-s4-% sim-compliance-s4 sim-alu-s4 sim-decode-s4 \
         sim-muldiv-s4 sim-lsu-s4 sim-all clean \
         build-s5 run-s5-% sim-s5 sim-core-fp-basic sim-core-fp-forwarding \
-        sim-compliance-f sim-compliance-d \
+        gen-arch-tests-s1 sim-arch-test-s1 gen-arch-tests-s2 sim-arch-test-s2 gen-arch-tests-s3 sim-arch-test-s3 gen-arch-tests-s4 sim-arch-test-s4 gen-arch-tests-s5 sim-arch-test-s5 \
         sim-pkg-fp sim-regfile-fp sim-hf-smoke sim-sf-smoke \
         sim-csr-fp sim-fpu-scoreboard \
         sim-decode-fp sim-fpu-fmisc sim-fpu-fcvt sim-fpu-fadd sim-fpu-fmul \
@@ -565,8 +565,7 @@ SIM_BIN_S5 := $(OBJ_DIR)/s5/V$(TOP_S5)
 build-s5: $(SIM_BIN_S5)
 
 $(SIM_BIN_S5): $(SV_FILES_S5) $(abspath sim_main.cpp)
-	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND \
-	  --Wno-TIMESCALEMOD \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S5) $(abspath sim_main.cpp) \
 	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \
@@ -649,15 +648,75 @@ sim-s5b: build-s5
 	echo "Stage 5b assembly: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ] || [ $$pass -eq 0 -a $$fail -eq 0 ]
 
-# ── riscv-arch-test F and D compliance (requires separate clone) ───────────
-# Clone: git clone https://github.com/riscv-non-isa/riscv-arch-test /home/popes/riscv-arch-test
-ARCH_TEST ?= /home/popes/riscv-arch-test
+# ── ACT4 official compliance ─────────────────────────────────────────────────
+ARCH_TEST_DIR := ../riscv-arch-test
 
-sim-compliance-f: build-s5
-	@bash run_compliance_fp.sh rv64i_m/F
+.PHONY: gen-arch-tests-s1 sim-arch-test-s1
+gen-arch-tests-s1: build-s1
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv32i/test_config.yaml \
+	    --workdir work --test-dir tests
 
-sim-compliance-d: build-s5
-	@bash run_compliance_fp.sh rv64i_m/D
+sim-arch-test-s1: gen-arch-tests-s1
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s1.sh)" \
+	    work/kronos-rv32i/elfs/
+
+.PHONY: gen-arch-tests-s2 sim-arch-test-s2
+gen-arch-tests-s2: build-s2
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv32im/test_config.yaml \
+	    --workdir work --test-dir tests
+
+sim-arch-test-s2: gen-arch-tests-s2
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s2.sh)" \
+	    work/kronos-rv32im/elfs/
+
+.PHONY: gen-arch-tests-s3 sim-arch-test-s3
+gen-arch-tests-s3: build-s3
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv32imc/test_config.yaml \
+	    --workdir work --test-dir tests
+
+sim-arch-test-s3: gen-arch-tests-s3
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s3.sh)" \
+	    work/kronos-rv32imc/elfs/
+
+.PHONY: gen-arch-tests-s4 sim-arch-test-s4
+gen-arch-tests-s4: build-s4
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv64imac/test_config.yaml \
+	    --workdir work --test-dir tests \
+	    --exclude Zaamo,Zalrsc
+
+sim-arch-test-s4: gen-arch-tests-s4
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s4.sh)" \
+	    work/kronos-rv64imac/elfs/
+
+.PHONY: gen-arch-tests-s5 sim-arch-test-s5
+gen-arch-tests-s5: build-s5
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv64imafd/test_config.yaml \
+	    --workdir work --test-dir tests \
+	    --exclude Zaamo,Zalrsc
+
+sim-arch-test-s5: gen-arch-tests-s5
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s5.sh)" \
+	    work/kronos-rv64imafd/elfs/
 
 TB_PKG_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv $(TB_DIR)/stage5/tb_pkg_fp.sv
 

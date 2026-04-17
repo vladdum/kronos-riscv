@@ -148,13 +148,13 @@ module kronos_fpu_fdiv_core (
       q_q     <= q_n;
       ctr_q   <= ctr_n;
 
-      // Latch inputs on start.
+      // Latch inputs and clear scratch state on start.
       if (start_i && (state_q == ST_IDLE)) begin
         p_q     <= {1'b0, a_i};
         b_q     <= b_i;
+        q_q     <= '0;
+        ctr_q   <= '0;
         fmt_d_q <= fmt_d_i;
-      end else begin
-        b_q <= b_q;
       end
     end
   end
