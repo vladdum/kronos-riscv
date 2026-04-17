@@ -61,16 +61,12 @@ module kronos_decode
   // Internal signal for illegal
   logic illegal;
 
-  // Resolves the FP rounding mode field, substituting frm when funct3=DYN (111).
-  // Returns rm_illegal=1 for reserved encodings (101, 110).
-  function automatic void resolve_rm(
-    input  logic [2:0] funct3_in,
-    input  logic [2:0] frm_in,
-    output logic [2:0] rm_resolved,
-    output logic       rm_illegal
-  );
-    rm_resolved = (funct3_in == 3'b111) ? frm_in : funct3_in;
-    rm_illegal  = (rm_resolved == 3'b101) || (rm_resolved == 3'b110);
+  // Resolves the FP rounding mode field, substituting frm when rm_in=DYN (111).
+  function automatic logic [2:0] resolve_rm(input logic [2:0] rm_in, input logic [2:0] frm);
+    return (rm_in == 3'b111) ? frm : rm_in;
+  endfunction
+  function automatic logic rm_is_illegal(input logic [2:0] rm);
+    return (rm == 3'b101) || (rm == 3'b110);
   endfunction
 
   always_comb begin
@@ -358,9 +354,8 @@ module kronos_decode
             decoded_o.rd_fp      = 1'b1;
             decoded_o.fp_op      = FP_FADD;
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
           end
           5'b00001: begin  // FSUB.S/D
@@ -369,9 +364,8 @@ module kronos_decode
             decoded_o.rd_fp      = 1'b1;
             decoded_o.fp_op      = FP_FSUB;
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
           end
           5'b00010: begin  // FMUL.S/D
@@ -380,9 +374,8 @@ module kronos_decode
             decoded_o.rd_fp      = 1'b1;
             decoded_o.fp_op      = FP_FMUL;
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
           end
           5'b00011: begin  // FDIV.S/D
@@ -391,9 +384,8 @@ module kronos_decode
             decoded_o.rd_fp      = 1'b1;
             decoded_o.fp_op      = FP_FDIV;
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
           end
           5'b00100: begin  // FSGNJ.S/D, FSGNJN.S/D, FSGNJX.S/D
@@ -426,9 +418,8 @@ module kronos_decode
               default: illegal = 1'b1;
             endcase
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
           end
           5'b01011: begin  // FSQRT.S/D
@@ -436,9 +427,8 @@ module kronos_decode
             decoded_o.rd_fp      = 1'b1;
             decoded_o.fp_op      = FP_FSQRT;
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
             // rs2 must be 00000 for FSQRT
             if (instr_i[24:20] != 5'b00000) illegal = 1'b1;
@@ -467,9 +457,8 @@ module kronos_decode
               default:  illegal = 1'b1;
             endcase
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
           end
           5'b11010: begin  // FCVT.F.W/WU/L/LU (int→FP)
@@ -483,9 +472,8 @@ module kronos_decode
             endcase
             decoded_o.rs1_used = 1'b1;
             begin
-              logic rm_ill;
-              resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-              if (rm_ill) illegal = 1'b1;
+              decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+              if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
             end
           end
           5'b11100: begin  // FMV.X.W / FMV.X.D / FCLASS.S / FCLASS.D
@@ -532,9 +520,8 @@ module kronos_decode
         decoded_o.fmt_d   = instr_i[25];
         decoded_o.fp_op   = FP_FMADD;
         begin
-          logic rm_ill;
-          resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-          if (rm_ill) illegal = 1'b1;
+          decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+          if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
         end
       end
 
@@ -548,9 +535,8 @@ module kronos_decode
         decoded_o.fmt_d   = instr_i[25];
         decoded_o.fp_op   = FP_FMSUB;
         begin
-          logic rm_ill;
-          resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-          if (rm_ill) illegal = 1'b1;
+          decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+          if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
         end
       end
 
@@ -564,9 +550,8 @@ module kronos_decode
         decoded_o.fmt_d   = instr_i[25];
         decoded_o.fp_op   = FP_FNMSUB;
         begin
-          logic rm_ill;
-          resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-          if (rm_ill) illegal = 1'b1;
+          decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+          if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
         end
       end
 
@@ -580,9 +565,8 @@ module kronos_decode
         decoded_o.fmt_d   = instr_i[25];
         decoded_o.fp_op   = FP_FNMADD;
         begin
-          logic rm_ill;
-          resolve_rm(instr_i[14:12], frm_i, decoded_o.rm_resolved, rm_ill);
-          if (rm_ill) illegal = 1'b1;
+          decoded_o.rm_resolved = resolve_rm(instr_i[14:12], frm_i);
+          if (rm_is_illegal(decoded_o.rm_resolved)) illegal = 1'b1;
         end
       end
 

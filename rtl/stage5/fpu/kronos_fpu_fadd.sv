@@ -628,7 +628,7 @@ module kronos_fpu_fadd
         // Pull guard/round/sticky back into significand LSBs so we can reuse
         // the same shifter.
         // We'll iterate shifting right 1 bit at a time.
-        for (i = 0; i < sh; i++) begin
+        for (i = 0; i < SIG_W + 3; i++) if (i < sh) begin
           // Capture LSB into sticky, shift GRS right, load new G from current
           // significand bit after shift.
           grs_vec[0] = grs_vec[0] | grs_vec[1];
@@ -663,7 +663,7 @@ module kronos_fpu_fadd
       if (!s3_q.fmt_d) begin
         g  = cur_sig[SIG_W - 1 - mant_w - 1];
         r  = cur_sig[SIG_W - 1 - mant_w - 2];
-        for (i = 0; i < SIG_W - 1 - mant_w - 2; i++) begin
+        for (i = 0; i < SIG_W - 1 - 23 - 2; i++) if (i < SIG_W - 1 - mant_w - 2) begin
           if (cur_sig[i]) st = 1'b1;
         end
       end
