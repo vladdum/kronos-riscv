@@ -663,7 +663,6 @@ module kronos_fpu_fadd
       if (!s3_q.fmt_d) begin
         g  = cur_sig[SIG_W - 1 - mant_w - 1];
         r  = cur_sig[SIG_W - 1 - mant_w - 2];
-        st = st;
         for (i = 0; i < SIG_W - 1 - mant_w - 2; i++) begin
           if (cur_sig[i]) st = 1'b1;
         end

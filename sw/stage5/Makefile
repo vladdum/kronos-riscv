@@ -7,7 +7,7 @@ ARCH   := rv64imafdc_zicsr
 ABI    := lp64
 CFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostdlib -static -T../stage0/link.ld
 
-TESTS  := test_fp_basic test_fp_loadstore test_fp_nan_box test_fp_rounding test_fp_csr test_fp_convert test_fp_compare
+TESTS  := test_fp_basic test_fp_loadstore test_fp_nan_box test_fp_rounding test_fp_csr test_fp_convert test_fp_compare test_rvc_fp_loadstore test_fcvt_sd_subnormal test_mstatus_fs_dirty
 
 BUILD_DIR := build
 

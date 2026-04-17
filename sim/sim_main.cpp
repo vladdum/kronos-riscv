@@ -104,8 +104,9 @@ int main(int argc, char** argv) {
     AxiRead  instr_r, data_r;
     AxiWrite data_w;
 
-    const int MAX_CYCLES = 500000;
+    const int MAX_CYCLES = 20000000;
     int halted = 0;
+    uint32_t halt_x10 = 0;
     // irq_countdown: cycles remaining for irq_timer_i to stay asserted.
     // Held for INSTR_LAT*4 + DATA_LAT + 4 cycles so the pipeline can take the
     // interrupt even if instr_fetch_stall is blocking when irq_timer_i first fires.
@@ -242,8 +243,14 @@ int main(int argc, char** argv) {
                 // Timer IRQ trigger — fire one cycle after B handshake completes
                 // so the pipeline is not mem-stalled when irq_timer_i asserts.
                 data_w.irq_write = true;
+            } else if (waddr == 0x10000000u) {
+                for (int i = 0; i < 4; i++)
+                    if (be & (1u << i))
+                        putchar((wdat >> (i * 8)) & 0xFF);
+                fflush(stdout);
             } else if ((waddr & 0xC0000000u) == 0x40000000u) {
                 // Halt
+                halt_x10 = wdat;
                 printf("[sim] halt at cycle %d, x10 = %u\n", cycle, wdat);
                 halted = 1;
             } else {
@@ -288,5 +295,5 @@ int main(int argc, char** argv) {
 
     top->final();
     delete top;
-    return halted ? 0 : 1;
+    return (halted && halt_x10 == 0) ? 0 : 1;
 }

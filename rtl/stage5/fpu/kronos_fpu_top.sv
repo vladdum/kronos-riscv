@@ -262,6 +262,9 @@ module kronos_fpu_top
   always_comb begin
     out_valid_o = fmisc_out_valid | fcvt_out_valid | fadd_out_valid
                 | fmul_out_valid  | fma_out_valid  | iter_out_valid;
+    result_o = '0;
+    fflags_o = '0;
+    tag_o    = '0;
     if (fmisc_out_valid) begin
       result_o = fmisc_result;
       fflags_o = fmisc_fflags;
@@ -282,11 +285,28 @@ module kronos_fpu_top
       result_o = fma_result;
       fflags_o = fma_fflags;
       tag_o    = fma_tag;
-    end else begin
+    end else if (iter_out_valid) begin
       result_o = iter_result;
       fflags_o = iter_fflags;
       tag_o    = iter_tag;
     end
   end
+
+`ifndef SYNTHESIS
+  // Scoreboard invariant: at most one FPU unit may assert out_valid per cycle.
+  // If this fires, the silent-drop bug from C-3 (kronos_fpu_iter late-grant
+  // interlock) has reappeared.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (rst_ni) begin
+      automatic logic [2:0] valid_count;
+      valid_count = 3'(fmisc_out_valid) + 3'(fcvt_out_valid)
+                  + 3'(fadd_out_valid)  + 3'(fmul_out_valid)
+                  + 3'(fma_out_valid)   + 3'(iter_out_valid);
+      assert (valid_count <= 3'd1)
+        else $error("kronos_fpu_top: %0d units asserted out_valid simultaneously",
+                    valid_count);
+    end
+  end
+`endif
 
 endmodule

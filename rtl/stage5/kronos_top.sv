@@ -319,6 +319,7 @@ module kronos_top
     // Stage 5a: FP CSR interface
     .fflags_delta_i (fpu_out_valid ? fpu_fflags : 5'b0),
     .fflags_we_i    (fpu_out_valid),
+    .fp_rd_we_i     (fp_we),                // drives mstatus.FS=11 on FP writeback
     .frm_o          (frm)
   );
 

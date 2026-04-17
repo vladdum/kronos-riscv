@@ -36,7 +36,9 @@ module tb_csr_fp;
     .mret_i(mret), .trap_vector_o(trap_vector), .mepc_o(mepc_out),
     .irq_timer_i(irq_timer), .irq_fast_i(irq_fast), .irq_pending_o(irq_pending),
     // New FP interface
-    .fflags_delta_i(fflags_delta), .fflags_we_i(fflags_we), .frm_o(frm)
+    .fflags_delta_i(fflags_delta), .fflags_we_i(fflags_we),
+    .fp_rd_we_i(1'b0),
+    .frm_o(frm)
   );
 
   always #5 clk = ~clk;
