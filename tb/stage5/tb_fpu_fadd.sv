@@ -29,8 +29,8 @@ module tb_fpu_fadd;
 
   always #5 clk = ~clk;
 
-  // Drive inputs for one cycle, then wait for output to emerge after 4 cycles.
-  task automatic apply4(input fp_op_e o, input logic fmtd, input logic [2:0] r,
+  // Drive inputs for one cycle, then wait for output to emerge after 5 cycles.
+  task automatic apply5(input fp_op_e o, input logic fmtd, input logic [2:0] r,
                         input logic [63:0] ain, input logic [63:0] bin);
     @(negedge clk);
     in_valid = 1;
@@ -41,8 +41,8 @@ module tb_fpu_fadd;
     b        = bin;
     @(negedge clk);
     in_valid = 0;
-    // Four pipeline stages → sample after 4 posedges from capture.
-    repeat (4) @(posedge clk);
+    // Five pipeline stages → sample after 5 posedges from capture.
+    repeat (5) @(posedge clk);
     #1;
   endtask
 
@@ -69,7 +69,7 @@ module tb_fpu_fadd;
         line = "";
         void'($fgets(line, fd));
         if (!fp_tb_pkg::parse_vec_line(line, v)) continue;
-        apply4(FP_FADD, 1'b0, v.rm[2:0],
+        apply5(FP_FADD, 1'b0, v.rm[2:0],
                {32'hFFFF_FFFF, v.a[31:0]},
                {32'hFFFF_FFFF, v.b[31:0]});
         sf_reset();
@@ -102,7 +102,7 @@ module tb_fpu_fadd;
         line = "";
         void'($fgets(line, fd));
         if (!fp_tb_pkg::parse_vec_line(line, v)) continue;
-        apply4(FP_FSUB, 1'b0, v.rm[2:0],
+        apply5(FP_FSUB, 1'b0, v.rm[2:0],
                {32'hFFFF_FFFF, v.a[31:0]},
                {32'hFFFF_FFFF, v.b[31:0]});
         sf_reset();
@@ -134,7 +134,7 @@ module tb_fpu_fadd;
         line = "";
         void'($fgets(line, fd));
         if (!fp_tb_pkg::parse_vec_line(line, v)) continue;
-        apply4(FP_FADD, 1'b1, v.rm[2:0], v.a, v.b);
+        apply5(FP_FADD, 1'b1, v.rm[2:0], v.a, v.b);
         sf_reset();
         sf_r = sf_f64_add(v.a, v.b, v.rm);
         sf_f = sf_exceptions();
@@ -162,7 +162,7 @@ module tb_fpu_fadd;
         // F32 ADD random
         for (int k = 0; k < 200; k++) begin
           ra = $urandom; rb = $urandom;
-          apply4(FP_FADD, 1'b0, rm_i[2:0],
+          apply5(FP_FADD, 1'b0, rm_i[2:0],
                  {32'hFFFF_FFFF, ra}, {32'hFFFF_FFFF, rb});
           sf_reset();
           sf_r32 = sf_f32_add(ra, rb, rm_i);
@@ -178,7 +178,7 @@ module tb_fpu_fadd;
         // F32 SUB random
         for (int k = 0; k < 200; k++) begin
           ra = $urandom; rb = $urandom;
-          apply4(FP_FSUB, 1'b0, rm_i[2:0],
+          apply5(FP_FSUB, 1'b0, rm_i[2:0],
                  {32'hFFFF_FFFF, ra}, {32'hFFFF_FFFF, rb});
           sf_reset();
           sf_r32 = sf_f32_sub(ra, rb, rm_i);
@@ -194,7 +194,7 @@ module tb_fpu_fadd;
         // F64 ADD random
         for (int k = 0; k < 200; k++) begin
           da = {$urandom, $urandom}; db = {$urandom, $urandom};
-          apply4(FP_FADD, 1'b1, rm_i[2:0], da, db);
+          apply5(FP_FADD, 1'b1, rm_i[2:0], da, db);
           sf_reset();
           sf_r64 = sf_f64_add(da, db, rm_i);
           sf_f = sf_exceptions();
@@ -208,7 +208,7 @@ module tb_fpu_fadd;
         // F64 SUB random
         for (int k = 0; k < 200; k++) begin
           da = {$urandom, $urandom}; db = {$urandom, $urandom};
-          apply4(FP_FSUB, 1'b1, rm_i[2:0], da, db);
+          apply5(FP_FSUB, 1'b1, rm_i[2:0], da, db);
           sf_reset();
           sf_r64 = sf_f64_sub(da, db, rm_i);
           sf_f = sf_exceptions();
@@ -224,7 +224,7 @@ module tb_fpu_fadd;
 
     // ── Directed: Inf + finite → Inf propagation ─────────────────────────
     // +Inf.S + 1.0S → +Inf.S (NaN-boxed), no flags
-    apply4(FP_FADD, 1'b0, 3'd0,
+    apply5(FP_FADD, 1'b0, 3'd0,
            {32'hFFFF_FFFF, 32'h7F80_0000},
            {32'hFFFF_FFFF, 32'h3F80_0000});
     total++;
@@ -233,7 +233,7 @@ module tb_fpu_fadd;
       errors++;
     end
     // 1.0S + (-Inf.S) → -Inf.S (NaN-boxed), no flags
-    apply4(FP_FADD, 1'b0, 3'd0,
+    apply5(FP_FADD, 1'b0, 3'd0,
            {32'hFFFF_FFFF, 32'h3F80_0000},
            {32'hFFFF_FFFF, 32'hFF80_0000});
     total++;
@@ -242,7 +242,7 @@ module tb_fpu_fadd;
       errors++;
     end
     // +Inf.D + 1.0D → +Inf.D, no flags
-    apply4(FP_FADD, 1'b1, 3'd0,
+    apply5(FP_FADD, 1'b1, 3'd0,
            64'h7FF0_0000_0000_0000,
            64'h3FF0_0000_0000_0000);
     total++;
@@ -251,7 +251,7 @@ module tb_fpu_fadd;
       errors++;
     end
     // 1.0D + (-Inf.D) → -Inf.D, no flags
-    apply4(FP_FADD, 1'b1, 3'd0,
+    apply5(FP_FADD, 1'b1, 3'd0,
            64'h3FF0_0000_0000_0000,
            64'hFFF0_0000_0000_0000);
     total++;
