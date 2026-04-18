@@ -84,7 +84,7 @@ kronos-riscv/
 │       └── fpu/
 │           ├── kronos_fpu_fmisc.sv  # 1-cycle: FSGNJ, FMIN, FMAX, FCLASS, CMP, FMV
 │           ├── kronos_fpu_fcvt.sv   # 2-cycle: FCVT int↔FP and S↔D
-│           ├── kronos_fpu_fadd.sv   # 4-cycle: FADD/FSUB
+│           ├── kronos_fpu_fadd.sv   # 5-cycle: FADD/FSUB
 │           ├── kronos_fpu_fmul.sv   # 4-cycle: FMUL
 │           ├── kronos_fpu_fma.sv    # 5-cycle: FMADD/FMSUB/FNMADD/FNMSUB
 │           ├── kronos_fpu_scoreboard.sv # WAW busy-table + WB port reservation
@@ -150,7 +150,7 @@ cd sim && make build-s1   # stage 1 (RV32I)
 # Stage 5 FPU unit testbenches
 cd sim && make sim-fpu-fmisc   # FSGNJ/FMIN/FMAX/FCLASS/CMP/FMV
 cd sim && make sim-fpu-fcvt    # FCVT (int↔FP, S↔D)
-cd sim && make sim-fpu-fadd    # FADD/FSUB (4-stage)
+cd sim && make sim-fpu-fadd    # FADD/FSUB (5-stage)
 cd sim && make sim-fpu-fmul    # FMUL (4-stage)
 cd sim && make sim-fpu-fma     # FMA (5-stage)
 cd sim && make sim-fpu-fdiv-core   # FDIV radix-2 SRT core

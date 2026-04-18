@@ -47,7 +47,7 @@ kronos_top  (rtl/stage5/kronos_top.sv)
 └── u_fpu           kronos_fpu_top           (rtl/stage5/fpu/kronos_fpu_top.sv)       [stage 5a]
     ├── u_fmisc     kronos_fpu_fmisc         1-cycle: FSGNJ/FMIN/FMAX/FCLASS/CMP/FMV
     ├── u_fcvt      kronos_fpu_fcvt          2-cycle: FCVT
-    ├── u_fadd      kronos_fpu_fadd          4-cycle: FADD/FSUB
+    ├── u_fadd      kronos_fpu_fadd          5-cycle: FADD/FSUB
     ├── u_fmul      kronos_fpu_fmul          4-cycle: FMUL
     ├── u_fma       kronos_fpu_fma           5-cycle: FMADD/FMSUB/FNMADD/FNMSUB
     ├── u_iter      kronos_fpu_iter          variable: FDIV/FSQRT wrapper FSM          [stage 5b]
@@ -181,7 +181,7 @@ The FPU handles all F and D extension instructions. It is logically separate fro
 |------|--------|---------|------------|
 | fmisc | `kronos_fpu_fmisc` | 1 cycle | FSGNJ, FMIN, FMAX, FCLASS, FCMP, FMV.X.W, FMV.W.X, FMV.X.D, FMV.D.X |
 | fcvt | `kronos_fpu_fcvt` | 2 cycles | FCVT.W.S, FCVT.WU.S, FCVT.L.S, FCVT.LU.S, FCVT.S.W, FCVT.S.WU, FCVT.S.L, FCVT.S.LU, FCVT.S.D, FCVT.D.S, and D variants |
-| fadd | `kronos_fpu_fadd` | 4 cycles | FADD.S, FSUB.S, FADD.D, FSUB.D |
+| fadd | `kronos_fpu_fadd` | 5 cycles | FADD.S, FSUB.S, FADD.D, FSUB.D |
 | fmul | `kronos_fpu_fmul` | 4 cycles | FMUL.S, FMUL.D |
 | fma | `kronos_fpu_fma` | 5 cycles | FMADD.S, FMSUB.S, FNMADD.S, FNMSUB.S, FMADD.D, FMSUB.D, FNMADD.D, FNMSUB.D |
 | iter | `kronos_fpu_iter` | ≤ 29 (S) / ≤ 58 (D) cycles | FDIV.S, FDIV.D, FSQRT.S, FSQRT.D |

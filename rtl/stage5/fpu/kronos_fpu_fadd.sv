@@ -2,13 +2,14 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_fpu_fadd — 4-cycle pipelined FADD/FSUB unit (S and D precision).
+// kronos_fpu_fadd — 5-cycle pipelined FADD/FSUB unit (S and D precision).
 //
 // Pipeline layout:
 //   S1  decompose/unbox operands, classify specials, apply FSUB sign flip
 //   S2  exponent difference, align smaller operand, capture G/R/S
 //   S3  add / subtract significands, normalize (leading-zero count)
-//   S4  round, pack IEEE 754, generate flags, NaN-box single result
+//   S4  subnormal flush, rounding decision, increment
+//   S5  pack IEEE 754, generate flags, NaN-box single result
 //
 // Internal representation uses a 56-bit significand (MSB is hidden 1 + mantissa
 // + 2 alignment bits) — enough to hold both S (24-bit) and D (53-bit) values
@@ -140,12 +141,30 @@ module kronos_fpu_fadd
     logic                result_zero;
   } s3_t;
 
+  typedef struct packed {
+    logic                     valid;
+    logic                     fmt_d;
+    logic [2:0]               rm;
+    fpu_tag_t                 tag;
+    logic                     is_special;
+    logic [63:0]              special_res;
+    logic [4:0]               special_flg;
+    logic                     res_sign;
+    logic                     result_zero;
+    logic signed [EXP_W-1:0]  cur_exp;
+    logic [SIG_W-1:0]         rounded_sig;
+    logic                     inexact;
+    logic                     overflow;
+    logic                     is_subnormal_out;
+  } s4_t;
+
   // ---------------------------------------------------------------------------
   // Pipeline registers
   // ---------------------------------------------------------------------------
   s1_t s1_q;
   s2_t s2_q;
   s3_t s3_q;
+  s4_t s4_q;
 
   // ===========================================================================
   // Stage 1: decompose / classify
@@ -526,90 +545,63 @@ module kronos_fpu_fadd
   end
 
   // ===========================================================================
-  // Stage 4: round, pack, flags
+  // Stage 4: subnormal flush + rounding
   // ===========================================================================
-  logic [63:0] s4_result;
-  logic [4:0]  s4_flags;
+  s4_t s4_d;
 
   always_comb begin
-    // Hoisted locals from pack / subnormal / round / overflow sub-blocks
-    int unsigned             mant_w;
-    int unsigned             exp_w;
+    int unsigned              mant_w;
     logic signed [EXP_W-1:0] emin;
     logic signed [EXP_W-1:0] emax;
-    logic signed [EXP_W-1:0] bias;
     logic signed [EXP_W-1:0] cur_exp;
     logic [SIG_W-1:0]        cur_sig;
     logic                    g, r, st;
-    int unsigned             sub_shift;
     int unsigned             i;
     logic                    lsb;
     logic                    round_up;
     logic [SIG_W-1:0]        rounded_sig;
     logic                    carry_up;
-    logic [51:0]             out_mant_d;
-    logic [22:0]             out_mant_s;
-    logic [10:0]             out_expf_d;
-    logic [7:0]              out_expf_s;
-    logic                    overflow;
-    logic                    is_subnormal_out;
-    logic                    inexact;
-    int unsigned             sh;
     logic [2:0]              grs_vec;
     logic [SIG_W:0]          incremented;
     logic [SIG_W-1:0]        mask_one;
-    logic                    to_inf;
+    int unsigned             sh;
 
-    // Defaults
-    s4_result        = '0;
-    s4_flags         = 5'd0;
+    s4_d             = '0;
     mant_w           = 0;
-    exp_w            = 0;
     emin             = '0;
     emax             = '0;
-    bias             = '0;
     cur_exp          = '0;
     cur_sig          = '0;
     g                = 1'b0;
     r                = 1'b0;
     st               = 1'b0;
-    sub_shift        = 0;
     i                = 0;
     lsb              = 1'b0;
     round_up         = 1'b0;
     rounded_sig      = '0;
     carry_up         = 1'b0;
-    out_mant_d       = '0;
-    out_mant_s       = '0;
-    out_expf_d       = '0;
-    out_expf_s       = '0;
-    overflow         = 1'b0;
-    is_subnormal_out = 1'b0;
-    inexact          = 1'b0;
-    sh               = 0;
     grs_vec          = '0;
     incremented      = '0;
     mask_one         = '0;
-    to_inf           = 1'b0;
+    sh               = 0;
 
-    if (s3_q.is_special) begin
-      s4_result = s3_q.special_res;
-      s4_flags  = s3_q.special_flg;
-    end else if (s3_q.result_zero) begin
-      if (s3_q.fmt_d) s4_result = {s3_q.res_sign, 63'd0};
-      else            s4_result = {FP_NANBOX_UPPER, s3_q.res_sign, 31'd0};
-    end else begin : pack
+    s4_d.valid       = s3_q.valid;
+    s4_d.fmt_d       = s3_q.fmt_d;
+    s4_d.rm          = s3_q.rm;
+    s4_d.tag         = s3_q.tag;
+    s4_d.is_special  = s3_q.is_special;
+    s4_d.special_res = s3_q.special_res;
+    s4_d.special_flg = s3_q.special_flg;
+    s4_d.res_sign    = s3_q.res_sign;
+    s4_d.result_zero = s3_q.result_zero;
 
+    if (!s3_q.is_special && !s3_q.result_zero) begin : round_blk
       if (s3_q.fmt_d) begin
         mant_w = 52;
-        exp_w  = 11;
-        bias   = 13'sd1023;
         emin   = -13'sd1022;
         emax   = 13'sd1023;
       end else begin
         mant_w = 23;
-        exp_w  = 8;
-        bias   = 13'sd127;
         emin   = -13'sd126;
         emax   = 13'sd127;
       end
@@ -620,17 +612,10 @@ module kronos_fpu_fadd
       r  = s3_q.round_b;
       st = s3_q.sticky;
 
-      // --- Subnormal flush: if exp < emin, shift significand right until
-      //     exp == emin, accumulating dropped bits into G/R/S.
       if (cur_exp < emin) begin
         grs_vec = {g, r, st};
         sh = {19'd0, 13'(emin - cur_exp)};
-        // Pull guard/round/sticky back into significand LSBs so we can reuse
-        // the same shifter.
-        // We'll iterate shifting right 1 bit at a time.
         for (i = 0; i < SIG_W + 3; i++) if (i < sh) begin
-          // Capture LSB into sticky, shift GRS right, load new G from current
-          // significand bit after shift.
           grs_vec[0] = grs_vec[0] | grs_vec[1];
           grs_vec[1] = grs_vec[2];
           grs_vec[2] = cur_sig[0];
@@ -642,24 +627,6 @@ module kronos_fpu_fadd
         cur_exp = emin;
       end
 
-      // --- Round ---
-      // For S, significand effective LSB sits higher in cur_sig: LSB is at bit
-      // (SIG_W-1-mant_w) above the implicit 3 alignment bits. But we already
-      // left-justify single operands with 3 lower zero bits... For S we must
-      // treat guard/round/sticky as bits just below the 24-bit significand.
-      // Because S operands were placed left-justified with zero padding in the
-      // low (SIG_W-24) bits, the guard/round/sticky bits for S came from those
-      // pad bits during alignment — same encoding applies. So we extract:
-      //   lsb at index (SIG_W - 1 - mant_w)
-      //   guard already in bit 2, round in bit 1, sticky in bit 0 for D.
-      // For S, guard/round are actually stored bits inside cur_sig BELOW the
-      // mantissa LSB — we must move them.
-      //
-      // Simplify: recompute G/R/S from cur_sig for both formats uniformly.
-      // cur_sig layout: [hidden | mant | padding (for S) | G R S]
-      //   D: SIG_W=56, 1 + 52 + 3 bits = 56. G=sig[2], R=sig[1], S=sig[0].
-      //   S: 1 + 23 + (SIG_W-1-23) = 1 + 23 + 32 padding. The mantissa LSB is
-      //      at bit 32. G=bit31, R=bit30, S=OR of bits[29:0] OR current st.
       if (!s3_q.fmt_d) begin
         g  = cur_sig[SIG_W - 1 - mant_w - 1];
         r  = cur_sig[SIG_W - 1 - mant_w - 2];
@@ -667,7 +634,6 @@ module kronos_fpu_fadd
           if (cur_sig[i]) st = 1'b1;
         end
       end
-      // LSB of kept significand.
       lsb = cur_sig[SIG_W - 1 - mant_w];
 
       round_up = 1'b0;
@@ -680,68 +646,101 @@ module kronos_fpu_fadd
         default:   round_up = 1'b0;
       endcase
 
-      // Add 1 at position (SIG_W-1-mant_w) if rounding up.
-      begin
-        mask_one = '0;
-        mask_one[SIG_W - 1 - mant_w] = 1'b1;
-        if (round_up)
-          incremented = {1'b0, cur_sig} + {1'b0, mask_one};
-        else
-          incremented = {1'b0, cur_sig};
-        carry_up    = incremented[SIG_W];
-        rounded_sig = incremented[SIG_W-1:0];
-      end
+      mask_one = '0;
+      mask_one[SIG_W - 1 - mant_w] = 1'b1;
+      if (round_up)
+        incremented = {1'b0, cur_sig} + {1'b0, mask_one};
+      else
+        incremented = {1'b0, cur_sig};
+      carry_up    = incremented[SIG_W];
+      rounded_sig = incremented[SIG_W-1:0];
 
       if (carry_up) begin
         rounded_sig = {1'b1, rounded_sig[SIG_W-1:1]};
         cur_exp     = cur_exp + 13'sd1;
       end
 
-      inexact  = g | r | st;
-      overflow = (cur_exp > emax);
+      s4_d.cur_exp          = cur_exp;
+      s4_d.rounded_sig      = rounded_sig;
+      s4_d.inexact          = g | r | st;
+      s4_d.overflow         = (cur_exp > emax);
+      s4_d.is_subnormal_out = (rounded_sig[SIG_W-1] == 1'b0);
+    end
+  end
 
-      // Subnormal determination: hidden bit (bit SIG_W-1) = 0 after rounding.
-      is_subnormal_out = (rounded_sig[SIG_W-1] == 1'b0);
+  // ===========================================================================
+  // Stage 5: pack IEEE result
+  // ===========================================================================
+  logic [63:0] s5_result;
+  logic [4:0]  s5_flags;
 
-      if (overflow) begin
-        s4_flags[FP_FFLAG_OF] = 1'b1;
-        s4_flags[FP_FFLAG_NX] = 1'b1;
-        // RTZ / (RDN for pos) / (RUP for neg) → max finite; else ±Inf.
-        begin
-          unique case (s3_q.rm)
-            FP_RM_RNE: to_inf = 1'b1;
-            FP_RM_RTZ: to_inf = 1'b0;
-            FP_RM_RDN: to_inf = s3_q.res_sign;
-            FP_RM_RUP: to_inf = !s3_q.res_sign;
-            FP_RM_RMM: to_inf = 1'b1;
-            default:   to_inf = 1'b1;
-          endcase
-          if (s3_q.fmt_d) begin
-            if (to_inf) s4_result = {s3_q.res_sign, 11'h7FF, 52'd0};
-            else        s4_result = {s3_q.res_sign, 11'h7FE, {52{1'b1}}};
-          end else begin
-            if (to_inf) s4_result = {FP_NANBOX_UPPER, s3_q.res_sign, 8'hFF, 23'd0};
-            else        s4_result = {FP_NANBOX_UPPER, s3_q.res_sign, 8'hFE, {23{1'b1}}};
-          end
+  always_comb begin
+    int unsigned              mant_w;
+    logic signed [EXP_W-1:0] bias;
+    logic [51:0]              out_mant_d;
+    logic [22:0]              out_mant_s;
+    logic [10:0]              out_expf_d;
+    logic [7:0]               out_expf_s;
+    logic                     to_inf;
+
+    s5_result  = '0;
+    s5_flags   = 5'd0;
+    mant_w     = 0;
+    bias       = '0;
+    out_mant_d = '0;
+    out_mant_s = '0;
+    out_expf_d = '0;
+    out_expf_s = '0;
+    to_inf     = 1'b0;
+
+    if (s4_q.is_special) begin
+      s5_result = s4_q.special_res;
+      s5_flags  = s4_q.special_flg;
+    end else if (s4_q.result_zero) begin
+      if (s4_q.fmt_d) s5_result = {s4_q.res_sign, 63'd0};
+      else            s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, 31'd0};
+    end else begin : pack_blk
+      if (s4_q.fmt_d) begin
+        mant_w = 52;
+        bias   = 13'sd1023;
+      end else begin
+        mant_w = 23;
+        bias   = 13'sd127;
+      end
+
+      if (s4_q.overflow) begin
+        s5_flags[FP_FFLAG_OF] = 1'b1;
+        s5_flags[FP_FFLAG_NX] = 1'b1;
+        unique case (s4_q.rm)
+          FP_RM_RNE: to_inf = 1'b1;
+          FP_RM_RTZ: to_inf = 1'b0;
+          FP_RM_RDN: to_inf = s4_q.res_sign;
+          FP_RM_RUP: to_inf = !s4_q.res_sign;
+          FP_RM_RMM: to_inf = 1'b1;
+          default:   to_inf = 1'b1;
+        endcase
+        if (s4_q.fmt_d) begin
+          if (to_inf) s5_result = {s4_q.res_sign, 11'h7FF, 52'd0};
+          else        s5_result = {s4_q.res_sign, 11'h7FE, {52{1'b1}}};
+        end else begin
+          if (to_inf) s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, 8'hFF, 23'd0};
+          else        s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, 8'hFE, {23{1'b1}}};
         end
       end else begin
-        // Normal / subnormal packing.
-        if (s3_q.fmt_d) begin
-          out_mant_d = rounded_sig[SIG_W-2 -: 52];  // 52 bits below hidden
-          if (is_subnormal_out) out_expf_d = 11'd0;
-          else                  out_expf_d = 11'(cur_exp + bias);
-          s4_result = {s3_q.res_sign, out_expf_d, out_mant_d};
+        if (s4_q.fmt_d) begin
+          out_mant_d = s4_q.rounded_sig[SIG_W-2 -: 52];
+          if (s4_q.is_subnormal_out) out_expf_d = 11'd0;
+          else                       out_expf_d = 11'(s4_q.cur_exp + bias);
+          s5_result = {s4_q.res_sign, out_expf_d, out_mant_d};
         end else begin
-          // Single: mantissa is the 23 bits just below the hidden bit.
-          out_mant_s = rounded_sig[SIG_W-2 -: 23];
-          if (is_subnormal_out) out_expf_s = 8'd0;
-          else                  out_expf_s = 8'(cur_exp + bias);
-          s4_result = {FP_NANBOX_UPPER, s3_q.res_sign, out_expf_s, out_mant_s};
+          out_mant_s = s4_q.rounded_sig[SIG_W-2 -: 23];
+          if (s4_q.is_subnormal_out) out_expf_s = 8'd0;
+          else                       out_expf_s = 8'(s4_q.cur_exp + bias);
+          s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, out_expf_s, out_mant_s};
         end
 
-        if (inexact) s4_flags[FP_FFLAG_NX] = 1'b1;
-        // Underflow (tininess after rounding) AND inexact → UF.
-        if (is_subnormal_out && inexact) s4_flags[FP_FFLAG_UF] = 1'b1;
+        if (s4_q.inexact) s5_flags[FP_FFLAG_NX] = 1'b1;
+        if (s4_q.is_subnormal_out && s4_q.inexact) s5_flags[FP_FFLAG_UF] = 1'b1;
       end
     end
   end
@@ -754,14 +753,17 @@ module kronos_fpu_fadd
       s1_q <= '0;
       s2_q <= '0;
       s3_q <= '0;
+      s4_q <= '0;
     end else begin
       s1_q <= s1_d;
       s2_q <= s2_d;
       s3_q <= s3_d;
+      s4_q <= s4_d;
       if (flush_i) begin
         s1_q.valid <= 1'b0;
         s2_q.valid <= 1'b0;
         s3_q.valid <= 1'b0;
+        s4_q.valid <= 1'b0;
       end
     end
   end
@@ -773,10 +775,10 @@ module kronos_fpu_fadd
       fflags_o    <= '0;
       tag_o       <= '0;
     end else begin
-      out_valid_o <= flush_i ? 1'b0 : s3_q.valid;
-      result_o    <= s4_result;
-      fflags_o    <= s4_flags;
-      tag_o       <= s3_q.tag;
+      out_valid_o <= flush_i ? 1'b0 : s4_q.valid;
+      result_o    <= s5_result;
+      fflags_o    <= s5_flags;
+      tag_o       <= s4_q.tag;
     end
   end
 
