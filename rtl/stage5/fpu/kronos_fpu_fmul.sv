@@ -2,16 +2,19 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// 4-stage pipelined IEEE 754 floating-point multiplier (single and double).
+// 6-stage pipelined IEEE 754 floating-point multiplier (single and double).
 //
 // Pipeline:
 //   S1: NaN-unbox single, decompose operands, classify specials, precompute
 //       sign / unbiased exponent sum / extended significands.
 //   S2: Multiply significands (wide multiply registered at stage boundary for
 //       DSP inference).
-//   S3: Normalize product (1x.x vs 01.x), compute guard/round/sticky, shift
-//       right for subnormals if the result exponent is non-positive.
-//   S4: Round, handle overflow/underflow, pack, NaN-box single. Register.
+//   S3: LZC only — compute 7-bit leading-zero count and normalized exponent
+//       from the 106-bit product. Carry full product forward.
+//   S3b: Normalize barrel shift — use registered LZC to shift product and
+//        extract mantissa + GRS bits.
+//   S4: Subnormal shift — apply right-shift if exp_norm <= 0, refine GRS.
+//   S5: Round, handle overflow/underflow, pack, NaN-box single. Register.
 
 module kronos_fpu_fmul
   import kronos_pkg::*;
@@ -282,40 +285,6 @@ module kronos_fpu_fmul
     end
   end
 
-  // -------------------------------------------------------------------------
-  // S3 combinational: normalize, form guard/round/sticky, subnormal shift
-  //
-  // After an SIG_W x SIG_W unsigned multiply, the product is in [0, 2^(2*SIG_W))
-  // with the leading 1 at bit [2*SIG_W-1] ("1x.xxx...") or bit [2*SIG_W-2]
-  // ("01.xxx..."). We target a normalized mantissa of the form 1.f, so:
-  //   - bit[105] = 1: shift right by (SIG_W-1) = 52. Exponent += 1.
-  //   - bit[104] = 1: shift right by (SIG_W-2) = 51. Exponent += 0.
-  // After that, we then need to collapse the low bits into GRS.
-  //
-  // We capture a normalized quantity of width SIG_W + 3 (hidden + fraction +
-  // G + R + S) = 56 bits for double, and use the upper portion for single.
-  // -------------------------------------------------------------------------
-
-  // For readability alias sizes: normalized mantissa uses top SIG_W bits of
-  // prod as {hidden, frac[D_SIG_W-1:0]} (for double) or {hidden, frac[S_SIG_W-1:0], 29 zeros}
-  // (for single). To unify, we always produce a 53-bit {hidden, frac52} plus GRS.
-
-  logic [PROD_W-1:0] s3_prod;
-  logic signed [EXP_EXT_W-1:0] s3_exp_norm_c;
-  logic [SIG_W-1:0] s3_mant_c;       // 53 bits: {1, frac52}
-  logic             s3_guard_c;
-  logic             s3_round_c;
-  logic             s3_sticky_c;
-
-  // After initial normalization (to "1.f" form across 53 bits), we may still
-  // need to right-shift for subnormals if exp <= 0.
-  logic [SIG_W-1:0] s3_mant_post_c;
-  logic             s3_guard_post_c;
-  logic             s3_round_post_c;
-  logic             s3_sticky_post_c;
-  logic signed [EXP_EXT_W-1:0] s3_exp_post_c;
-  logic             s3_is_subnormal_c;
-
   // Leading-zero count for the 106-bit product. Used to normalize products
   // whose leading 1 sits below bit 104 (subnormal input operands).
   function automatic logic [6:0] lzc106(input logic [PROD_W-1:0] x);
@@ -328,125 +297,24 @@ module kronos_fpu_fmul
     return 7'd106; // all-zero product
   endfunction
 
+  // -------------------------------------------------------------------------
+  // S3 combinational: LZC only
+  // -------------------------------------------------------------------------
+  logic [6:0] s3_lz_comb;
+  logic signed [EXP_EXT_W-1:0] s3_exp_norm_comb;
+
   always_comb begin
-    logic [6:0]  lz;
-    logic signed [EXP_EXT_W-1:0] exp_adj;
-    // Wide product, left-shifted to bring the leading 1 to bit PROD_W-2.
-    // After left-shifting by (lz-1), all products have their hidden bit at bit 104.
-    logic [PROD_W-1:0] prod_norm;
-    // Hoisted from subnormal sub-blocks
-    logic signed [EXP_EXT_W-1:0] shift_amt;
-    logic [SIG_W-1:0] mant_fullw;
-    logic g_in, r_in, s_in;
-    int unsigned sh;
-    logic [63:0] tail;
-    logic [63:0] shifted;
-    logic [63:0] lost_mask;
-
-    // Defaults
-    lz         = '0;
-    exp_adj    = '0;
-    prod_norm  = '0;
-    shift_amt  = '0;
-    mant_fullw = '0;
-    g_in       = 1'b0;
-    r_in       = 1'b0;
-    s_in       = 1'b0;
-    sh         = 0;
-    tail       = '0;
-    shifted    = '0;
-    lost_mask  = '0;
-
-    // Start from the wide product.
-    s3_prod = s2_prod_q;
-
-    // General normalization: find leading 1 and shift so that
-    // bit[PROD_W-2] (= bit 104) becomes the hidden bit.
-    // For normal*normal products the leading 1 is at bit 104 or 105.
-    // For subnormal inputs the leading 1 can be lower.
-    //
-    // lzc106 counts zeros from the MSB (bit 105).  The leading 1 is at
-    // bit (PROD_W-1-lz).  We want it at bit (PROD_W-2), so:
-    //   left shift by (lz - 1)  and  exponent -= (lz - 1).
-    // When lz == 0: leading 1 is at bit 105, left_shift = -1 → right shift by 1.
-    //   Handled as the existing "top bit" case, exp += 1.
-    // When lz == 1: leading 1 already at bit 104, no shift, exp unchanged.
-    // When lz >= 2: left shift by (lz-1), exp -= (lz-1).
-
-    lz = lzc106(s3_prod); // leading zeros from MSB (bit 105)
-
-    if (lz == 7'd0) begin
-      // leading 1 at bit 105: extract directly without using prod_norm shift.
-      // prod_norm is unused in this path; assign a don't-care.
-      prod_norm     = '0;
-      s3_mant_c     = s3_prod[PROD_W-1 -: SIG_W];           // prod[105:53]
-      s3_guard_c    = s3_prod[PROD_W-1 - SIG_W];             // prod[52]
-      s3_round_c    = s3_prod[PROD_W-1 - SIG_W - 1];         // prod[51]
-      s3_sticky_c   = |s3_prod[PROD_W-1 - SIG_W - 2 : 0];   // prod[50:0]
-      s3_exp_norm_c = s2_exp_sum_q + 13'sd1;
-    end else begin
-      // leading 1 at bit (PROD_W-1-lz); left shift by (lz-1) to reach bit 104.
-      prod_norm     = s3_prod << (lz - 7'd1);
-      s3_mant_c     = prod_norm[PROD_W-2 -: SIG_W];
-      s3_guard_c    = prod_norm[PROD_W-2 - SIG_W];
-      s3_round_c    = prod_norm[PROD_W-2 - SIG_W - 1];
-      s3_sticky_c   = |prod_norm[PROD_W-2 - SIG_W - 2 : 0];
-      exp_adj       = 13'sd1 - {6'b0, lz};
-      s3_exp_norm_c = s2_exp_sum_q + exp_adj;
-    end
-
-    // Now, for single-precision, the mantissa layout is {1, frac23, 29 zeros}
-    // (since we left-padded the multiplicands with 29 zeros). The guard/round/
-    // sticky must therefore be recomputed from the low 29 bits of the 53-bit
-    // mantissa, OR'd with the previous sticky tail. We handle S/D uniformly
-    // in the rounding stage by carrying a "trailing" width-adjusted GRS.
-    //
-    // Subnormal handling: if s3_exp_norm_c <= 0, shift the mantissa right by
-    // (1 - s3_exp_norm_c) to denormalize, accumulating into sticky.
-    begin
-      mant_fullw = s3_mant_c;
-      g_in = s3_guard_c;
-      r_in = s3_round_c;
-      s_in = s3_sticky_c;
-
-      if (s3_exp_norm_c <= 13'sd0) begin
-        shift_amt = 13'sd1 - s3_exp_norm_c;
-        // clamp shift to avoid runaway; sh must hold values 0..64
-        if (shift_amt >= 13'sd64) sh = 64;
-        else                       sh = {25'd0, shift_amt[6:0]};
-
-        // Build a 64-bit tail to simplify sticky computation:
-        // [mant (53)] [g (1)] [r (1)] [s (1)] ...
-        begin
-          tail = {mant_fullw, g_in, r_in, s_in, 8'd0};
-          if (sh >= 64) begin
-            shifted   = 64'd0;
-            lost_mask = 64'hFFFF_FFFF_FFFF_FFFF;
-          end else begin
-            shifted   = tail >> sh;
-            lost_mask = ~(64'hFFFF_FFFF_FFFF_FFFF << sh);
-          end
-          s3_mant_post_c  = shifted[63:11];
-          s3_guard_post_c = shifted[10];
-          s3_round_post_c = shifted[9];
-          s3_sticky_post_c = |shifted[8:0] | (|(tail & lost_mask));
-          s3_exp_post_c   = 13'sd0;
-          s3_is_subnormal_c = 1'b1;
-        end
-      end else begin
-        s3_mant_post_c  = mant_fullw;
-        s3_guard_post_c = g_in;
-        s3_round_post_c = r_in;
-        s3_sticky_post_c = s_in;
-        s3_exp_post_c   = s3_exp_norm_c;
-        s3_is_subnormal_c = 1'b0;
-      end
-    end
+    logic [6:0] lz;
+    s3_lz_comb       = '0;
+    s3_exp_norm_comb = '0;
+    lz = '0;
+    lz = lzc106(s2_prod_q);
+    s3_lz_comb = lz;
+    if (lz == 7'd0)
+      s3_exp_norm_comb = s2_exp_sum_q + 13'sd1;
+    else
+      s3_exp_norm_comb = s2_exp_sum_q + 13'sd1 - {6'b0, lz};
   end
-
-  // For single-precision, we need to fold the 29 low bits of the 53-bit
-  // mantissa into sticky *after* the subnormal shift. This is done in S4
-  // when we pick the format-specific fraction width.
 
   // -------------------------------------------------------------------------
   // S3 registers
@@ -456,10 +324,9 @@ module kronos_fpu_fmul
   logic [2:0]  s3_rm_q;
   fpu_tag_t    s3_tag_q;
   logic        s3_sign_q;
-  logic signed [EXP_EXT_W-1:0] s3_exp_q;
-  logic [SIG_W-1:0] s3_mant_q;
-  logic s3_g_q, s3_r_q, s3_s_q;
-  logic s3_is_subnormal_q;
+  logic [6:0]  s3_lz_q;
+  logic signed [EXP_EXT_W-1:0] s3_exp_norm_q;
+  logic [PROD_W-1:0] s3_prod_q;
   logic s3_any_snan_q, s3_any_nan_q, s3_inf_times_zero_q;
   logic s3_res_is_inf_q, s3_res_is_zero_q;
 
@@ -470,12 +337,9 @@ module kronos_fpu_fmul
       s3_rm_q             <= 3'd0;
       s3_tag_q            <= '0;
       s3_sign_q           <= 1'b0;
-      s3_exp_q            <= '0;
-      s3_mant_q           <= '0;
-      s3_g_q              <= 1'b0;
-      s3_r_q              <= 1'b0;
-      s3_s_q              <= 1'b0;
-      s3_is_subnormal_q   <= 1'b0;
+      s3_lz_q             <= '0;
+      s3_exp_norm_q       <= '0;
+      s3_prod_q           <= '0;
       s3_any_snan_q       <= 1'b0;
       s3_any_nan_q        <= 1'b0;
       s3_inf_times_zero_q <= 1'b0;
@@ -487,12 +351,9 @@ module kronos_fpu_fmul
       s3_rm_q             <= s2_rm_q;
       s3_tag_q            <= s2_tag_q;
       s3_sign_q           <= s2_sign_q;
-      s3_exp_q            <= s3_exp_post_c;
-      s3_mant_q           <= s3_mant_post_c;
-      s3_g_q              <= s3_guard_post_c;
-      s3_r_q              <= s3_round_post_c;
-      s3_s_q              <= s3_sticky_post_c;
-      s3_is_subnormal_q   <= s3_is_subnormal_c;
+      s3_lz_q             <= s3_lz_comb;
+      s3_exp_norm_q       <= s3_exp_norm_comb;
+      s3_prod_q           <= s2_prod_q;
       s3_any_snan_q       <= s2_any_snan_q;
       s3_any_nan_q        <= s2_any_nan_q;
       s3_inf_times_zero_q <= s2_inf_times_zero_q;
@@ -502,10 +363,209 @@ module kronos_fpu_fmul
   end
 
   // -------------------------------------------------------------------------
-  // S4 combinational: round, overflow/underflow, pack, NaN-box
+  // S3b combinational: normalize barrel shift using registered LZC
   // -------------------------------------------------------------------------
-  logic [63:0] s4_result_c;
-  logic [4:0]  s4_fflags_c;
+  logic [SIG_W-1:0] s3b_mant_comb;
+  logic             s3b_guard_comb;
+  logic             s3b_round_comb;
+  logic             s3b_sticky_comb;
+  logic             s3b_is_subnormal_comb;
+  logic signed [EXP_EXT_W-1:0] s3b_exp_comb;
+
+  always_comb begin
+    logic [PROD_W-1:0] prod_norm;
+    logic [6:0]        lz;
+
+    prod_norm             = '0;
+    s3b_mant_comb         = '0;
+    s3b_guard_comb        = 1'b0;
+    s3b_round_comb        = 1'b0;
+    s3b_sticky_comb       = 1'b0;
+    s3b_is_subnormal_comb = 1'b0;
+    s3b_exp_comb          = s3_exp_norm_q;
+
+    lz = s3_lz_q;
+
+    if (lz == 7'd0) begin
+      s3b_mant_comb   = s3_prod_q[PROD_W-1 -: SIG_W];
+      s3b_guard_comb  = s3_prod_q[PROD_W-1 - SIG_W];
+      s3b_round_comb  = s3_prod_q[PROD_W-1 - SIG_W - 1];
+      s3b_sticky_comb = |s3_prod_q[PROD_W-1 - SIG_W - 2 : 0];
+    end else begin
+      prod_norm       = s3_prod_q << (lz - 7'd1);
+      s3b_mant_comb   = prod_norm[PROD_W-2 -: SIG_W];
+      s3b_guard_comb  = prod_norm[PROD_W-2 - SIG_W];
+      s3b_round_comb  = prod_norm[PROD_W-2 - SIG_W - 1];
+      s3b_sticky_comb = |prod_norm[PROD_W-2 - SIG_W - 2 : 0];
+    end
+
+    s3b_is_subnormal_comb = (s3_exp_norm_q <= 13'sd0);
+  end
+
+  // -------------------------------------------------------------------------
+  // S3b registers
+  // -------------------------------------------------------------------------
+  logic        s3b_valid_q;
+  logic        s3b_fmt_d_q;
+  logic [2:0]  s3b_rm_q;
+  fpu_tag_t    s3b_tag_q;
+  logic        s3b_sign_q;
+  logic signed [EXP_EXT_W-1:0] s3b_exp_q;
+  logic [SIG_W-1:0] s3b_mant_q;
+  logic s3b_g_q, s3b_r_q, s3b_s_q;
+  logic s3b_is_subnormal_q;
+  logic s3b_any_snan_q, s3b_any_nan_q, s3b_inf_times_zero_q;
+  logic s3b_res_is_inf_q, s3b_res_is_zero_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      s3b_valid_q          <= 1'b0;
+      s3b_fmt_d_q          <= 1'b0;
+      s3b_rm_q             <= 3'd0;
+      s3b_tag_q            <= '0;
+      s3b_sign_q           <= 1'b0;
+      s3b_exp_q            <= '0;
+      s3b_mant_q           <= '0;
+      s3b_g_q              <= 1'b0;
+      s3b_r_q              <= 1'b0;
+      s3b_s_q              <= 1'b0;
+      s3b_is_subnormal_q   <= 1'b0;
+      s3b_any_snan_q       <= 1'b0;
+      s3b_any_nan_q        <= 1'b0;
+      s3b_inf_times_zero_q <= 1'b0;
+      s3b_res_is_inf_q     <= 1'b0;
+      s3b_res_is_zero_q    <= 1'b0;
+    end else begin
+      s3b_valid_q          <= flush_i ? 1'b0 : s3_valid_q;
+      s3b_fmt_d_q          <= s3_fmt_d_q;
+      s3b_rm_q             <= s3_rm_q;
+      s3b_tag_q            <= s3_tag_q;
+      s3b_sign_q           <= s3_sign_q;
+      s3b_exp_q            <= s3_exp_norm_q;
+      s3b_mant_q           <= s3b_mant_comb;
+      s3b_g_q              <= s3b_guard_comb;
+      s3b_r_q              <= s3b_round_comb;
+      s3b_s_q              <= s3b_sticky_comb;
+      s3b_is_subnormal_q   <= s3b_is_subnormal_comb;
+      s3b_any_snan_q       <= s3_any_snan_q;
+      s3b_any_nan_q        <= s3_any_nan_q;
+      s3b_inf_times_zero_q <= s3_inf_times_zero_q;
+      s3b_res_is_inf_q     <= s3_res_is_inf_q;
+      s3b_res_is_zero_q    <= s3_res_is_zero_q;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // S4 combinational: subnormal shift (if exp_norm <= 0)
+  // -------------------------------------------------------------------------
+  logic [SIG_W-1:0] s4_mant_comb;
+  logic             s4_g_comb, s4_r_comb, s4_s_comb;
+  logic signed [EXP_EXT_W-1:0] s4_exp_comb;
+
+  always_comb begin
+    logic signed [EXP_EXT_W-1:0] shift_amt;
+    logic [SIG_W-1:0] mant_fullw;
+    logic g_in, r_in, s_in;
+    int unsigned sh;
+    logic [63:0] tail;
+    logic [63:0] shifted;
+    logic [63:0] lost_mask;
+
+    shift_amt  = '0;
+    mant_fullw = s3b_mant_q;
+    g_in       = s3b_g_q;
+    r_in       = s3b_r_q;
+    s_in       = s3b_s_q;
+    sh         = 0;
+    tail       = '0;
+    shifted    = '0;
+    lost_mask  = '0;
+
+    s4_mant_comb = s3b_mant_q;
+    s4_g_comb    = s3b_g_q;
+    s4_r_comb    = s3b_r_q;
+    s4_s_comb    = s3b_s_q;
+    s4_exp_comb  = s3b_exp_q;
+
+    if (s3b_is_subnormal_q) begin
+      shift_amt = 13'sd1 - s3b_exp_q;
+      if (shift_amt >= 13'sd64) sh = 64;
+      else                       sh = {25'd0, shift_amt[6:0]};
+
+      tail = {mant_fullw, g_in, r_in, s_in, 8'd0};
+      if (sh >= 64) begin
+        shifted   = 64'd0;
+        lost_mask = 64'hFFFF_FFFF_FFFF_FFFF;
+      end else begin
+        shifted   = tail >> sh;
+        lost_mask = ~(64'hFFFF_FFFF_FFFF_FFFF << sh);
+      end
+      s4_mant_comb = shifted[63:11];
+      s4_g_comb    = shifted[10];
+      s4_r_comb    = shifted[9];
+      s4_s_comb    = |shifted[8:0] | (|(tail & lost_mask));
+      s4_exp_comb  = 13'sd0;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // S4 registers
+  // -------------------------------------------------------------------------
+  logic        s4_valid_q;
+  logic        s4_fmt_d_q;
+  logic [2:0]  s4_rm_q;
+  fpu_tag_t    s4_tag_q;
+  logic        s4_sign_q;
+  logic signed [EXP_EXT_W-1:0] s4_exp_q;
+  logic [SIG_W-1:0] s4_mant_q;
+  logic s4_g_q, s4_r_q, s4_s_q;
+  logic s4_is_subnormal_q;
+  logic s4_any_snan_q, s4_any_nan_q, s4_inf_times_zero_q;
+  logic s4_res_is_inf_q, s4_res_is_zero_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      s4_valid_q          <= 1'b0;
+      s4_fmt_d_q          <= 1'b0;
+      s4_rm_q             <= 3'd0;
+      s4_tag_q            <= '0;
+      s4_sign_q           <= 1'b0;
+      s4_exp_q            <= '0;
+      s4_mant_q           <= '0;
+      s4_g_q              <= 1'b0;
+      s4_r_q              <= 1'b0;
+      s4_s_q              <= 1'b0;
+      s4_is_subnormal_q   <= 1'b0;
+      s4_any_snan_q       <= 1'b0;
+      s4_any_nan_q        <= 1'b0;
+      s4_inf_times_zero_q <= 1'b0;
+      s4_res_is_inf_q     <= 1'b0;
+      s4_res_is_zero_q    <= 1'b0;
+    end else begin
+      s4_valid_q          <= flush_i ? 1'b0 : s3b_valid_q;
+      s4_fmt_d_q          <= s3b_fmt_d_q;
+      s4_rm_q             <= s3b_rm_q;
+      s4_tag_q            <= s3b_tag_q;
+      s4_sign_q           <= s3b_sign_q;
+      s4_exp_q            <= s4_exp_comb;
+      s4_mant_q           <= s4_mant_comb;
+      s4_g_q              <= s4_g_comb;
+      s4_r_q              <= s4_r_comb;
+      s4_s_q              <= s4_s_comb;
+      s4_is_subnormal_q   <= s3b_is_subnormal_q;
+      s4_any_snan_q       <= s3b_any_snan_q;
+      s4_any_nan_q        <= s3b_any_nan_q;
+      s4_inf_times_zero_q <= s3b_inf_times_zero_q;
+      s4_res_is_inf_q     <= s3b_res_is_inf_q;
+      s4_res_is_zero_q    <= s3b_res_is_zero_q;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // S5 combinational: round, overflow/underflow, pack, NaN-box
+  // -------------------------------------------------------------------------
+  logic [63:0] s5_result_c;
+  logic [4:0]  s5_fflags_c;
 
   // Rounding helper
   function automatic logic round_up(
@@ -553,19 +613,19 @@ module kronos_fpu_fmul
     logic [S_SIG_W-1:0] pack_frac_s;
     logic [D_SIG_W-1:0] pack_frac_d;
 
-    s4_result_c = '0;
-    s4_fflags_c = '0;
+    s5_result_c = '0;
+    s5_fflags_c = '0;
 
-    exp_in  = s3_exp_q;
-    mant_in = s3_mant_q;
-    g_in    = s3_g_q;
-    r_in    = s3_r_q;
-    s_in    = s3_s_q;
+    exp_in  = s4_exp_q;
+    mant_in = s4_mant_q;
+    g_in    = s4_g_q;
+    r_in    = s4_r_q;
+    s_in    = s4_s_q;
 
     // Extract kept mantissa + per-format GRS.
     // For single, kept fraction is bits [51:29] of mant_in, and [28:0] must
     // be folded into sticky along with g_in/r_in/s_in.
-    if (s3_fmt_d_q) begin
+    if (s4_fmt_d_q) begin
       mant_kept = mant_in;       // 53 bits already
       g_eff = g_in;
       r_eff = r_in;
@@ -579,7 +639,7 @@ module kronos_fpu_fmul
     end
 
     // Determine if rounding increments mantissa
-    round_inc = round_up(s3_rm_q, s3_sign_q, mant_kept[0], g_eff, r_eff, s_eff);
+    round_inc = round_up(s4_rm_q, s4_sign_q, mant_kept[0], g_eff, r_eff, s_eff);
     mant_rnd  = {1'b0, mant_kept} + {{SIG_W{1'b0}}, round_inc};
     exp_rnd   = exp_in;
     inexact   = g_eff | r_eff | s_eff;
@@ -590,7 +650,7 @@ module kronos_fpu_fmul
     // We also need to handle the subnormal→normal transition: when the
     // subnormal mantissa rounds up to 1.0 in the hidden-bit position, the
     // exponent becomes 1 (normal).
-    if (s3_fmt_d_q) begin
+    if (s4_fmt_d_q) begin
       if (mant_rnd[SIG_W]) begin
         // carry out of double's 53-bit field
         mant_rnd = mant_rnd >> 1;
@@ -613,56 +673,56 @@ module kronos_fpu_fmul
       end
     end
 
-    underflow_tiny = s3_is_subnormal_q;
+    underflow_tiny = s4_is_subnormal_q;
 
     // -------- Build result --------
-    if (s3_any_snan_q) begin
+    if (s4_any_snan_q) begin
       // sNaN operand → invalid, canonical qNaN
-      s4_fflags_c[FP_FFLAG_NV] = 1'b1;
-      s4_result_c = s3_fmt_d_q ? FP_CANON_QNAN_D
+      s5_fflags_c[FP_FFLAG_NV] = 1'b1;
+      s5_result_c = s4_fmt_d_q ? FP_CANON_QNAN_D
                                 : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-    end else if (s3_inf_times_zero_q) begin
+    end else if (s4_inf_times_zero_q) begin
       // inf * 0 → invalid, canonical qNaN
-      s4_fflags_c[FP_FFLAG_NV] = 1'b1;
-      s4_result_c = s3_fmt_d_q ? FP_CANON_QNAN_D
+      s5_fflags_c[FP_FFLAG_NV] = 1'b1;
+      s5_result_c = s4_fmt_d_q ? FP_CANON_QNAN_D
                                 : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-    end else if (s3_any_nan_q) begin
+    end else if (s4_any_nan_q) begin
       // qNaN propagation → canonical qNaN, no flag
-      s4_result_c = s3_fmt_d_q ? FP_CANON_QNAN_D
+      s5_result_c = s4_fmt_d_q ? FP_CANON_QNAN_D
                                 : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-    end else if (s3_res_is_inf_q) begin
+    end else if (s4_res_is_inf_q) begin
       // inf * finite(non-zero) → signed infinity, no flag
-      if (s3_fmt_d_q) begin
-        s4_result_c = {s3_sign_q, 11'h7FF, 52'd0};
+      if (s4_fmt_d_q) begin
+        s5_result_c = {s4_sign_q, 11'h7FF, 52'd0};
       end else begin
-        s4_result_c = {FP_NANBOX_UPPER, s3_sign_q, 8'hFF, 23'd0};
+        s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 8'hFF, 23'd0};
       end
-    end else if (s3_res_is_zero_q) begin
+    end else if (s4_res_is_zero_q) begin
       // zero * finite → signed zero, no flag
-      if (s3_fmt_d_q) begin
-        s4_result_c = {s3_sign_q, 63'd0};
+      if (s4_fmt_d_q) begin
+        s5_result_c = {s4_sign_q, 63'd0};
       end else begin
-        s4_result_c = {FP_NANBOX_UPPER, s3_sign_q, 31'd0};
+        s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 31'd0};
       end
     end else begin
       // Normal numeric path — check overflow/underflow against format range.
-      if (s3_fmt_d_q) begin
+      if (s4_fmt_d_q) begin
         overflow = (exp_rnd >= 13'sd2047);
         if (overflow) begin
-          s4_fflags_c[FP_FFLAG_OF] = 1'b1;
-          s4_fflags_c[FP_FFLAG_NX] = 1'b1;
+          s5_fflags_c[FP_FFLAG_OF] = 1'b1;
+          s5_fflags_c[FP_FFLAG_NX] = 1'b1;
           // Rounding mode controls whether we produce inf or max-finite.
-          unique case (s3_rm_q)
+          unique case (s4_rm_q)
             3'b001: // RTZ → max-finite
-              s4_result_c = {s3_sign_q, 11'h7FE, {D_SIG_W{1'b1}}};
+              s5_result_c = {s4_sign_q, 11'h7FE, {D_SIG_W{1'b1}}};
             3'b010: // RDN
-              s4_result_c = s3_sign_q ? {1'b1, 11'h7FF, 52'd0}
+              s5_result_c = s4_sign_q ? {1'b1, 11'h7FF, 52'd0}
                                        : {1'b0, 11'h7FE, {D_SIG_W{1'b1}}};
             3'b011: // RUP
-              s4_result_c = s3_sign_q ? {1'b1, 11'h7FE, {D_SIG_W{1'b1}}}
+              s5_result_c = s4_sign_q ? {1'b1, 11'h7FE, {D_SIG_W{1'b1}}}
                                        : {1'b0, 11'h7FF, 52'd0};
             default: // RNE, RMM → inf
-              s4_result_c = {s3_sign_q, 11'h7FF, 52'd0};
+              s5_result_c = {s4_sign_q, 11'h7FF, 52'd0};
           endcase
         end else begin
           // Pack exponent and fraction
@@ -672,30 +732,30 @@ module kronos_fpu_fmul
             pack_exp_d = exp_rnd[D_EXP_W-1:0];
           end
           pack_frac_d = mant_rnd[D_SIG_W-1:0];
-          s4_result_c = {s3_sign_q, pack_exp_d, pack_frac_d};
-          s4_fflags_c[FP_FFLAG_NX] = inexact;
+          s5_result_c = {s4_sign_q, pack_exp_d, pack_frac_d};
+          s5_fflags_c[FP_FFLAG_NX] = inexact;
           // Underflow: tiny before rounding AND inexact after rounding
           // (IEEE 754 "after rounding" underflow flag semantics).
-          s4_fflags_c[FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_d == 11'd0);
+          s5_fflags_c[FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_d == 11'd0);
         end
       end else begin
         overflow = (exp_rnd >= 13'sd255);
         if (overflow) begin
-          s4_fflags_c[FP_FFLAG_OF] = 1'b1;
-          s4_fflags_c[FP_FFLAG_NX] = 1'b1;
-          unique case (s3_rm_q)
+          s5_fflags_c[FP_FFLAG_OF] = 1'b1;
+          s5_fflags_c[FP_FFLAG_NX] = 1'b1;
+          unique case (s4_rm_q)
             3'b001:
-              s4_result_c = {FP_NANBOX_UPPER, s3_sign_q, 8'hFE, {S_SIG_W{1'b1}}};
+              s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 8'hFE, {S_SIG_W{1'b1}}};
             3'b010:
-              s4_result_c = s3_sign_q
+              s5_result_c = s4_sign_q
                 ? {FP_NANBOX_UPPER, 1'b1, 8'hFF, 23'd0}
                 : {FP_NANBOX_UPPER, 1'b0, 8'hFE, {S_SIG_W{1'b1}}};
             3'b011:
-              s4_result_c = s3_sign_q
+              s5_result_c = s4_sign_q
                 ? {FP_NANBOX_UPPER, 1'b1, 8'hFE, {S_SIG_W{1'b1}}}
                 : {FP_NANBOX_UPPER, 1'b0, 8'hFF, 23'd0};
             default:
-              s4_result_c = {FP_NANBOX_UPPER, s3_sign_q, 8'hFF, 23'd0};
+              s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 8'hFF, 23'd0};
           endcase
         end else begin
           if (exp_rnd <= 13'sd0) begin
@@ -704,16 +764,16 @@ module kronos_fpu_fmul
             pack_exp_s = exp_rnd[S_EXP_W-1:0];
           end
           pack_frac_s = mant_rnd[S_SIG_W-1:0];
-          s4_result_c = {FP_NANBOX_UPPER, s3_sign_q, pack_exp_s, pack_frac_s};
-          s4_fflags_c[FP_FFLAG_NX] = inexact;
-          s4_fflags_c[FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_s == 8'd0);
+          s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, pack_exp_s, pack_frac_s};
+          s5_fflags_c[FP_FFLAG_NX] = inexact;
+          s5_fflags_c[FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_s == 8'd0);
         end
       end
     end
   end
 
   // -------------------------------------------------------------------------
-  // S4 output registers
+  // S5 output registers
   // -------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -722,10 +782,10 @@ module kronos_fpu_fmul
       fflags_o    <= '0;
       tag_o       <= '0;
     end else begin
-      out_valid_o <= flush_i ? 1'b0 : s3_valid_q;
-      result_o    <= s4_result_c;
-      fflags_o    <= s4_fflags_c;
-      tag_o       <= s3_tag_q;
+      out_valid_o <= flush_i ? 1'b0 : s4_valid_q;
+      result_o    <= s5_result_c;
+      fflags_o    <= s5_fflags_c;
+      tag_o       <= s4_tag_q;
     end
   end
 

@@ -6,7 +6,8 @@
 //
 // Implements the exact algorithm from srt_divide.py:
 //   1. FIRST cycle: compare a >= b, emit integer quotient bit.
-//   2. RUN cycles: shift partial remainder left, compare, emit fractional bits.
+//   2. CMP/UPD cycle pairs: shift partial remainder left, compare (CMP),
+//      then conditionally subtract (UPD), emitting fractional bits.
 //   3. n = 27 for single (fmt_d_i=0), n = 56 for double (fmt_d_i=1).
 //
 // Inputs are pre-normalized 53-bit significands (bit 52 = hidden 1).
@@ -29,11 +30,12 @@ module kronos_fpu_fdiv_core (
   // -------------------------------------------------------------------------
   // FSM encoding
   // -------------------------------------------------------------------------
-  typedef enum logic [1:0] {
-    ST_IDLE  = 2'b00,
-    ST_FIRST = 2'b01,
-    ST_RUN   = 2'b10,
-    ST_DONE  = 2'b11
+  typedef enum logic [2:0] {
+    ST_IDLE  = 3'b000,
+    ST_FIRST = 3'b001,
+    ST_CMP   = 3'b010,
+    ST_UPD   = 3'b011,
+    ST_DONE  = 3'b100
   } state_e;
 
   // -------------------------------------------------------------------------
@@ -46,11 +48,13 @@ module kronos_fpu_fdiv_core (
   // State registers
   // -------------------------------------------------------------------------
   state_e        state_q;
-  logic [53:0]   p_q;       // partial remainder (54 bits: 2*p can reach 54 bits)
-  logic [52:0]   b_q;       // latched divisor
-  logic [55:0]   q_q;       // quotient shift register
-  logic [5:0]    ctr_q;     // iteration counter
-  logic          fmt_d_q;   // latched format
+  logic [53:0]   p_q;         // partial remainder (54 bits: 2*p can reach 54 bits)
+  logic [52:0]   b_q;         // latched divisor
+  logic [55:0]   q_q;         // quotient shift register
+  logic [5:0]    ctr_q;       // iteration counter
+  logic          fmt_d_q;     // latched format
+  logic [53:0]   p_shift_q;   // registered p_q shifted left by 1
+  logic          ge_q;        // registered comparison result
 
   // -------------------------------------------------------------------------
   // Combinational signals
@@ -59,9 +63,9 @@ module kronos_fpu_fdiv_core (
   logic [53:0]   p_n;
   logic [55:0]   q_n;
   logic [5:0]    ctr_n;
-  logic [53:0]   p_shift;   // 2 * p_q (left-shifted partial remainder)
-  logic          ge;        // p >= b comparison result
-  logic [5:0]    target;    // iteration count for current format
+  logic [53:0]   p_shift;     // 2 * p_q (left-shifted partial remainder)
+  logic          ge;          // p >= b comparison result
+  logic [5:0]    target;      // iteration count for current format
 
   // -------------------------------------------------------------------------
   // Target selection
@@ -81,13 +85,10 @@ module kronos_fpu_fdiv_core (
 
     unique case (state_q)
       ST_IDLE: begin
-        if (start_i) begin
-          state_n = ST_FIRST;
-        end
+        if (start_i) state_n = ST_FIRST;
       end
 
       ST_FIRST: begin
-        // Integer bit: if p >= b, quotient bit = 1 and subtract.
         ge = (p_q >= {1'b0, b_q});
         if (ge) begin
           q_n = 56'd1;
@@ -97,33 +98,33 @@ module kronos_fpu_fdiv_core (
           p_n = p_q;
         end
         ctr_n   = 6'd1;
-        state_n = ST_RUN;
+        state_n = ST_CMP;
       end
 
-      ST_RUN: begin
-        // Shift partial remainder left by 1.
+      ST_CMP: begin
         p_shift = {p_q[52:0], 1'b0};
         ge      = (p_shift >= {1'b0, b_q});
-        if (ge) begin
+        state_n = ST_UPD;
+      end
+
+      ST_UPD: begin
+        if (ge_q) begin
           q_n = {q_q[54:0], 1'b1};
-          p_n = p_shift - {1'b0, b_q};
+          p_n = p_shift_q - {1'b0, b_q};
         end else begin
           q_n = {q_q[54:0], 1'b0};
-          p_n = p_shift;
+          p_n = p_shift_q;
         end
         ctr_n = ctr_q + 6'd1;
-        if (ctr_n == target) begin
-          state_n = ST_DONE;
-        end
+        if (ctr_n == target) state_n = ST_DONE;
+        else                  state_n = ST_CMP;
       end
 
       ST_DONE: begin
         state_n = ST_IDLE;
       end
 
-      default: begin
-        state_n = ST_IDLE;
-      end
+      default: state_n = ST_IDLE;
     endcase
 
     if (flush_i) begin
@@ -136,19 +137,25 @@ module kronos_fpu_fdiv_core (
   // -------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      state_q <= ST_IDLE;
-      p_q     <= '0;
-      b_q     <= '0;
-      q_q     <= '0;
-      ctr_q   <= '0;
-      fmt_d_q <= 1'b0;
+      state_q   <= ST_IDLE;
+      p_q       <= '0;
+      b_q       <= '0;
+      q_q       <= '0;
+      ctr_q     <= '0;
+      fmt_d_q   <= 1'b0;
+      p_shift_q <= '0;
+      ge_q      <= 1'b0;
     end else begin
       state_q <= state_n;
       p_q     <= p_n;
       q_q     <= q_n;
       ctr_q   <= ctr_n;
 
-      // Latch inputs and clear scratch state on start.
+      if (state_q == ST_CMP) begin
+        p_shift_q <= p_shift;
+        ge_q      <= ge;
+      end
+
       if (start_i && (state_q == ST_IDLE)) begin
         p_q     <= {1'b0, a_i};
         b_q     <= b_i;
