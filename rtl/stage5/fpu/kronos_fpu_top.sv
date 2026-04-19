@@ -10,8 +10,8 @@
 //   FMISC  1  (FSGNJ*, FMIN, FMAX, FCLASS, FEQ, FLT, FLE, FMV.*)
 //   FCVT   2  (FCVT.*.* integer↔FP conversions)
 //   FADD   6  (FADD, FSUB — extra S3b stage for timing closure at 148 MHz)
-//   FMUL   4  (FMUL)
-//   FMA    5  (FMADD, FMSUB, FNMADD, FNMSUB)
+//   FMUL   6  (FMUL — split to 6 stages for high-Fmax)
+//   FMA    7  (FMADD, FMSUB, FNMADD, FNMSUB — split to 7 stages)
 //   ITER   variable (FDIV, FSQRT) — late-reservation via scoreboard
 //
 // busy_o is asserted when in_valid_i is high and the scoreboard detects a
@@ -76,11 +76,11 @@ module kronos_fpu_top
       end
       FP_FMUL: begin
         sel_fmul         = 1'b1;
-        dispatch_latency = 3'd4;
+        dispatch_latency = 3'd6;
       end
       FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB: begin
         sel_fma          = 1'b1;
-        dispatch_latency = 3'd5;
+        dispatch_latency = 3'd7;
       end
       FP_FDIV, FP_FSQRT: begin
         sel_iter         = 1'b1;
@@ -103,7 +103,7 @@ module kronos_fpu_top
   logic iter_late_req, iter_late_fp_dest, iter_late_grant;
   logic iter_busy;
 
-  kronos_fpu_scoreboard #(.DEPTH(6)) u_scoreboard (
+  kronos_fpu_scoreboard #(.DEPTH(8)) u_scoreboard (
     .clk_i             (clk_i),
     .rst_ni            (rst_ni),
     .flush_i           (flush_i),

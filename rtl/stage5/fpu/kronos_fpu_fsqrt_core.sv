@@ -11,7 +11,10 @@
 //   - Runs total = n + 26 iterations (82 for D, 53 for S).
 //   - Output: n-bit root Q = q >> 26, sticky = |q[25:0] | |r.
 //
-// Cycle count: total + 1 (83 for D, 54 for S).
+// Cycle count: 2*total + 1 (165 for D, 107 for S).
+// Each iteration is split into two clock cycles:
+//   ST_CMP (phase A): compute r_shifted, trial, ge — register results
+//   ST_UPD (phase B): use registered results to update r_q and q_q
 
 module kronos_fpu_fsqrt_core (
   input  logic        clk_i,
@@ -30,8 +33,9 @@ module kronos_fpu_fsqrt_core (
   // -------------------------------------------------------------------------
   typedef enum logic [1:0] {
     ST_IDLE = 2'b00,
-    ST_RUN  = 2'b01,
-    ST_DONE = 2'b10
+    ST_CMP  = 2'b01,
+    ST_UPD  = 2'b10,
+    ST_DONE = 2'b11
   } state_e;
 
   // -------------------------------------------------------------------------
@@ -46,11 +50,14 @@ module kronos_fpu_fsqrt_core (
   // State registers
   // -------------------------------------------------------------------------
   state_e           state_q;
-  logic [R_W-1:0]   r_q;       // partial remainder
-  logic [Q_W-1:0]   q_q;       // running root
-  logic [53:0]       a_q;       // latched input significand
-  logic [6:0]        ctr_q;     // iteration counter (0..81)
-  logic              fmt_d_q;   // latched format
+  logic [R_W-1:0]   r_q;         // partial remainder
+  logic [Q_W-1:0]   q_q;         // running root
+  logic [53:0]       a_q;         // latched input significand
+  logic [6:0]        ctr_q;       // iteration counter (0..81)
+  logic              fmt_d_q;     // latched format
+  logic [R_W-1:0]   r_shifted_q; // registered shift result from ST_CMP
+  logic [R_W-1:0]   trial_q;     // registered trial value from ST_CMP
+  logic              ge_q;        // registered comparison result from ST_CMP
 
   // -------------------------------------------------------------------------
   // Combinational signals
@@ -59,11 +66,11 @@ module kronos_fpu_fsqrt_core (
   logic [R_W-1:0]   r_n;
   logic [Q_W-1:0]   q_n;
   logic [6:0]        ctr_n;
-  logic [1:0]        pair;      // 2-bit input pair for current iteration
-  logic [R_W-1:0]   r_shifted; // r << 2 | pair
-  logic [R_W-1:0]   trial;     // (q << 2) | 1
-  logic              ge;        // r_shifted >= trial
-  logic [6:0]        target;    // total iterations for current format
+  logic [1:0]        pair;        // 2-bit input pair for current iteration
+  logic [R_W-1:0]   r_shifted;   // r << 2 | pair
+  logic [R_W-1:0]   trial;       // (q << 2) | 1
+  logic              ge;          // r_shifted >= trial
+  logic [6:0]        target;      // total iterations for current format
 
   // -------------------------------------------------------------------------
   // Target selection
@@ -131,41 +138,36 @@ module kronos_fpu_fsqrt_core (
 
     unique case (state_q)
       ST_IDLE: begin
-        if (start_i) begin
-          state_n = ST_RUN;
-        end
+        if (start_i) state_n = ST_CMP;
       end
 
-      ST_RUN: begin
-        // r_shifted = (r << 2) | pair
+      ST_CMP: begin
+        // Phase A: compute shift, trial, and comparison — results registered
         r_shifted = {r_q[R_W-3:0], pair};
+        trial     = {q_q, 2'b01} & {R_W{1'b1}};
+        ge        = (r_shifted >= trial);
+        state_n   = ST_UPD;
+      end
 
-        // trial = (q << 2) | 1
-        trial = {q_q, 2'b01} & {R_W{1'b1}};
-
-        ge = (r_shifted >= trial);
-
-        if (ge) begin
-          r_n = r_shifted - trial;
+      ST_UPD: begin
+        // Phase B: use registered phase-A results to update r_q and q_q
+        if (ge_q) begin
+          r_n = r_shifted_q - trial_q;
           q_n = {q_q[Q_W-2:0], 1'b1};
         end else begin
-          r_n = r_shifted;
+          r_n = r_shifted_q;
           q_n = {q_q[Q_W-2:0], 1'b0};
         end
-
         ctr_n = ctr_q + 7'd1;
-        if (ctr_n == target) begin
-          state_n = ST_DONE;
-        end
+        if (ctr_n == target) state_n = ST_DONE;
+        else                  state_n = ST_CMP;
       end
 
       ST_DONE: begin
         state_n = ST_IDLE;
       end
 
-      default: begin
-        state_n = ST_IDLE;
-      end
+      default: state_n = ST_IDLE;
     endcase
 
     if (flush_i) begin
@@ -178,14 +180,25 @@ module kronos_fpu_fsqrt_core (
   // -------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      state_q <= ST_IDLE;
-      r_q     <= '0;
-      q_q     <= '0;
-      a_q     <= '0;
-      ctr_q   <= '0;
-      fmt_d_q <= 1'b0;
+      state_q     <= ST_IDLE;
+      r_q         <= '0;
+      q_q         <= '0;
+      a_q         <= '0;
+      ctr_q       <= '0;
+      fmt_d_q     <= 1'b0;
+      r_shifted_q <= '0;
+      trial_q     <= '0;
+      ge_q        <= 1'b0;
     end else begin
       state_q <= state_n;
+
+      // Capture phase-A results at end of ST_CMP cycle
+      if (state_q == ST_CMP) begin
+        r_shifted_q <= r_shifted;
+        trial_q     <= trial;
+        ge_q        <= ge;
+      end
+
       // Latch inputs and clear scratch state on start; otherwise advance the
       // datapath registers from the combinational next-state.
       if (start_i && (state_q == ST_IDLE)) begin
@@ -195,9 +208,9 @@ module kronos_fpu_fsqrt_core (
         q_q     <= '0;
         ctr_q   <= '0;
       end else begin
-        r_q     <= r_n;
-        q_q     <= q_n;
-        ctr_q   <= ctr_n;
+        r_q   <= r_n;
+        q_q   <= q_n;
+        ctr_q <= ctr_n;
       end
     end
   end

@@ -4,12 +4,9 @@
 
 // Single-rounded fused multiply-add for binary32 and binary64.
 // Computes +/-(a*b) +/- c with a single rounding step applied after the
-// full-precision multiply-add.  Pipelined over 5 cycles:
-//   S1 : decompose operands, decode specials, compute prod sign/exponent
-//   S2 : significand multiply (48b for S, 106b for D)
-//   S3 : align addend against product (wide sticky capture)
-//   S4 : add / subtract, leading-zero normalize, collect G/R/S
-//   S5 : round, encode result, merge special handling and flags
+// full-precision multiply-add.  Pipelined over 7 cycles:
+// S1(decompose) → S2(align+DSP) → S3(product reg) →
+//   S4(add) → S4b(LZC) → S5(shift) → S5b(round+pack) → output
 //
 // Subnormal inputs are treated like normals with zero leading bit and the
 // biased exponent bumped to the subnormal emin.  Subnormal outputs fall out of
@@ -478,6 +475,23 @@ module kronos_fpu_fma
   logic              s4_eff_sub;
   fpu_tag_t          s4_tag;
 
+  // ---------------------------------------------------------------------------
+  // Stage 4 → 4b register (after 160-bit add, before LZC)
+  // ---------------------------------------------------------------------------
+  logic              s4b_valid;
+  logic              s4b_special;
+  logic [63:0]       s4b_special_result;
+  logic [4:0]        s4b_special_flags;
+  logic              s4b_fmt_d;
+  logic [2:0]        s4b_rm;
+  logic              s4b_res_sign;
+  logic              s4b_zero;
+  logic signed [12:0] s4b_base_exp;
+  logic [SUM_W-1:0]  s4b_mag;
+  logic              s4b_eff_sub;
+  logic              s4b_prod_sign;
+  fpu_tag_t          s4b_tag;
+
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       s4_valid          <= 1'b0;
@@ -511,84 +525,106 @@ module kronos_fpu_fma
   end
 
   // ---------------------------------------------------------------------------
-  // Stage 4: add/subtract, leading-zero normalize
+  // Stage 4: add/subtract only (LZC moves to s4b stage)
   // ---------------------------------------------------------------------------
-  logic [SUM_W:0]      s4_sum_comb;     // 161b with room for 1-bit carry
-  logic                s4_res_sign_comb;
-  logic                s4_zero_comb;
-  logic signed [12:0]  s4_norm_exp_comb;
-  logic [SUM_W-1:0]    s4_norm_mag_comb;
+  logic [SUM_W:0]     s4_sum_comb;
+  logic               s4_res_sign_comb;
+  logic               s4_zero_comb;
+  logic [SUM_W-1:0]   s4_mag_comb;
 
   always_comb begin
-    logic [SUM_W-1:0]   diff;
-    logic [SUM_W-1:0]   mag;
-    logic               sign;
-    int                 msb_pos;
-    int unsigned        i;
-    logic signed [12:0] exp;
-    int                 ref_pos;
+    logic [SUM_W-1:0] diff;
 
-    diff    = '0;
-    mag     = '0;
-    sign    = 1'b0;
-    msb_pos = -1;
-    exp     = '0;
-    ref_pos = SUM_W - 3;  // 157
+    diff = '0;
+    s4_sum_comb      = '0;
+    s4_res_sign_comb = 1'b0;
+    s4_zero_comb     = 1'b0;
+    s4_mag_comb      = '0;
 
     if (!s4_eff_sub) begin
       s4_sum_comb = {1'b0, s4_prod_lane} + {1'b0, s4_c_lane};
-      mag         = s4_sum_comb[SUM_W-1:0];
-      sign        = s4_prod_sign;
+      s4_mag_comb = s4_sum_comb[SUM_W-1:0];
+      s4_res_sign_comb = s4_prod_sign;
     end else begin
       if (s4_prod_lane >= s4_c_lane) begin
         diff = s4_prod_lane - s4_c_lane;
-        sign = s4_prod_sign;
+        s4_res_sign_comb = s4_prod_sign;
       end else begin
         diff = s4_c_lane - s4_prod_lane;
-        sign = s4_addend_sign;
+        s4_res_sign_comb = s4_addend_sign;
       end
       s4_sum_comb = {1'b0, diff};
-      mag         = diff;
+      s4_mag_comb = diff;
     end
 
-    s4_zero_comb = (mag == '0);
-
-    // Find position of MSB (highest set bit) in mag.  If none, msb_pos = -1.
-    msb_pos = -1;
-    for (i = 0; i < SUM_W; i = i + 1) begin
-      if (mag[i] && (msb_pos < $signed(i))) msb_pos = i;
-    end
-
-    // New exponent = base_exp + (msb_pos - ref_pos).  Keep significand in mag
-    // untouched; downstream stage 5 will shift based on (msb_pos, exp).
-    if (s4_zero_comb) begin
-      exp = '0;
-      s4_norm_mag_comb = '0;
-    end else begin
-      exp = s4_base_exp + 13'(msb_pos - ref_pos);
-      s4_norm_mag_comb = mag;
-    end
-
-    s4_norm_exp_comb = exp;
-    s4_res_sign_comb = sign;
+    s4_zero_comb = (s4_mag_comb == '0);
   end
 
-  // MSB position captured for stage 5.  Recompute from mag in stage 5 via
-  // another LZC pass; but to avoid re-doing the loop there, propagate it.
-  logic [8:0] s4_msb_pos_comb;
+  // Stage 4 -> Stage 4b register
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      s4b_valid          <= 1'b0;
+      s4b_special        <= 1'b0;
+      s4b_special_result <= '0;
+      s4b_special_flags  <= '0;
+      s4b_fmt_d          <= 1'b0;
+      s4b_rm             <= '0;
+      s4b_res_sign       <= 1'b0;
+      s4b_zero           <= 1'b0;
+      s4b_base_exp       <= '0;
+      s4b_mag            <= '0;
+      s4b_eff_sub        <= 1'b0;
+      s4b_prod_sign      <= 1'b0;
+      s4b_tag            <= '0;
+    end else begin
+      s4b_valid          <= flush_i ? 1'b0 : s4_valid;
+      s4b_special        <= s4_special;
+      s4b_special_result <= s4_special_result;
+      s4b_special_flags  <= s4_special_flags;
+      s4b_fmt_d          <= s4_fmt_d;
+      s4b_rm             <= s4_rm;
+      s4b_res_sign       <= s4_res_sign_comb;
+      s4b_zero           <= s4_zero_comb;
+      s4b_base_exp       <= s4_base_exp;
+      s4b_mag            <= s4_mag_comb;
+      s4b_eff_sub        <= s4_eff_sub;
+      s4b_prod_sign      <= s4_prod_sign;
+      s4b_tag            <= s4_tag;
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // Stage 4b: leading-zero count on registered 160-bit magnitude
+  // ---------------------------------------------------------------------------
+  logic [8:0]          s4b_msb_pos_comb;
+  logic signed [12:0]  s4b_norm_exp_comb;
+
   always_comb begin
     int        i;
     int        m;
-    i = 0;
-    m = -1;
+    logic signed [12:0] ref_pos_s;
+
+    i         = 0;
+    m         = -1;
+    ref_pos_s = 13'(SUM_W - 3);  // 157
+
+    s4b_msb_pos_comb  = 9'd0;
+    s4b_norm_exp_comb = '0;
+
     for (i = 0; i < SUM_W; i = i + 1) begin
-      if (s4_norm_mag_comb[i] && (m < $signed(i))) m = i;
+      if (s4b_mag[i] && (m < $signed(i))) m = i;
     end
-    if (m < 0) s4_msb_pos_comb = 9'd0;
-    else       s4_msb_pos_comb = m[8:0];
+
+    if (m < 0) begin
+      s4b_msb_pos_comb  = 9'd0;
+      s4b_norm_exp_comb = '0;
+    end else begin
+      s4b_msb_pos_comb  = m[8:0];
+      s4b_norm_exp_comb = s4b_base_exp + 13'(m) - ref_pos_s;
+    end
   end
 
-  // Stage 4 -> Stage 5 register
+  // Stage 4b -> Stage 5 register
   logic              s5_valid;
   logic              s5_special;
   logic [63:0]       s5_special_result;
@@ -603,6 +639,30 @@ module kronos_fpu_fma
   logic              s5_prod_sign;
   logic [8:0]        s5_msb_pos;
   fpu_tag_t          s5_tag;
+
+  // ---------------------------------------------------------------------------
+  // Stage 5 → 5b register (after barrel shift, before round)
+  // ---------------------------------------------------------------------------
+  logic              s5b_valid;
+  logic              s5b_special;
+  logic [63:0]       s5b_special_result;
+  logic [4:0]        s5b_special_flags;
+  logic              s5b_fmt_d;
+  logic [2:0]        s5b_rm;
+  logic              s5b_res_sign;
+  logic              s5b_zero;
+  logic              s5b_eff_sub;
+  logic              s5b_prod_sign;
+  logic signed [12:0] s5b_exp;
+  logic signed [12:0] s5b_exp_pre_tiny;
+  logic [52:0]        s5b_raw_sig;
+  logic               s5b_guard;
+  logic               s5b_round_b;
+  logic               s5b_sticky;
+  logic               s5b_tiny;
+  logic [SUM_W-1:0]  s5b_mag;
+  logic [31:0]        s5b_normal_shift;
+  fpu_tag_t           s5b_tag;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -621,150 +681,90 @@ module kronos_fpu_fma
       s5_msb_pos        <= '0;
       s5_tag            <= '0;
     end else begin
-      s5_valid          <= flush_i ? 1'b0 : s4_valid;
-      s5_special        <= s4_special;
-      s5_special_result <= s4_special_result;
-      s5_special_flags  <= s4_special_flags;
-      s5_fmt_d          <= s4_fmt_d;
-      s5_rm             <= s4_rm;
-      s5_res_sign       <= s4_res_sign_comb;
-      s5_zero           <= s4_zero_comb;
-      s5_norm_exp       <= s4_norm_exp_comb;
-      s5_norm_mag       <= s4_norm_mag_comb;
-      s5_eff_sub        <= s4_eff_sub;
-      s5_prod_sign      <= s4_prod_sign;
-      s5_msb_pos        <= s4_msb_pos_comb;
-      s5_tag            <= s4_tag;
+      s5_valid          <= flush_i ? 1'b0 : s4b_valid;
+      s5_special        <= s4b_special;
+      s5_special_result <= s4b_special_result;
+      s5_special_flags  <= s4b_special_flags;
+      s5_fmt_d          <= s4b_fmt_d;
+      s5_rm             <= s4b_rm;
+      s5_res_sign       <= s4b_res_sign;
+      s5_zero           <= s4b_zero;
+      s5_norm_exp       <= s4b_norm_exp_comb;
+      s5_norm_mag       <= s4b_mag;
+      s5_eff_sub        <= s4b_eff_sub;
+      s5_prod_sign      <= s4b_prod_sign;
+      s5_msb_pos        <= s4b_msb_pos_comb;
+      s5_tag            <= s4b_tag;
     end
   end
 
   // ---------------------------------------------------------------------------
-  // Stage 5: round and pack
+  // Stage 5: barrel shift + GRS extraction (round moves to s5b stage)
   // ---------------------------------------------------------------------------
-  logic [63:0] s5_result_comb;
-  logic [4:0]  s5_flags_comb;
+  logic [52:0]        s5_raw_sig_comb;
+  logic               s5_guard_comb;
+  logic               s5_round_b_comb;
+  logic               s5_sticky_comb;
+  logic signed [12:0] s5_exp_comb;
+  logic signed [12:0] s5_exp_pre_tiny_comb;
+  logic               s5_tiny_comb;
+  logic [31:0]        s5_normal_shift_comb;
 
   always_comb begin
     int unsigned        frac_w;
     int signed          bias;
     logic signed [12:0] emin;
-    logic signed [12:0] emax;
-    logic [52:0]        raw_sig;
     logic [SUM_W-1:0]   mag;
     logic signed [12:0] exp;
     logic signed [12:0] exp_pre_tiny;
-    logic               guard;
-    logic               round_b;
-    logic               sticky;
-    logic               round_up;
-    logic [53:0]        rounded_sig; // 54 bits so carry-out of rounding survives
-    logic               inexact;
-    logic               overflow_ovf;
     logic               tiny;
     int unsigned        shift_right_amt;
     int unsigned        normal_shift;
     int unsigned        i;
     logic [SUM_W-1:0]   pre_mag;
-    logic [52:0]        final_sig;
-    logic signed [12:0] final_exp;
-    logic [10:0]        exp_field_d;
-    logic [7:0]         exp_field_s;
-    // IEEE 754(b) normal-scale rounding (for UF detection):
-    //   "tininess after rounding" uses rounding with unbounded exponent
-    //   range.  If normal-scale rounding carries from all-1s mantissa up
-    //   to 2.0, the rounded value sits at exactly 2^emin and is NOT tiny.
-    logic [52:0]        raw_sig_n;
-    logic               guard_n, round_n, sticky_n;
-    logic               round_up_n;
-    logic               carry_n;
-    logic [SUM_W-1:0]   pre_mag_n;
 
-    frac_w        = 0;
-    bias          = 0;
-    emin          = '0;
-    emax          = '0;
-    raw_sig       = '0;
-    mag           = '0;
-    exp           = '0;
-    exp_pre_tiny  = '0;
-    guard         = 1'b0;
-    round_b       = 1'b0;
-    sticky        = 1'b0;
-    round_up      = 1'b0;
-    rounded_sig   = '0;
-    inexact       = 1'b0;
-    overflow_ovf  = 1'b0;
-    tiny          = 1'b0;
-    shift_right_amt = 0;
-    normal_shift  = 0;
-    i             = 0;
-    pre_mag       = '0;
-    final_sig     = '0;
-    final_exp     = '0;
-    exp_field_d   = '0;
-    exp_field_s   = '0;
-    raw_sig_n     = '0;
-    guard_n       = 1'b0;
-    round_n       = 1'b0;
-    sticky_n      = 1'b0;
-    round_up_n    = 1'b0;
-    carry_n       = 1'b0;
-    pre_mag_n     = '0;
+    frac_w           = 0;
+    bias             = 0;
+    emin             = '0;
+    mag              = '0;
+    exp              = '0;
+    exp_pre_tiny     = '0;
+    tiny             = 1'b0;
+    shift_right_amt  = 0;
+    normal_shift     = 0;
+    i                = 0;
+    pre_mag          = '0;
 
-    s5_result_comb = '0;
-    s5_flags_comb  = s5_special_flags;
+    s5_raw_sig_comb       = '0;
+    s5_guard_comb         = 1'b0;
+    s5_round_b_comb       = 1'b0;
+    s5_sticky_comb        = 1'b0;
+    s5_exp_comb           = '0;
+    s5_exp_pre_tiny_comb  = '0;
+    s5_tiny_comb          = 1'b0;
+    s5_normal_shift_comb  = '0;
 
-    if (s5_special) begin
-      s5_result_comb = s5_special_result;
-    end else if (s5_zero) begin
-      // Exact zero result. Sign rules:
-      //   - same-sign add: sign = prod_sign (== addend_sign)
-      //   - exact cancellation (eff_sub): +0 in all modes except RDN which is -0
-      if (s5_eff_sub) begin
-        if (s5_rm == FP_RM_RDN) begin
-          s5_result_comb = s5_fmt_d ? {1'b1, 63'd0}
-                                    : {FP_NANBOX_UPPER, 1'b1, 31'd0};
-        end else begin
-          s5_result_comb = s5_fmt_d ? 64'd0
-                                    : {FP_NANBOX_UPPER, 32'd0};
-        end
-      end else begin
-        // Both lanes zero or same-sign add of zeros: sign = prod_sign
-        if (s5_prod_sign) begin
-          s5_result_comb = s5_fmt_d ? {1'b1, 63'd0}
-                                    : {FP_NANBOX_UPPER, 1'b1, 31'd0};
-        end else begin
-          s5_result_comb = s5_fmt_d ? 64'd0
-                                    : {FP_NANBOX_UPPER, 32'd0};
-        end
-      end
-    end else begin
-      // Format-dependent parameters
+    if (!s5_special && !s5_zero) begin
       if (s5_fmt_d) begin
         frac_w = 52;
         bias   = D_BIAS;
-        emax   = 13'sd2046; // largest finite biased exp
       end else begin
         frac_w = 23;
         bias   = S_BIAS;
-        emax   = 13'sd254;
       end
       emin = 13'sd1;
 
       mag = s5_norm_mag;
       exp = s5_norm_exp;
 
-      // Hidden bit (MSB of mag) is at index s5_msb_pos.  Shift it down to
-      // position frac_w: shift_right_amt = msb_pos - frac_w.  For subnormal
-      // outputs (exp < emin), shift by an extra (emin - exp) and force exp=0.
       if ({1'b0, s5_msb_pos} >= 10'(frac_w))
         normal_shift = {23'd0, s5_msb_pos} - frac_w;
       else
         normal_shift = 0;
       shift_right_amt = normal_shift;
 
-      tiny = 1'b0;
       exp_pre_tiny = exp;
+      tiny = 1'b0;
       if (exp < emin) begin
         shift_right_amt = shift_right_amt + 32'(emin - exp);
         exp  = 0;
@@ -772,203 +772,311 @@ module kronos_fpu_fma
       end
 
       if (shift_right_amt >= SUM_W) begin
-        // Entire mag is sub-ulp sticky.
-        raw_sig = '0;
-        guard   = 1'b0;
-        round_b = 1'b0;
-        sticky  = (mag != '0);
+        s5_raw_sig_comb  = '0;
+        s5_guard_comb    = 1'b0;
+        s5_round_b_comb  = 1'b0;
+        s5_sticky_comb   = (mag != '0);
       end else begin
-        // raw_sig = mag[shift_right_amt + frac_w : shift_right_amt]
-        // guard   = mag[shift_right_amt - 1]
-        // round_b = mag[shift_right_amt - 2]
-        // sticky  = OR(mag[shift_right_amt-3 : 0])
         pre_mag = mag >> shift_right_amt;
-        raw_sig = pre_mag[52:0];
+        s5_raw_sig_comb = pre_mag[52:0];
 
         if (shift_right_amt == 0) begin
-          guard  = 1'b0;
-          round_b = 1'b0;
-          sticky = 1'b0;
+          s5_guard_comb   = 1'b0;
+          s5_round_b_comb = 1'b0;
+          s5_sticky_comb  = 1'b0;
         end else if (shift_right_amt == 1) begin
-          guard  = mag[0];
-          round_b = 1'b0;
-          sticky = 1'b0;
+          s5_guard_comb   = mag[0];
+          s5_round_b_comb = 1'b0;
+          s5_sticky_comb  = 1'b0;
         end else if (shift_right_amt == 2) begin
-          guard  = mag[1];
-          round_b = mag[0];
-          sticky = 1'b0;
+          s5_guard_comb   = mag[1];
+          s5_round_b_comb = mag[0];
+          s5_sticky_comb  = 1'b0;
         end else begin
-          guard  = mag[shift_right_amt - 1];
-          round_b = mag[shift_right_amt - 2];
-          sticky = 1'b0;
+          s5_guard_comb   = mag[shift_right_amt - 1];
+          s5_round_b_comb = mag[shift_right_amt - 2];
+          s5_sticky_comb  = 1'b0;
           for (i = 0; i < SUM_W; i = i + 1) begin
             if (i + 2 < shift_right_amt) begin
-              sticky = sticky | mag[i];
+              s5_sticky_comb = s5_sticky_comb | mag[i];
             end
           end
         end
       end
 
-      // Round decision
-      inexact = guard | round_b | sticky;
+      s5_exp_comb          = exp;
+      s5_exp_pre_tiny_comb = exp_pre_tiny;
+      s5_tiny_comb         = tiny;
+      s5_normal_shift_comb = normal_shift;
+    end
+  end
+
+  // Stage 5 -> Stage 5b register
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      s5b_valid          <= 1'b0;
+      s5b_special        <= 1'b0;
+      s5b_special_result <= '0;
+      s5b_special_flags  <= '0;
+      s5b_fmt_d          <= 1'b0;
+      s5b_rm             <= '0;
+      s5b_res_sign       <= 1'b0;
+      s5b_zero           <= 1'b0;
+      s5b_eff_sub        <= 1'b0;
+      s5b_prod_sign      <= 1'b0;
+      s5b_exp            <= '0;
+      s5b_exp_pre_tiny   <= '0;
+      s5b_raw_sig        <= '0;
+      s5b_guard          <= 1'b0;
+      s5b_round_b        <= 1'b0;
+      s5b_sticky         <= 1'b0;
+      s5b_tiny           <= 1'b0;
+      s5b_mag            <= '0;
+      s5b_normal_shift   <= '0;
+      s5b_tag            <= '0;
+    end else begin
+      s5b_valid          <= flush_i ? 1'b0 : s5_valid;
+      s5b_special        <= s5_special;
+      s5b_special_result <= s5_special_result;
+      s5b_special_flags  <= s5_special_flags;
+      s5b_fmt_d          <= s5_fmt_d;
+      s5b_rm             <= s5_rm;
+      s5b_res_sign       <= s5_res_sign;
+      s5b_zero           <= s5_zero;
+      s5b_eff_sub        <= s5_eff_sub;
+      s5b_prod_sign      <= s5_prod_sign;
+      s5b_exp            <= s5_exp_comb;
+      s5b_exp_pre_tiny   <= s5_exp_pre_tiny_comb;
+      s5b_raw_sig        <= s5_raw_sig_comb;
+      s5b_guard          <= s5_guard_comb;
+      s5b_round_b        <= s5_round_b_comb;
+      s5b_sticky         <= s5_sticky_comb;
+      s5b_tiny           <= s5_tiny_comb;
+      s5b_mag            <= s5_norm_mag;
+      s5b_normal_shift   <= s5_normal_shift_comb;
+      s5b_tag            <= s5_tag;
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // Stage 5b: round, pack, overflow/underflow (old stage 5 second half)
+  // ---------------------------------------------------------------------------
+  logic [63:0] s5b_result_comb;
+  logic [4:0]  s5b_flags_comb;
+
+  always_comb begin
+    int unsigned        frac_w;
+    int signed          bias;
+    logic signed [12:0] emin;
+    logic signed [12:0] emax;
+    logic [53:0]        rounded_sig;
+    logic               inexact;
+    logic               overflow_ovf;
+    logic               round_up;
+    logic signed [12:0] final_exp;
+    logic [52:0]        final_sig;
+    logic [10:0]        exp_field_d;
+    logic [7:0]         exp_field_s;
+    // tininess-after-rounding
+    logic [52:0]        raw_sig_n;
+    logic               guard_n, round_n, sticky_n;
+    logic               round_up_n;
+    logic               carry_n;
+    logic [SUM_W-1:0]   pre_mag_n;
+    int unsigned        normal_shift;
+
+    frac_w       = 0;
+    bias         = 0;
+    emin         = '0;
+    emax         = '0;
+    rounded_sig  = '0;
+    inexact      = 1'b0;
+    overflow_ovf = 1'b0;
+    round_up     = 1'b0;
+    final_exp    = '0;
+    final_sig    = '0;
+    exp_field_d  = '0;
+    exp_field_s  = '0;
+    raw_sig_n    = '0;
+    guard_n      = 1'b0;
+    round_n      = 1'b0;
+    sticky_n     = 1'b0;
+    round_up_n   = 1'b0;
+    carry_n      = 1'b0;
+    pre_mag_n    = '0;
+    normal_shift = 0;
+
+    s5b_result_comb = '0;
+    s5b_flags_comb  = s5b_special_flags;
+
+    if (s5b_special) begin
+      s5b_result_comb = s5b_special_result;
+    end else if (s5b_zero) begin
+      if (s5b_eff_sub) begin
+        if (s5b_rm == FP_RM_RDN) begin
+          s5b_result_comb = s5b_fmt_d ? {1'b1, 63'd0}
+                                      : {FP_NANBOX_UPPER, 1'b1, 31'd0};
+        end else begin
+          s5b_result_comb = s5b_fmt_d ? 64'd0
+                                      : {FP_NANBOX_UPPER, 32'd0};
+        end
+      end else begin
+        if (s5b_prod_sign) begin
+          s5b_result_comb = s5b_fmt_d ? {1'b1, 63'd0}
+                                      : {FP_NANBOX_UPPER, 1'b1, 31'd0};
+        end else begin
+          s5b_result_comb = s5b_fmt_d ? 64'd0
+                                      : {FP_NANBOX_UPPER, 32'd0};
+        end
+      end
+    end else begin
+      if (s5b_fmt_d) begin
+        frac_w = 52;
+        bias   = D_BIAS;
+        emax   = 13'sd2046;
+      end else begin
+        frac_w = 23;
+        bias   = S_BIAS;
+        emax   = 13'sd254;
+      end
+      emin = 13'sd1;
+
+      inexact = s5b_guard | s5b_round_b | s5b_sticky;
       round_up = 1'b0;
-      unique case (s5_rm)
-        FP_RM_RNE: round_up = guard & (round_b | sticky | raw_sig[0]);
+      unique case (s5b_rm)
+        FP_RM_RNE: round_up = s5b_guard & (s5b_round_b | s5b_sticky | s5b_raw_sig[0]);
         FP_RM_RTZ: round_up = 1'b0;
-        FP_RM_RDN: round_up = inexact & s5_res_sign;
-        FP_RM_RUP: round_up = inexact & ~s5_res_sign;
-        FP_RM_RMM: round_up = guard; // round to nearest, ties away
+        FP_RM_RDN: round_up = inexact & s5b_res_sign;
+        FP_RM_RUP: round_up = inexact & ~s5b_res_sign;
+        FP_RM_RMM: round_up = s5b_guard;
         default: round_up = 1'b0;
       endcase
 
-      rounded_sig = {1'b0, raw_sig} + (round_up ? 54'd1 : 54'd0);
-      final_exp   = exp;
+      rounded_sig = {1'b0, s5b_raw_sig} + (round_up ? 54'd1 : 54'd0);
+      final_exp   = s5b_exp;
       final_sig   = rounded_sig[52:0];
 
-      // If rounding overflowed the significand (now has bit frac_w+1),
-      // shift right by 1 and bump exponent.
       if (rounded_sig[frac_w + 1]) begin
         final_sig = rounded_sig[53:1];
-        final_exp = exp + 1;
+        final_exp = s5b_exp + 1;
       end
 
-      // If subnormal rounded up to a normal number, the hidden bit will now
-      // be set at position frac_w and exponent should become emin.
-      if (tiny && final_sig[frac_w]) begin
+      if (s5b_tiny && final_sig[frac_w]) begin
         final_exp = emin;
       end
 
-      // Overflow: final_exp >= emax+1 (i.e. all-ones field)
       overflow_ovf = 1'b0;
       if (final_exp >= (emax + 13'sd1)) begin
         overflow_ovf = 1'b1;
       end
 
-      // Underflow flag: RISC-V uses "tininess after rounding" (IEEE 754
-      // alternative (b) -- round with the format precision but unbounded
-      // exponent range, then check if the rounded magnitude is strictly
-      // below 2^emin).  When the subnormal-scale rounding differs from
-      // the normal-scale rounding (i.e. when the 24/53-bit normal-scale
-      // mantissa is all ones and rounds up, carrying to 2.0), the
-      // unbounded-exponent rounded value lands exactly at 2^emin and is
-      // NOT tiny -- even though the subnormal encoding bumps to the
-      // smallest normal.
-      if (tiny && inexact) begin
-        // Extract normal-scale round bits from mag at normal_shift.
+      // Tininess-after-rounding using carried s5b_mag and s5b_normal_shift
+      if (s5b_tiny && inexact) begin
+        normal_shift = s5b_normal_shift;
         if (normal_shift >= SUM_W) begin
           raw_sig_n = '0;
           guard_n   = 1'b0;
           round_n   = 1'b0;
-          sticky_n  = (mag != '0);
+          sticky_n  = (s5b_mag != '0);
         end else begin
-          pre_mag_n = mag >> normal_shift;
+          pre_mag_n = s5b_mag >> normal_shift;
           raw_sig_n = pre_mag_n[52:0];
           if (normal_shift == 0) begin
             guard_n  = 1'b0;
             round_n  = 1'b0;
             sticky_n = 1'b0;
           end else if (normal_shift == 1) begin
-            guard_n  = mag[0];
+            guard_n  = s5b_mag[0];
             round_n  = 1'b0;
             sticky_n = 1'b0;
           end else if (normal_shift == 2) begin
-            guard_n  = mag[1];
-            round_n  = mag[0];
+            guard_n  = s5b_mag[1];
+            round_n  = s5b_mag[0];
             sticky_n = 1'b0;
           end else begin
-            guard_n  = mag[normal_shift - 1];
-            round_n  = mag[normal_shift - 2];
+            int unsigned i;
+            i = 0;
+            guard_n  = s5b_mag[normal_shift - 1];
+            round_n  = s5b_mag[normal_shift - 2];
             sticky_n = 1'b0;
             for (i = 0; i < SUM_W; i = i + 1) begin
               if (i + 2 < normal_shift) begin
-                sticky_n = sticky_n | mag[i];
+                sticky_n = sticky_n | s5b_mag[i];
               end
             end
           end
         end
 
-        unique case (s5_rm)
+        unique case (s5b_rm)
           FP_RM_RNE: round_up_n = guard_n & (round_n | sticky_n | raw_sig_n[0]);
           FP_RM_RTZ: round_up_n = 1'b0;
-          FP_RM_RDN: round_up_n = (guard_n | round_n | sticky_n) &  s5_res_sign;
-          FP_RM_RUP: round_up_n = (guard_n | round_n | sticky_n) & ~s5_res_sign;
+          FP_RM_RDN: round_up_n = (guard_n | round_n | sticky_n) &  s5b_res_sign;
+          FP_RM_RUP: round_up_n = (guard_n | round_n | sticky_n) & ~s5b_res_sign;
           FP_RM_RMM: round_up_n = guard_n;
           default:   round_up_n = 1'b0;
         endcase
 
-        // Carry-out: mantissa (hidden+fraction) is all ones and rounds up.
-        if (s5_fmt_d)
+        if (s5b_fmt_d)
           carry_n = round_up_n & (&raw_sig_n[52:0]);
         else
           carry_n = round_up_n & (&raw_sig_n[23:0]);
 
-        // Tiny after rounding iff exp_pre_tiny + carry_n < emin.
-        // `tiny` means exp_pre_tiny < emin already, so this collapses to
-        // "NOT (carry_n AND exp_pre_tiny == emin - 1)".
-        if (!(carry_n && (exp_pre_tiny + 13'sd1 == emin))) begin
-          s5_flags_comb[FP_FFLAG_UF] = 1'b1;
+        if (!(carry_n && (s5b_exp_pre_tiny + 13'sd1 == emin))) begin
+          s5b_flags_comb[FP_FFLAG_UF] = 1'b1;
         end
       end
 
-      if (inexact) s5_flags_comb[FP_FFLAG_NX] = 1'b1;
+      if (inexact) s5b_flags_comb[FP_FFLAG_NX] = 1'b1;
 
       if (overflow_ovf) begin
-        s5_flags_comb[FP_FFLAG_OF] = 1'b1;
-        s5_flags_comb[FP_FFLAG_NX] = 1'b1;
-        // Round-to-nearest and RMM: +/-inf
-        // RTZ: +/-max
-        // RDN: -inf for negative, +max for positive
-        // RUP: +inf for positive, -max for negative
-        unique case (s5_rm)
+        s5b_flags_comb[FP_FFLAG_OF] = 1'b1;
+        s5b_flags_comb[FP_FFLAG_NX] = 1'b1;
+        unique case (s5b_rm)
           FP_RM_RTZ: begin
-            if (s5_fmt_d) s5_result_comb = {s5_res_sign, 11'd2046, {52{1'b1}}};
-            else          s5_result_comb = {FP_NANBOX_UPPER,
-                                            s5_res_sign, 8'd254, {23{1'b1}}};
+            if (s5b_fmt_d) s5b_result_comb = {s5b_res_sign, 11'd2046, {52{1'b1}}};
+            else           s5b_result_comb = {FP_NANBOX_UPPER,
+                                              s5b_res_sign, 8'd254, {23{1'b1}}};
           end
           FP_RM_RDN: begin
-            if (s5_res_sign) begin
-              if (s5_fmt_d) s5_result_comb = {1'b1, 11'h7FF, 52'd0};
-              else          s5_result_comb = {FP_NANBOX_UPPER, 1'b1, 8'hFF, 23'd0};
+            if (s5b_res_sign) begin
+              if (s5b_fmt_d) s5b_result_comb = {1'b1, 11'h7FF, 52'd0};
+              else           s5b_result_comb = {FP_NANBOX_UPPER, 1'b1, 8'hFF, 23'd0};
             end else begin
-              if (s5_fmt_d) s5_result_comb = {1'b0, 11'd2046, {52{1'b1}}};
-              else          s5_result_comb = {FP_NANBOX_UPPER,
-                                              1'b0, 8'd254, {23{1'b1}}};
+              if (s5b_fmt_d) s5b_result_comb = {1'b0, 11'd2046, {52{1'b1}}};
+              else           s5b_result_comb = {FP_NANBOX_UPPER,
+                                               1'b0, 8'd254, {23{1'b1}}};
             end
           end
           FP_RM_RUP: begin
-            if (s5_res_sign) begin
-              if (s5_fmt_d) s5_result_comb = {1'b1, 11'd2046, {52{1'b1}}};
-              else          s5_result_comb = {FP_NANBOX_UPPER,
-                                              1'b1, 8'd254, {23{1'b1}}};
+            if (s5b_res_sign) begin
+              if (s5b_fmt_d) s5b_result_comb = {1'b1, 11'd2046, {52{1'b1}}};
+              else           s5b_result_comb = {FP_NANBOX_UPPER,
+                                               1'b1, 8'd254, {23{1'b1}}};
             end else begin
-              if (s5_fmt_d) s5_result_comb = {1'b0, 11'h7FF, 52'd0};
-              else          s5_result_comb = {FP_NANBOX_UPPER, 1'b0, 8'hFF, 23'd0};
+              if (s5b_fmt_d) s5b_result_comb = {1'b0, 11'h7FF, 52'd0};
+              else           s5b_result_comb = {FP_NANBOX_UPPER, 1'b0, 8'hFF, 23'd0};
             end
           end
           default: begin
-            // RNE, RMM, reserved: +/-inf
-            if (s5_fmt_d) s5_result_comb = {s5_res_sign, 11'h7FF, 52'd0};
-            else          s5_result_comb = {FP_NANBOX_UPPER,
-                                            s5_res_sign, 8'hFF, 23'd0};
+            if (s5b_fmt_d) s5b_result_comb = {s5b_res_sign, 11'h7FF, 52'd0};
+            else           s5b_result_comb = {FP_NANBOX_UPPER,
+                                             s5b_res_sign, 8'hFF, 23'd0};
           end
         endcase
       end else begin
-        // Normal encoding
-        if (s5_fmt_d) begin
+        if (s5b_fmt_d) begin
           exp_field_d = final_exp[10:0];
-          s5_result_comb = {s5_res_sign, exp_field_d, final_sig[51:0]};
+          s5b_result_comb = {s5b_res_sign, exp_field_d, final_sig[51:0]};
         end else begin
           exp_field_s = final_exp[7:0];
-          s5_result_comb = {FP_NANBOX_UPPER, s5_res_sign, exp_field_s,
-                            final_sig[22:0]};
+          s5b_result_comb = {FP_NANBOX_UPPER, s5b_res_sign, exp_field_s,
+                             final_sig[22:0]};
         end
       end
     end
   end
 
-  // ---------------------------------------------------------------------------
-  // Stage 5 register -> outputs
-  // ---------------------------------------------------------------------------
+  // Stage 5b register -> outputs
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       out_valid_o <= 1'b0;
@@ -976,10 +1084,10 @@ module kronos_fpu_fma
       fflags_o    <= '0;
       tag_o       <= '0;
     end else begin
-      out_valid_o <= flush_i ? 1'b0 : s5_valid;
-      result_o    <= s5_result_comb;
-      fflags_o    <= s5_flags_comb;
-      tag_o       <= s5_tag;
+      out_valid_o <= flush_i ? 1'b0 : s5b_valid;
+      result_o    <= s5b_result_comb;
+      fflags_o    <= s5b_flags_comb;
+      tag_o       <= s5b_tag;
     end
   end
 
