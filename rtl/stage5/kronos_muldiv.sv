@@ -4,9 +4,13 @@
 
 // kronos_muldiv.sv — multi-cycle 64-bit multiply/divide unit (RV64M).
 //
-// MUL/MULH/MULHSU/MULHU: 2-cycle latency (MUL_BUSY then DONE).
-//   Operands are stored on req; a combinational 65x65 signed product is
-//   registered during MUL_BUSY so synthesis sees a single multiplier.
+// MUL/MULH/MULHSU/MULHU: 4-cycle latency (MUL_IN, MUL_OUT, DONE).
+//   IDLE: latch sign-extended 65-bit operands into mul_a65_q / mul_b65_q.
+//   MUL_IN: register the 65×65 product into mul_product_q.
+//   MUL_OUT: select high/low half, apply word_op sign extension → result_q.
+//   DONE: expose result.
+//   Breaking the multiply into two registered stages keeps each half under
+//   budget at 148 MHz: operand-extend path ~2–3 ns, DSP-cascade path ~5.5 ns.
 //
 // DIV/DIVU/REM/REMU: IDLE -> COMPUTE x N -> DONE, where
 //   N = 64 for full 64-bit ops and N = 32 when word_op_i is asserted.
@@ -25,7 +29,7 @@
 //
 // Interface:
 //   req_i   — pulse HIGH for one cycle to start an operation (only when idle_o=1)
-//   busy_o  — HIGH while computing (MUL_BUSY or COMPUTE state); stalls the pipeline
+//   busy_o  — HIGH while computing (MUL_IN, MUL_OUT, or COMPUTE state)
 //   valid_o — HIGH for exactly one cycle when result_o is ready (DONE state)
 //   idle_o  — HIGH when ready to accept a new operation (IDLE state)
 module kronos_muldiv
@@ -47,11 +51,12 @@ module kronos_muldiv
   // -------------------------------------------------------------------------
   // FSM state encoding
   // -------------------------------------------------------------------------
-  typedef enum logic [1:0] {
-    IDLE     = 2'd0,
-    MUL_BUSY = 2'd1,
-    COMPUTE  = 2'd2,
-    DONE     = 2'd3
+  typedef enum logic [2:0] {
+    IDLE    = 3'd0,
+    MUL_IN  = 3'd1,  // register sign-extended operands
+    MUL_OUT = 3'd2,  // register DSP product
+    COMPUTE = 3'd3,  // iterative division step
+    DONE    = 3'd4
   } muldiv_state_e;
 
   muldiv_state_e state_q;
@@ -62,7 +67,7 @@ module kronos_muldiv
   logic [63:0] result_q;
 
   // -------------------------------------------------------------------------
-  // Multiplier (combinational 65x65 -> 130-bit signed product)
+  // Multiplier — pipeline registers and combinational extend signals
   // -------------------------------------------------------------------------
   logic        mul_signed_a;
   logic        mul_signed_b;
@@ -74,9 +79,12 @@ module kronos_muldiv
   logic [63:0] mul_b_eff;
   logic [64:0] mul_a65;
   logic [64:0] mul_b65;
-  logic signed [129:0] mul_product;
-  logic [63:0] mul_result_comb;
-  logic [63:0] mul_result_final;
+
+  // Registered pipeline stages
+  logic [64:0]          mul_a65_q;
+  logic [64:0]          mul_b65_q;
+  logic signed [129:0]  mul_product_q;
+  muldiv_op_e           op_q;
 
   // MUL, MULH, MULHSU treat A as signed; MULHU is unsigned.
   assign mul_signed_a = (op_i == MULDIV_MUL) | (op_i == MULDIV_MULH) | (op_i == MULDIV_MULHSU);
@@ -95,23 +103,6 @@ module kronos_muldiv
   // Extend to 65 bits for signed/unsigned product.
   assign mul_a65 = mul_signed_a ? {mul_a_eff[63], mul_a_eff} : {1'b0, mul_a_eff};
   assign mul_b65 = mul_signed_b ? {mul_b_eff[63], mul_b_eff} : {1'b0, mul_b_eff};
-  assign mul_product = $signed(mul_a65) * $signed(mul_b65);
-
-  // Select high or low half of the product depending on op.
-  always_comb begin
-    unique case (op_i)
-      MULDIV_MUL:    mul_result_comb = mul_product[63:0];
-      MULDIV_MULH:   mul_result_comb = mul_product[127:64];
-      MULDIV_MULHSU: mul_result_comb = mul_product[127:64];
-      MULDIV_MULHU:  mul_result_comb = mul_product[127:64];
-      default:       mul_result_comb = mul_product[63:0];
-    endcase
-  end
-
-  // Apply word_op sign extension to the registered multiplier output.
-  assign mul_result_final = word_op_i
-                          ? {{32{mul_result_comb[31]}}, mul_result_comb[31:0]}
-                          : mul_result_comb;
 
   // -------------------------------------------------------------------------
   // Divider registers (restoring division)
@@ -138,7 +129,7 @@ module kronos_muldiv
   // -------------------------------------------------------------------------
   // Output wiring
   // -------------------------------------------------------------------------
-  assign busy_o   = (state_q == MUL_BUSY) | (state_q == COMPUTE);
+  assign busy_o   = (state_q == MUL_IN) | (state_q == MUL_OUT) | (state_q == COMPUTE);
   assign valid_o  = (state_q == DONE);
   assign idle_o   = (state_q == IDLE);
   assign result_o = result_q;
@@ -148,17 +139,21 @@ module kronos_muldiv
   // -------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      state_q     <= IDLE;
-      result_q    <= '0;
-      dividend_q  <= '0;
-      remainder_q <= '0;
-      quotient_q  <= '0;
-      abs_b_q     <= '0;
-      count_q     <= '0;
-      div_neg_q   <= '0;
-      rem_neg_q   <= '0;
-      is_rem_q    <= '0;
-      word_op_q   <= '0;
+      state_q       <= IDLE;
+      result_q      <= '0;
+      mul_a65_q     <= '0;
+      mul_b65_q     <= '0;
+      mul_product_q <= '0;
+      op_q          <= MULDIV_MUL;
+      dividend_q    <= '0;
+      remainder_q   <= '0;
+      quotient_q    <= '0;
+      abs_b_q       <= '0;
+      count_q       <= '0;
+      div_neg_q     <= '0;
+      rem_neg_q     <= '0;
+      is_rem_q      <= '0;
+      word_op_q     <= '0;
     end else begin
       unique case (state_q)
 
@@ -167,10 +162,14 @@ module kronos_muldiv
           if (req_i) begin
             unique case (op_i)
               MULDIV_MUL, MULDIV_MULH, MULDIV_MULHSU, MULDIV_MULHU: begin
-                // Capture combinational product; spend one cycle in MUL_BUSY.
-                result_q  <= mul_result_final;
+                // Pipeline stage 1: capture sign-extended 65-bit operands.
+                // Path A: a_i/b_i → word_op mux → sign-extend → register.
+                // ~2–3 ns, well within budget.
+                mul_a65_q <= mul_a65;
+                mul_b65_q <= mul_b65;
+                op_q      <= op_i;
                 word_op_q <= word_op_i;
-                state_q   <= MUL_BUSY;
+                state_q   <= MUL_IN;
               end
 
               MULDIV_DIV, MULDIV_DIVU, MULDIV_REM, MULDIV_REMU: begin
@@ -252,9 +251,28 @@ module kronos_muldiv
         end
 
         // ---------------------------------------------------------------
-        MUL_BUSY: begin
-          // result_q already holds the product; one busy cycle then expose.
-          state_q <= DONE;
+        // Pipeline stage 2: register the 65×65 product.
+        // Path B: registered 65-bit operands → DSP48E2 cascade → product register.
+        // ~5.5–6.0 ns, within budget.
+        MUL_IN: begin
+          mul_product_q <= $signed(mul_a65_q) * $signed(mul_b65_q);
+          state_q       <= MUL_OUT;
+        end
+
+        // ---------------------------------------------------------------
+        // Pipeline stage 3: select result half and sign-extend to 64 bits.
+        // Path C: product register → mux → result_q. ~1.5 ns.
+        MUL_OUT: begin
+          logic [63:0] sel;
+          unique case (op_q)
+            MULDIV_MUL:    sel = mul_product_q[63:0];
+            MULDIV_MULH:   sel = mul_product_q[127:64];
+            MULDIV_MULHSU: sel = mul_product_q[127:64];
+            MULDIV_MULHU:  sel = mul_product_q[127:64];
+            default:       sel = mul_product_q[63:0];
+          endcase
+          result_q <= word_op_q ? {{32{sel[31]}}, sel[31:0]} : sel;
+          state_q  <= DONE;
         end
 
         // ---------------------------------------------------------------

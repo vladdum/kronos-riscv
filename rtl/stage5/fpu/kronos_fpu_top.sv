@@ -9,7 +9,7 @@
 // Latency table (clock cycles from dispatch to out_valid):
 //   FMISC  1  (FSGNJ*, FMIN, FMAX, FCLASS, FEQ, FLT, FLE, FMV.*)
 //   FCVT   2  (FCVT.*.* integer↔FP conversions)
-//   FADD   5  (FADD, FSUB)
+//   FADD   6  (FADD, FSUB — extra S3b stage for timing closure at 148 MHz)
 //   FMUL   4  (FMUL)
 //   FMA    5  (FMADD, FMSUB, FNMADD, FNMSUB)
 //   ITER   variable (FDIV, FSQRT) — late-reservation via scoreboard
@@ -72,7 +72,7 @@ module kronos_fpu_top
       end
       FP_FADD, FP_FSUB: begin
         sel_fadd         = 1'b1;
-        dispatch_latency = 3'd5;
+        dispatch_latency = 3'd6;
       end
       FP_FMUL: begin
         sel_fmul         = 1'b1;
@@ -103,7 +103,7 @@ module kronos_fpu_top
   logic iter_late_req, iter_late_fp_dest, iter_late_grant;
   logic iter_busy;
 
-  kronos_fpu_scoreboard #(.DEPTH(5)) u_scoreboard (
+  kronos_fpu_scoreboard #(.DEPTH(6)) u_scoreboard (
     .clk_i             (clk_i),
     .rst_ni            (rst_ni),
     .flush_i           (flush_i),

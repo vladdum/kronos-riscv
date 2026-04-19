@@ -58,6 +58,13 @@ module kronos_top
   // Stage 5a: CSR frm output
   logic [2:0]     frm;
 
+  // Fix #2: ID-stage forwarding helper signals.
+  // FP paths: 2-bit one-hot selector + data mux (4-way, replaces 4-level chain).
+  // Integer path: plain WB-bypass-or-regfile (EX/MEM forwarding via fwd_rs1_sel).
+  logic [1:0]     fp_rs1_sel, fp_rs2_sel, fp_rs3_sel;
+  logic [63:0]    fp_rs1_data_id, fp_rs2_data_id, fp_rs3_data_id;
+  logic [63:0]    int_rs1_data_id, int_rs2_data_id;
+
   // -------------------------------------------------------------------------
   // EX-stage wires (64-bit datapath)
   // -------------------------------------------------------------------------
@@ -77,6 +84,11 @@ module kronos_top
   logic [63:0] muldiv_result;
   logic        muldiv_valid, muldiv_idle;
   logic        muldiv_stall;
+
+  // Fix #3: pre-registered CSR-select flag for EX forwarding mux.
+  // Registered at the EX→MEM boundary; eliminates the 3-bit wb_sel compare
+  // from the FWD_EXMEM combinational path.
+  logic        ex_mem_csr_q;
 
   // STAGE3: fetch FSM
   typedef enum logic { FETCH_IDLE = 1'b0, FETCH_WAIT_R = 1'b1 } fetch_state_e;
@@ -552,70 +564,94 @@ module kronos_top
   // ID stage
   // =========================================================================
 
-  // FP regfile has asynchronous reads (like the integer regfile).
-  // Operand mux: select FP or integer source. Integer path includes WB bypass.
-  // FP forward: when fpu_out_valid fires the pipeline is unstalled; the
-  // instruction entering EX at the same posedge must get fpu_result, not the
-  // unwritten FP-regfile value (write happens at WB, not EX or MEM).
-  // FP operand bypass: use fp_result_avail/fp_result_cur/fp_tag_cur so the
-  // bypass works even when fpu_out_valid fired on a stalled cycle (result is
-  // then held in fp_result_q with fp_result_valid_q=1 until pipeline advances).
-  assign rs1_data_id =
-      // FPU arithmetic result bypass (result just fired or latched while stalled)
-      (id_dec.rs1_fp & fp_result_avail & fp_tag_cur.fp_dest
-                      & (fp_tag_cur.rd == id_dec.rs1))          ? fp_result_cur :
-      // EX/MEM bypass: FP arithmetic result in MEM stage, not yet in regfile
-      (id_dec.rs1_fp & ex_mem_q.valid & ex_mem_q.dec.is_fp &
-       ex_mem_q.dec.rd_fp & ~ex_mem_q.dec.fp_load &
-       (ex_mem_q.dec.rd == id_dec.rs1))                         ? ex_mem_q.alu_result :
-      // MEM/WB bypass: FP result (arithmetic or load) reaching WB
-      (id_dec.rs1_fp & fp_we & (fp_wa == id_dec.rs1))           ? fp_wd :
-      id_dec.rs1_fp                                              ? fp_rd1 :
-      // Integer EX bypass (0-gap): non-FP, non-load, non-muldiv integer in EX.
-      // rd_wen guards against the `rd` field of B-type (BRANCH) and S-type
-      // (STORE) encodings — where instr[11:7] holds immediate bits, not a
-      // real destination — spuriously matching a following rs1.
-      (~id_dec.rs1_fp & id_ex_q.valid & id_ex_q.dec.rd_wen & ~id_ex_q.dec.rd_fp &
-       ~id_ex_q.dec.is_load & ~id_ex_q.dec.is_fp &
-       (id_ex_q.dec.rd != 5'd0) & (id_ex_q.dec.rd == id_dec.rs1)) ?
-           (id_ex_q.dec.wb_sel == WB_CSR ? csr_rdata : ex_result) :
-      // Integer MEM bypass: non-load integer result in MEM stage (covers CSR
-      // reads and FP→int instructions like fmv.x.w, feq.s, fcvt.w.s)
-      (~id_dec.rs1_fp & ex_mem_q.valid & ex_mem_q.dec.rd_wen & ~ex_mem_q.dec.rd_fp &
-       ~ex_mem_q.dec.is_load & (ex_mem_q.dec.rd != 5'd0) &
-       (ex_mem_q.dec.rd == id_dec.rs1))                         ?
-           (ex_mem_q.dec.wb_sel == WB_CSR ? ex_mem_q.csr_rdata : ex_mem_q.alu_result) :
-      (wb_writing && mem_wb_q.dec.rd == id_dec.rs1)             ? wb_result_64 :
-                                                                   rs1_rdata_64;
-  assign rs2_data_id =
-      (id_dec.rs2_fp & fp_result_avail & fp_tag_cur.fp_dest
-                      & (fp_tag_cur.rd == id_dec.rs2))          ? fp_result_cur :
-      (id_dec.rs2_fp & ex_mem_q.valid & ex_mem_q.dec.is_fp &
-       ex_mem_q.dec.rd_fp & ~ex_mem_q.dec.fp_load &
-       (ex_mem_q.dec.rd == id_dec.rs2))                         ? ex_mem_q.alu_result :
-      (id_dec.rs2_fp & fp_we & (fp_wa == id_dec.rs2))           ? fp_wd :
-      id_dec.rs2_fp                                              ? fp_rd2 :
-      // Integer EX bypass (0-gap): non-FP, non-load integer in EX stage.
-      // See rs1 path above for the rd_wen guard rationale.
-      (~id_dec.rs2_fp & id_ex_q.valid & id_ex_q.dec.rd_wen & ~id_ex_q.dec.rd_fp &
-       ~id_ex_q.dec.is_load & ~id_ex_q.dec.is_fp &
-       (id_ex_q.dec.rd != 5'd0) & (id_ex_q.dec.rd == id_dec.rs2)) ?
-           (id_ex_q.dec.wb_sel == WB_CSR ? csr_rdata : ex_result) :
-      // Integer MEM bypass: non-load integer result in MEM stage
-      (~id_dec.rs2_fp & ex_mem_q.valid & ex_mem_q.dec.rd_wen & ~ex_mem_q.dec.rd_fp &
-       ~ex_mem_q.dec.is_load & (ex_mem_q.dec.rd != 5'd0) &
-       (ex_mem_q.dec.rd == id_dec.rs2))                         ?
-           (ex_mem_q.dec.wb_sel == WB_CSR ? ex_mem_q.csr_rdata : ex_mem_q.alu_result) :
-      (wb_writing && mem_wb_q.dec.rd == id_dec.rs2)             ? wb_result_64 :
-                                                                   rs2_rdata_64;
-  assign rs3_data_id =
-      (id_dec.rs3_fp & fp_result_avail & fp_tag_cur.fp_dest
-                      & (fp_tag_cur.rd == id_dec.rs3))          ? fp_result_cur :
-      (id_dec.rs3_fp & ex_mem_q.valid & ex_mem_q.dec.is_fp &
-       ex_mem_q.dec.rd_fp & ~ex_mem_q.dec.fp_load &
-       (ex_mem_q.dec.rd == id_dec.rs3))                         ? ex_mem_q.alu_result :
-      (id_dec.rs3_fp & fp_we & (fp_wa == id_dec.rs3))           ? fp_wd :
-                                                                   fp_rd3;
+  // Fix #2: two-level ID forwarding structure.
+  //
+  // FP path: compute a 2-bit one-hot selector independently of data, then use
+  // a balanced 4-way unique-case mux.  Separating condition evaluation from
+  // data selection reduces the path from ~10–12 LUT levels to ~4–5 LUT levels.
+  //
+  // Integer path: drop the 0-gap EX bypass and 1-gap MEM bypass from ID.
+  // Those cases are already handled by fwd_rs1_sel = FWD_EXMEM / FWD_MEMWB
+  // in the EX-stage forwarding mux (correct because the producer is in
+  // ex_mem_q / mem_wb_q when the consumer reaches EX).  Only the 3-gap WB
+  // bypass is kept here (the producer has retired by the time the consumer
+  // reaches EX, so no EX mux can help).
+
+  // FP selector encoding: 2'd0 = FPU result, 2'd1 = EX/MEM FP, 2'd2 = WB FP,
+  //                       2'd3 = FP regfile.
+  always_comb begin
+    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_dec.rs1))
+      fp_rs1_sel = 2'd0;
+    else if (ex_mem_q.valid & ex_mem_q.dec.is_fp & ex_mem_q.dec.rd_fp &
+             ~ex_mem_q.dec.fp_load & (ex_mem_q.dec.rd == id_dec.rs1))
+      fp_rs1_sel = 2'd1;
+    else if (fp_we & (fp_wa == id_dec.rs1))
+      fp_rs1_sel = 2'd2;
+    else
+      fp_rs1_sel = 2'd3;
+  end
+  always_comb begin
+    unique case (fp_rs1_sel)
+      2'd0:    fp_rs1_data_id = fp_result_cur;
+      2'd1:    fp_rs1_data_id = ex_mem_q.alu_result;
+      2'd2:    fp_rs1_data_id = fp_wd;
+      default: fp_rs1_data_id = fp_rd1;
+    endcase
+  end
+
+  always_comb begin
+    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_dec.rs2))
+      fp_rs2_sel = 2'd0;
+    else if (ex_mem_q.valid & ex_mem_q.dec.is_fp & ex_mem_q.dec.rd_fp &
+             ~ex_mem_q.dec.fp_load & (ex_mem_q.dec.rd == id_dec.rs2))
+      fp_rs2_sel = 2'd1;
+    else if (fp_we & (fp_wa == id_dec.rs2))
+      fp_rs2_sel = 2'd2;
+    else
+      fp_rs2_sel = 2'd3;
+  end
+  always_comb begin
+    unique case (fp_rs2_sel)
+      2'd0:    fp_rs2_data_id = fp_result_cur;
+      2'd1:    fp_rs2_data_id = ex_mem_q.alu_result;
+      2'd2:    fp_rs2_data_id = fp_wd;
+      default: fp_rs2_data_id = fp_rd2;
+    endcase
+  end
+
+  always_comb begin
+    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_dec.rs3))
+      fp_rs3_sel = 2'd0;
+    else if (ex_mem_q.valid & ex_mem_q.dec.is_fp & ex_mem_q.dec.rd_fp &
+             ~ex_mem_q.dec.fp_load & (ex_mem_q.dec.rd == id_dec.rs3))
+      fp_rs3_sel = 2'd1;
+    else if (fp_we & (fp_wa == id_dec.rs3))
+      fp_rs3_sel = 2'd2;
+    else
+      fp_rs3_sel = 2'd3;
+  end
+  always_comb begin
+    unique case (fp_rs3_sel)
+      2'd0:    fp_rs3_data_id = fp_result_cur;
+      2'd1:    fp_rs3_data_id = ex_mem_q.alu_result;
+      2'd2:    fp_rs3_data_id = fp_wd;
+      default: fp_rs3_data_id = fp_rd3;
+    endcase
+  end
+
+  // Integer path: WB bypass (3-gap) or register file.
+  // rd_wen guards against B/S-type encodings where instr[11:7] is an
+  // immediate, not a real destination register.
+  assign int_rs1_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs1)
+                           ? wb_result_64 : rs1_rdata_64;
+  assign int_rs2_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs2)
+                           ? wb_result_64 : rs2_rdata_64;
+
+  // Final operand mux: FP or integer.  FP and integer paths are mutually
+  // exclusive on rs1_fp / rs2_fp — one more LUT level added here.
+  assign rs1_data_id = id_dec.rs1_fp ? fp_rs1_data_id : int_rs1_data_id;
+  assign rs2_data_id = id_dec.rs2_fp ? fp_rs2_data_id : int_rs2_data_id;
+  assign rs3_data_id = fp_rs3_data_id;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -641,18 +677,19 @@ module kronos_top
   // EX stage — 64-bit forwarding mux
   // =========================================================================
 
+  // Fix #3: use pre-registered ex_mem_csr_q instead of the 3-bit wb_sel
+  // comparison inline.  Removes one combinational level from the FWD_EXMEM
+  // data path (critical for every instruction that uses a forwarded operand).
   always_comb begin
     unique case (id_ex_q.fwd_rs1_sel)
       FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data;
-      FWD_EXMEM: fwd_rs1_data = (ex_mem_q.dec.wb_sel == WB_CSR)
-                                 ? ex_mem_q.csr_rdata : ex_mem_q.alu_result;
+      FWD_EXMEM: fwd_rs1_data = ex_mem_csr_q ? ex_mem_q.csr_rdata : ex_mem_q.alu_result;
       FWD_MEMWB: fwd_rs1_data = wb_result_64;
       default:   fwd_rs1_data = id_ex_q.rs1_data;
     endcase
     unique case (id_ex_q.fwd_rs2_sel)
       FWD_NONE:  fwd_rs2_data = id_ex_q.rs2_data;
-      FWD_EXMEM: fwd_rs2_data = (ex_mem_q.dec.wb_sel == WB_CSR)
-                                 ? ex_mem_q.csr_rdata : ex_mem_q.alu_result;
+      FWD_EXMEM: fwd_rs2_data = ex_mem_csr_q ? ex_mem_q.csr_rdata : ex_mem_q.alu_result;
       FWD_MEMWB: fwd_rs2_data = wb_result_64;
       default:   fwd_rs2_data = id_ex_q.rs2_data;
     endcase
@@ -730,6 +767,11 @@ module kronos_top
     (id_ex_q.valid &
      (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak | id_ex_q.dec.illegal |
       irq_pending | id_ex_q.dec.is_mret));
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) ex_mem_csr_q <= 1'b0;
+    else if (ex_mem_en) ex_mem_csr_q <= (id_ex_q.dec.wb_sel == WB_CSR);
+  end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
