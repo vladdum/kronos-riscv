@@ -2,19 +2,26 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// 6-stage pipelined IEEE 754 floating-point multiplier (single and double).
+// 8-stage pipelined IEEE 754 floating-point multiplier (single and double).
 //
 // Pipeline:
-//   S1: NaN-unbox single, decompose operands, classify specials, precompute
-//       sign / unbiased exponent sum / extended significands.
-//   S2: Multiply significands (wide multiply registered at stage boundary for
-//       DSP inference).
-//   S3: LZC only — compute 7-bit leading-zero count and normalized exponent
-//       from the 106-bit product. Carry full product forward.
+//   S1:  NaN-unbox single, decompose operands, classify specials, precompute
+//        sign / unbiased exponent sum / extended significands.
+//   S1b: Re-latch multiplicands into s1b_*_q. Pipeline register #1 into the
+//        DSP48 cascade.
+//   S1c: Re-latch multiplicands into s1c_*_q. Pipeline register #2 into the
+//        DSP48 cascade. Together with S1b, gives Vivado three flops between
+//        the multiplicand source and the DSP cascade output, letting retiming
+//        (global_retiming on) place them in the DSP48 internal AREG/MREG/PREG
+//        pipeline. This closes the 53×53 DSP-chain critical path at 220 MHz.
+//   S2:  Multiply significands (wide multiply registered at stage boundary for
+//        DSP inference).
+//   S3:  LZC only — compute 7-bit leading-zero count and normalized exponent
+//        from the 106-bit product. Carry full product forward.
 //   S3b: Normalize barrel shift — use registered LZC to shift product and
 //        extract mantissa + GRS bits.
-//   S4: Subnormal shift — apply right-shift if exp_norm <= 0, refine GRS.
-//   S5: Round, handle overflow/underflow, pack, NaN-box single. Register.
+//   S4:  Subnormal shift — apply right-shift if exp_norm <= 0, refine GRS.
+//   S5:  Round, handle overflow/underflow, pack, NaN-box single. Register.
 
 module kronos_fpu_fmul
   import kronos_pkg::*;
@@ -234,12 +241,106 @@ module kronos_fpu_fmul
   end
 
   // -------------------------------------------------------------------------
+  // S1b registers: re-latch multiplicands to give Vivado retiming room inside
+  // the 53×53 DSP cascade. No new functional content — pure pipeline depth.
+  // -------------------------------------------------------------------------
+  logic        s1b_valid_q;
+  logic        s1b_fmt_d_q;
+  logic [2:0]  s1b_rm_q;
+  fpu_tag_t    s1b_tag_q;
+  logic        s1b_sign_q;
+  logic signed [EXP_EXT_W-1:0] s1b_exp_sum_q;
+  logic [SIG_W-1:0] s1b_siga_q, s1b_sigb_q;
+  logic        s1b_any_snan_q, s1b_any_nan_q, s1b_inf_times_zero_q;
+  logic        s1b_res_is_inf_q, s1b_res_is_zero_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s1b_regs
+    if (!rst_ni) begin
+      s1b_valid_q          <= 1'b0;
+      s1b_fmt_d_q          <= 1'b0;
+      s1b_rm_q             <= 3'd0;
+      s1b_tag_q            <= '0;
+      s1b_sign_q           <= 1'b0;
+      s1b_exp_sum_q        <= '0;
+      s1b_siga_q           <= '0;
+      s1b_sigb_q           <= '0;
+      s1b_any_snan_q       <= 1'b0;
+      s1b_any_nan_q        <= 1'b0;
+      s1b_inf_times_zero_q <= 1'b0;
+      s1b_res_is_inf_q     <= 1'b0;
+      s1b_res_is_zero_q    <= 1'b0;
+    end else begin
+      s1b_valid_q          <= flush_i ? 1'b0 : s1_valid_q;
+      s1b_fmt_d_q          <= s1_fmt_d_q;
+      s1b_rm_q             <= s1_rm_q;
+      s1b_tag_q            <= s1_tag_q;
+      s1b_sign_q           <= s1_sign_q;
+      s1b_exp_sum_q        <= s1_exp_sum_q;
+      s1b_siga_q           <= s1_siga_q;
+      s1b_sigb_q           <= s1_sigb_q;
+      s1b_any_snan_q       <= s1_any_snan_q;
+      s1b_any_nan_q        <= s1_any_nan_q;
+      s1b_inf_times_zero_q <= s1_inf_times_zero_q;
+      s1b_res_is_inf_q     <= s1_res_is_inf_q;
+      s1b_res_is_zero_q    <= s1_res_is_zero_q;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // S1c registers: second re-latch of multiplicands — pipeline register #2
+  // into the DSP cascade. Together with S1b, provides three flops between
+  // the multiplicand source (s1_*_q) and the product (s2_prod_q), letting
+  // Vivado retiming place them inside the DSP48 AREG/MREG/PREG pipeline.
+  // -------------------------------------------------------------------------
+  logic        s1c_valid_q;
+  logic        s1c_fmt_d_q;
+  logic [2:0]  s1c_rm_q;
+  fpu_tag_t    s1c_tag_q;
+  logic        s1c_sign_q;
+  logic signed [EXP_EXT_W-1:0] s1c_exp_sum_q;
+  logic [SIG_W-1:0] s1c_siga_q, s1c_sigb_q;
+  logic        s1c_any_snan_q, s1c_any_nan_q, s1c_inf_times_zero_q;
+  logic        s1c_res_is_inf_q, s1c_res_is_zero_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s1c_regs
+    if (!rst_ni) begin
+      s1c_valid_q          <= 1'b0;
+      s1c_fmt_d_q          <= 1'b0;
+      s1c_rm_q             <= 3'd0;
+      s1c_tag_q            <= '0;
+      s1c_sign_q           <= 1'b0;
+      s1c_exp_sum_q        <= '0;
+      s1c_siga_q           <= '0;
+      s1c_sigb_q           <= '0;
+      s1c_any_snan_q       <= 1'b0;
+      s1c_any_nan_q        <= 1'b0;
+      s1c_inf_times_zero_q <= 1'b0;
+      s1c_res_is_inf_q     <= 1'b0;
+      s1c_res_is_zero_q    <= 1'b0;
+    end else begin
+      s1c_valid_q          <= flush_i ? 1'b0 : s1b_valid_q;
+      s1c_fmt_d_q          <= s1b_fmt_d_q;
+      s1c_rm_q             <= s1b_rm_q;
+      s1c_tag_q            <= s1b_tag_q;
+      s1c_sign_q           <= s1b_sign_q;
+      s1c_exp_sum_q        <= s1b_exp_sum_q;
+      s1c_siga_q           <= s1b_siga_q;
+      s1c_sigb_q           <= s1b_sigb_q;
+      s1c_any_snan_q       <= s1b_any_snan_q;
+      s1c_any_nan_q        <= s1b_any_nan_q;
+      s1c_inf_times_zero_q <= s1b_inf_times_zero_q;
+      s1c_res_is_inf_q     <= s1b_res_is_inf_q;
+      s1c_res_is_zero_q    <= s1b_res_is_zero_q;
+    end
+  end
+
+  // -------------------------------------------------------------------------
   // S2 combinational: multiply
   // -------------------------------------------------------------------------
   logic [PROD_W-1:0] s2_prod_c;
 
   always_comb begin
-    s2_prod_c = s1_siga_q * s1_sigb_q;
+    s2_prod_c = s1c_siga_q * s1c_sigb_q;
   end
 
   // -------------------------------------------------------------------------
@@ -255,7 +356,7 @@ module kronos_fpu_fmul
   logic        s2_any_snan_q, s2_any_nan_q, s2_inf_times_zero_q;
   logic        s2_res_is_inf_q, s2_res_is_zero_q;
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s2_regs
     if (!rst_ni) begin
       s2_valid_q          <= 1'b0;
       s2_fmt_d_q          <= 1'b0;
@@ -270,18 +371,18 @@ module kronos_fpu_fmul
       s2_res_is_inf_q     <= 1'b0;
       s2_res_is_zero_q    <= 1'b0;
     end else begin
-      s2_valid_q          <= flush_i ? 1'b0 : s1_valid_q;
-      s2_fmt_d_q          <= s1_fmt_d_q;
-      s2_rm_q             <= s1_rm_q;
-      s2_tag_q            <= s1_tag_q;
-      s2_sign_q           <= s1_sign_q;
-      s2_exp_sum_q        <= s1_exp_sum_q;
+      s2_valid_q          <= flush_i ? 1'b0 : s1c_valid_q;
+      s2_fmt_d_q          <= s1c_fmt_d_q;
+      s2_rm_q             <= s1c_rm_q;
+      s2_tag_q            <= s1c_tag_q;
+      s2_sign_q           <= s1c_sign_q;
+      s2_exp_sum_q        <= s1c_exp_sum_q;
       s2_prod_q           <= s2_prod_c;
-      s2_any_snan_q       <= s1_any_snan_q;
-      s2_any_nan_q        <= s1_any_nan_q;
-      s2_inf_times_zero_q <= s1_inf_times_zero_q;
-      s2_res_is_inf_q     <= s1_res_is_inf_q;
-      s2_res_is_zero_q    <= s1_res_is_zero_q;
+      s2_any_snan_q       <= s1c_any_snan_q;
+      s2_any_nan_q        <= s1c_any_nan_q;
+      s2_inf_times_zero_q <= s1c_inf_times_zero_q;
+      s2_res_is_inf_q     <= s1c_res_is_inf_q;
+      s2_res_is_zero_q    <= s1c_res_is_zero_q;
     end
   end
 

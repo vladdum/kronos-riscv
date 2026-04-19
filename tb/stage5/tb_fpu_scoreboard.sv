@@ -5,13 +5,13 @@
 module tb_fpu_scoreboard;
   logic       clk = 0, rst_n = 0, flush = 0;
   logic       dispatch_req, dispatch_fp, dispatch_int;
-  logic [2:0] dispatch_latency;  // 1..5
+  logic [3:0] dispatch_latency;  // 1..DEPTH
   logic       dispatch_ok;
 
   logic dispatch_ok_comb;
 
   logic       late_req, late_fp;
-  logic [2:0] late_latency;
+  logic [3:0] late_latency;
   logic       late_grant_comb;
 
   kronos_fpu_scoreboard u_dut (
@@ -26,7 +26,7 @@ module tb_fpu_scoreboard;
   task automatic dispatch(input logic fp, input logic intw, input int lat,
                           input bit expect_ok);
     @(negedge clk) dispatch_req = 1; dispatch_fp = fp; dispatch_int = intw;
-                   dispatch_latency = lat[2:0];
+                   dispatch_latency = lat[3:0];
     @(posedge clk) #1;
     if (dispatch_ok !== expect_ok)
       $fatal(1, "lat=%0d fp=%b int=%b expect=%b got=%b",
@@ -66,7 +66,7 @@ module tb_fpu_scoreboard;
     @(negedge clk) rst_n = 0; @(negedge clk) rst_n = 1;
 
     // Test 1: late_req=1, target slot free → grant=1, reservation appears.
-    @(negedge clk) late_req = 1; late_fp = 1; late_latency = 3'd2;
+    @(negedge clk) late_req = 1; late_fp = 1; late_latency = 4'd2;
     #1;
     if (late_grant_comb !== 1'b1)
       $fatal(1, "late-probe free: expected grant=1, got=%b", late_grant_comb);
@@ -84,7 +84,7 @@ module tb_fpu_scoreboard;
     dispatch(1, 0, 2, 1'b1);
     // Now late-probe at lat=1: after the shift, the dispatch reservation that
     // was at slot[1] moved to slot[0]. Late probe at lat=1 targets slot[0].
-    @(negedge clk) late_req = 1; late_fp = 1; late_latency = 3'd1;
+    @(negedge clk) late_req = 1; late_fp = 1; late_latency = 4'd1;
     #1;
     if (late_grant_comb !== 1'b0)
       $fatal(1, "late-probe occupied: expected grant=0, got=%b", late_grant_comb);
@@ -92,7 +92,7 @@ module tb_fpu_scoreboard;
 
     // Test 3: late_req=0 → grant=0 always.
     @(negedge clk) rst_n = 0; @(negedge clk) rst_n = 1;
-    @(negedge clk) late_req = 0; late_fp = 1; late_latency = 3'd2;
+    @(negedge clk) late_req = 0; late_fp = 1; late_latency = 4'd2;
     #1;
     if (late_grant_comb !== 1'b0)
       $fatal(1, "late-probe no-req: expected grant=0, got=%b", late_grant_comb);

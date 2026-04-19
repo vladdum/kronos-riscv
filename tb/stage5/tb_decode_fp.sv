@@ -115,16 +115,16 @@ module tb_decode_fp;
     check("fclass.d !rd_fp", !dec.rd_fp);
     check("fclass.d rd_wen", dec.rd_wen);
 
-    // FMV.W.X f1, x2  (funct7=1110100, funct3=000, rs2=00000, opcode=0x53)
-    instr = {7'b1110100, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    // FMV.W.X f1, x2  (funct7=1111000, funct3=000, rs2=00000, opcode=0x53)
+    instr = {7'b1111000, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
     #1;
     check("fmv.w.x op",      dec.fp_op === FP_FMV_W_X);
     check("fmv.w.x !rs1_fp", !dec.rs1_fp);
     check("fmv.w.x rd_fp",   dec.rd_fp);
 
-    // FCVT.D.S f1, f2  (funct7=0100000, rs2=00000, opcode=0x53)
-    // funct7[6:2]=01000, funct7[1:0]=00 → S→D conversion
-    instr = {7'b0100000, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    // FCVT.D.S f1, f2  (funct7=0100001, rs2=00000, opcode=0x53)
+    // funct7[6:2]=01000, funct7[1:0]=01 → S→D conversion
+    instr = {7'b0100001, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
     #1;
     check("fcvt.d.s op",     dec.fp_op === FP_FCVT_D_S);
     check("fcvt.d.s rs1_fp", dec.rs1_fp);
@@ -139,10 +139,10 @@ module tb_decode_fp;
     check("fnmadd.s rs3",    dec.rs3 === 5'd5);
     check("fnmadd.s !fmt_d", !dec.fmt_d);
 
-    // FDIV.S — must be illegal (Stage 5b only)
+    // FDIV.S — legal in Stage 5b (iterative SRT)
     instr = {7'b0001100, 5'd3, 5'd2, 3'b000, 5'd1, 7'b1010011};
     #1;
-    check("fdiv.s illegal", illegal);
+    check("fdiv.s legal", !illegal);
 
     $display("tb_decode_fp PASS");
     $finish;

@@ -1,4 +1,7 @@
 build/
+!vendor/softfloat/build/
+vendor/softfloat/build/*.o
+vendor/softfloat/build/*.a
 obj_dir/
 *.vcd
 *.fst
