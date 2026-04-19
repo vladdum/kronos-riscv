@@ -370,16 +370,18 @@ module tb_fpu_fcvt;
     begin : blk_rand_fcvt_d_s
       logic [31:0]     ra;
       longint unsigned sf_f64r;
+      byte unsigned    sf_f;
       for (int k = 0; k < 100; k++) begin
         ra      = $urandom;
         sf_reset();
         sf_f64r = sf_f32_to_f64(ra);
+        sf_f    = sf_exceptions();
         // fmt_d_i=1: output format is double
         apply_and_wait(FP_FCVT_D_S, 1'b1, 3'd0, {32'hFFFF_FFFF, ra});
         total++;
-        if (result !== sf_f64r || fflags !== 5'b0) begin
-          $error("[fcvt.d.s #%0d] a=%h dut=%h/%02h sf=%h/00",
-                 k, ra, result, fflags, sf_f64r);
+        if (result !== sf_f64r || fflags !== sf_f[4:0]) begin
+          $error("[fcvt.d.s #%0d] a=%h dut=%h/%02h sf=%h/%02h",
+                 k, ra, result, fflags, sf_f64r, sf_f);
           errors++;
         end
       end

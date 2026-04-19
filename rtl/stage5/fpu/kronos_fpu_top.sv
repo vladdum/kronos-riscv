@@ -11,7 +11,7 @@
 //   FCVT   3  (FCVT.*.* integer↔FP conversions)
 //   FADD   6  (FADD, FSUB — extra S3b stage for timing closure at 148 MHz)
 //   FMUL   7  (FMUL — s1b pipeline stage added for DSP timing closure)
-//   FMA    7  (FMADD, FMSUB, FNMADD, FNMSUB — split to 7 stages)
+//   FMA    8  (FMADD, FMSUB, FNMADD, FNMSUB — s2b re-latch for DSP timing closure)
 //   ITER   variable (FDIV, FSQRT) — late-reservation via scoreboard
 //
 // busy_o is asserted when in_valid_i is high and the scoreboard detects a
@@ -43,7 +43,7 @@ module kronos_fpu_top
   // ---------------------------------------------------------------------------
   // Dispatch routing: determine unit and latency from op_i
   // ---------------------------------------------------------------------------
-  logic [2:0] dispatch_latency;
+  logic [3:0] dispatch_latency;
   logic       sel_fmisc, sel_fcvt, sel_fadd, sel_fmul, sel_fma, sel_iter;
 
   always_comb begin
@@ -53,7 +53,7 @@ module kronos_fpu_top
     sel_fmul         = 1'b0;
     sel_fma          = 1'b0;
     sel_iter         = 1'b0;
-    dispatch_latency = 3'd0;
+    dispatch_latency = 4'd0;
 
     unique case (op_i)
       FP_FSGNJ, FP_FSGNJN, FP_FSGNJX,
@@ -62,34 +62,34 @@ module kronos_fpu_top
       FP_FEQ,   FP_FLT,   FP_FLE,
       FP_FMV_X_W, FP_FMV_W_X, FP_FMV_X_D, FP_FMV_D_X: begin
         sel_fmisc        = 1'b1;
-        dispatch_latency = 3'd1;
+        dispatch_latency = 4'd1;
       end
       FP_FCVT_W_F, FP_FCVT_WU_F, FP_FCVT_L_F, FP_FCVT_LU_F,
       FP_FCVT_F_W, FP_FCVT_F_WU, FP_FCVT_F_L, FP_FCVT_F_LU,
       FP_FCVT_S_D, FP_FCVT_D_S: begin
         sel_fcvt         = 1'b1;
-        dispatch_latency = 3'd3;
+        dispatch_latency = 4'd3;
       end
       FP_FADD, FP_FSUB: begin
         sel_fadd         = 1'b1;
-        dispatch_latency = 3'd6;
+        dispatch_latency = 4'd6;
       end
       FP_FMUL: begin
         sel_fmul         = 1'b1;
-        dispatch_latency = 3'd7;
+        dispatch_latency = 4'd7;
       end
       FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB: begin
         sel_fma          = 1'b1;
-        dispatch_latency = 3'd7;
+        dispatch_latency = 4'd8;
       end
       FP_FDIV, FP_FSQRT: begin
         sel_iter         = 1'b1;
-        dispatch_latency = 3'd0;  // not registered at dispatch (late-reservation)
+        dispatch_latency = 4'd0;  // not registered at dispatch (late-reservation)
       end
       default: begin
         // Unknown op: route nowhere, scoreboard will ignore (latency=0)
         sel_fmisc        = 1'b0;
-        dispatch_latency = 3'd0;
+        dispatch_latency = 4'd0;
       end
     endcase
   end
@@ -115,7 +115,7 @@ module kronos_fpu_top
     .grant_o           (grant),
     .late_req_i        (iter_late_req),
     .late_fp_dest_i    (iter_late_fp_dest),
-    .late_latency_i    (3'd1),
+    .late_latency_i    (4'd1),
     .late_grant_comb_o (iter_late_grant)
   );
 
