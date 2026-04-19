@@ -10,7 +10,7 @@
 //   FMISC  1  (FSGNJ*, FMIN, FMAX, FCLASS, FEQ, FLT, FLE, FMV.*)
 //   FCVT   3  (FCVT.*.* integer↔FP conversions)
 //   FADD   6  (FADD, FSUB — extra S3b stage for timing closure at 148 MHz)
-//   FMUL   6  (FMUL — split to 6 stages for high-Fmax)
+//   FMUL   7  (FMUL — s1b pipeline stage added for DSP timing closure)
 //   FMA    7  (FMADD, FMSUB, FNMADD, FNMSUB — split to 7 stages)
 //   ITER   variable (FDIV, FSQRT) — late-reservation via scoreboard
 //
@@ -76,7 +76,7 @@ module kronos_fpu_top
       end
       FP_FMUL: begin
         sel_fmul         = 1'b1;
-        dispatch_latency = 3'd6;
+        dispatch_latency = 3'd7;
       end
       FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB: begin
         sel_fma          = 1'b1;

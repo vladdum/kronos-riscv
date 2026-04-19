@@ -34,7 +34,7 @@ module tb_fpu_fmul;
                         input logic [63:0] ain, bin);
     @(negedge clk); in_valid=1; op=o; fmt_d=fmtd; rm=r; a=ain; b=bin;
     @(negedge clk); in_valid=0;
-    repeat(5) @(posedge clk); #1;
+    repeat(6) @(posedge clk); #1;
   endtask
 
   int errors = 0, total = 0;
