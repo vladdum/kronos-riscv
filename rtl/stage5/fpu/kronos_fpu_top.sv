@@ -8,7 +8,7 @@
 //
 // Latency table (clock cycles from dispatch to out_valid):
 //   FMISC  1  (FSGNJ*, FMIN, FMAX, FCLASS, FEQ, FLT, FLE, FMV.*)
-//   FCVT   2  (FCVT.*.* integer↔FP conversions)
+//   FCVT   3  (FCVT.*.* integer↔FP conversions)
 //   FADD   6  (FADD, FSUB — extra S3b stage for timing closure at 148 MHz)
 //   FMUL   6  (FMUL — split to 6 stages for high-Fmax)
 //   FMA    7  (FMADD, FMSUB, FNMADD, FNMSUB — split to 7 stages)
@@ -68,7 +68,7 @@ module kronos_fpu_top
       FP_FCVT_F_W, FP_FCVT_F_WU, FP_FCVT_F_L, FP_FCVT_F_LU,
       FP_FCVT_S_D, FP_FCVT_D_S: begin
         sel_fcvt         = 1'b1;
-        dispatch_latency = 3'd2;
+        dispatch_latency = 3'd3;
       end
       FP_FADD, FP_FSUB: begin
         sel_fadd         = 1'b1;

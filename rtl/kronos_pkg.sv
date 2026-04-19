@@ -201,7 +201,9 @@ package kronos_pkg;
     logic           redirect;
     logic           valid;
     // Stage 3+
-    logic           is_16b;   // needed so WB computes correct pc4 link address
+    logic           is_16b;      // needed so WB computes correct pc4 link address
+    logic           pred_taken;  // propagated for MEM-stage bpred target check
+    logic [31:0]    pred_target; // propagated for MEM-stage bpred target check
   } ex_mem_reg_t;
 
   typedef struct packed {

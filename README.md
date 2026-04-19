@@ -190,6 +190,34 @@ cd sim && make sim-hazard    # hazard/stall control
 cd sim && make sim-lsu-s1    # LSU OBI FSM
 ```
 
+## FPGA Implementation (KV260)
+
+Requires Vivado 2024.x and a KV260 board support package. The flow targets
+`kronos_kv260_top` (a thin timing harness wrapping `kronos_top` with a Zynq PS
+clock) at 200 MHz on the XCK26 -2LV speed grade.
+
+```bash
+# Full synthesis + place & route at 200 MHz
+vivado -mode batch -source fpga/kv260/synth.tcl \
+       -tclargs PULP_AXI_ROOT=/path/to/pulp/axi
+
+# Override target frequency (e.g. timing sweep at 180 MHz)
+vivado -mode batch -source fpga/kv260/synth.tcl \
+       -tclargs SYNTH_FREQ_MHZ=180 PULP_AXI_ROOT=/path/to/pulp/axi
+```
+
+Reports land in `build/vivado_kv260/`:
+
+| File | Contents |
+|------|----------|
+| `post_route_timing.txt` | WNS, TNS, worst path |
+| `post_route_utilization.txt` | LUT / FF / DSP / BRAM counts |
+| `post_synth_timing.txt` | Estimated WNS after synthesis |
+
+The CI job (`.github/workflows/synth.yml`) runs this flow on a self-hosted
+Vivado runner for every PR that touches `rtl/stage5/` and fails if post-route
+WNS < −0.5 ns.
+
 ## ACT4 compliance
 
 All five completed stages pass the official
