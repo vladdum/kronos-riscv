@@ -4,9 +4,15 @@
 
 // Single-rounded fused multiply-add for binary32 and binary64.
 // Computes +/-(a*b) +/- c with a single rounding step applied after the
-// full-precision multiply-add.  Pipelined over 7 cycles:
-// S1(decompose) → S2(align+DSP) → S3(product reg) →
-//   S4(add) → S4b(LZC) → S5(shift) → S5b(round+pack) → output
+// full-precision multiply-add.  Pipelined over 8 cycles:
+// S1(decompose) → S2(mul operand reg) → S2b(mul operand re-latch) →
+//   S3(product reg + alignment prep) → S4(add) → S4b(LZC) →
+//   S5(shift) → S5b(round+pack) → output
+//
+// S2 and S2b together give Vivado two flops between the S2 multiplicand
+// source and the DSP cascade output, letting retiming
+// (global_retiming on) place one in the DSP48 internal MREG. This breaks
+// the 53x53 multiply critical path at 200/220 MHz.
 //
 // Subnormal inputs are treated like normals with zero leading bit and the
 // biased exponent bumped to the subnormal emin.  Subnormal outputs fall out of
@@ -248,7 +254,7 @@ module kronos_fpu_fma
   logic              s2_c_zero;
   fpu_tag_t          s2_tag;
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s2_regs
     if (!rst_ni) begin
       s2_valid          <= 1'b0;
       s2_special        <= 1'b0;
@@ -287,15 +293,75 @@ module kronos_fpu_fma
   end
 
   // ---------------------------------------------------------------------------
-  // Stage 2: multiply significands
+  // Stage 2b: re-latch all S2 signals. This is the pure-pipelining stage that
+  // gives Vivado retiming room inside the 53x53 DSP cascade. No new functional
+  // content.
+  // ---------------------------------------------------------------------------
+  logic              s2b_valid;
+  logic              s2b_special;
+  logic [63:0]       s2b_special_result;
+  logic [4:0]        s2b_special_flags;
+  logic              s2b_fmt_d;
+  logic [2:0]        s2b_rm;
+  logic              s2b_prod_sign;
+  logic              s2b_addend_sign;
+  logic signed [12:0] s2b_prod_exp;
+  logic signed [12:0] s2b_c_exp;
+  logic [52:0]       s2b_a_sig;
+  logic [52:0]       s2b_b_sig;
+  logic [52:0]       s2b_c_sig;
+  logic              s2b_prod_zero;
+  logic              s2b_c_zero;
+  fpu_tag_t          s2b_tag;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s2b_regs
+    if (!rst_ni) begin
+      s2b_valid          <= 1'b0;
+      s2b_special        <= 1'b0;
+      s2b_special_result <= '0;
+      s2b_special_flags  <= '0;
+      s2b_fmt_d          <= 1'b0;
+      s2b_rm             <= '0;
+      s2b_prod_sign      <= 1'b0;
+      s2b_addend_sign    <= 1'b0;
+      s2b_prod_exp       <= '0;
+      s2b_c_exp          <= '0;
+      s2b_a_sig          <= '0;
+      s2b_b_sig          <= '0;
+      s2b_c_sig          <= '0;
+      s2b_prod_zero      <= 1'b0;
+      s2b_c_zero         <= 1'b0;
+      s2b_tag            <= '0;
+    end else begin
+      s2b_valid          <= flush_i ? 1'b0 : s2_valid;
+      s2b_special        <= s2_special;
+      s2b_special_result <= s2_special_result;
+      s2b_special_flags  <= s2_special_flags;
+      s2b_fmt_d          <= s2_fmt_d;
+      s2b_rm             <= s2_rm;
+      s2b_prod_sign      <= s2_prod_sign;
+      s2b_addend_sign    <= s2_addend_sign;
+      s2b_prod_exp       <= s2_prod_exp;
+      s2b_c_exp          <= s2_c_exp;
+      s2b_a_sig          <= s2_a_sig;
+      s2b_b_sig          <= s2_b_sig;
+      s2b_c_sig          <= s2_c_sig;
+      s2b_prod_zero      <= s2_prod_zero;
+      s2b_c_zero         <= s2_c_zero;
+      s2b_tag            <= s2_tag;
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // Stage 2b: multiply significands (reads from s2b to break DSP cascade path)
   // ---------------------------------------------------------------------------
   logic [PROD_W-1:0] s2_product_comb;
 
   always_comb begin
-    s2_product_comb = s2_a_sig * s2_b_sig;
+    s2_product_comb = s2b_a_sig * s2b_b_sig;
   end
 
-  // Stage 2 -> Stage 3 register
+  // Stage 2b -> Stage 3 register
   logic              s3_valid;
   logic              s3_special;
   logic [63:0]       s3_special_result;
@@ -312,7 +378,7 @@ module kronos_fpu_fma
   logic              s3_c_zero;
   fpu_tag_t          s3_tag;
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s3_regs
     if (!rst_ni) begin
       s3_valid          <= 1'b0;
       s3_special        <= 1'b0;
@@ -330,21 +396,21 @@ module kronos_fpu_fma
       s3_c_zero         <= 1'b0;
       s3_tag            <= '0;
     end else begin
-      s3_valid          <= flush_i ? 1'b0 : s2_valid;
-      s3_special        <= s2_special;
-      s3_special_result <= s2_special_result;
-      s3_special_flags  <= s2_special_flags;
-      s3_fmt_d          <= s2_fmt_d;
-      s3_rm             <= s2_rm;
-      s3_prod_sign      <= s2_prod_sign;
-      s3_addend_sign    <= s2_addend_sign;
-      s3_prod_exp       <= s2_prod_exp;
-      s3_c_exp          <= s2_c_exp;
+      s3_valid          <= flush_i ? 1'b0 : s2b_valid;
+      s3_special        <= s2b_special;
+      s3_special_result <= s2b_special_result;
+      s3_special_flags  <= s2b_special_flags;
+      s3_fmt_d          <= s2b_fmt_d;
+      s3_rm             <= s2b_rm;
+      s3_prod_sign      <= s2b_prod_sign;
+      s3_addend_sign    <= s2b_addend_sign;
+      s3_prod_exp       <= s2b_prod_exp;
+      s3_c_exp          <= s2b_c_exp;
       s3_product        <= s2_product_comb;
-      s3_c_sig          <= s2_c_sig;
-      s3_prod_zero      <= s2_prod_zero;
-      s3_c_zero         <= s2_c_zero;
-      s3_tag            <= s2_tag;
+      s3_c_sig          <= s2b_c_sig;
+      s3_prod_zero      <= s2b_prod_zero;
+      s3_c_zero         <= s2b_c_zero;
+      s3_tag            <= s2b_tag;
     end
   end
 
@@ -766,7 +832,7 @@ module kronos_fpu_fma
       exp_pre_tiny = exp;
       tiny = 1'b0;
       if (exp < emin) begin
-        shift_right_amt = shift_right_amt + 32'(emin - exp);
+        shift_right_amt = shift_right_amt + (32'($signed(emin)) - 32'($signed(exp)));
         exp  = 0;
         tiny = 1'b1;
       end

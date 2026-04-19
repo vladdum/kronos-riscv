@@ -11,7 +11,7 @@
 module tb_lsu_fp;
   import kronos_pkg::*;
 
-  logic             clk = 0, rst_n = 0;
+  logic             clk, rst_n;
   logic             req, we;
   logic [31:0]      addr;
   logic [63:0]      wdata;
@@ -108,6 +108,7 @@ module tb_lsu_fp;
   int errors = 0;
 
   initial begin
+    clk = 0; rst_n = 0;
     is_lr = 0; is_sc = 0; is_amo = 0; amo_funct5 = 0; amo_src = 0;
     fp_dest_req = 0; fp_store_data = '0;
     req = 0; we = 0;
@@ -229,7 +230,7 @@ module tb_lsu_fp;
     end else
       $display("[FSW/FLW nanbox] OK: fp_rdata=%h", fp_rdata);
 
-    if (errors) $fatal(1, "tb_lsu_fp: %0d error(s)", errors);
+    if (errors != 0) $fatal(1, "tb_lsu_fp: %0d error(s)", errors);
     $display("tb_lsu_fp PASS");
     $finish;
   end

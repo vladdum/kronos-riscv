@@ -40,9 +40,11 @@ module tb_regfile_fp;
     // (FP regfile has no internal bypass — the dispatch scoreboard + EX bypass
     // net handles this.)
     @(negedge clk) we = 1; wa = 7; wd = 64'h0000_0000_0000_0001; ra1 = 7;
-    @(posedge clk) #1;
+    // Check before posedge: write hasn't committed yet, old value must be visible.
+    #1;
     if (rd1 === 64'h0000_0000_0000_0001) $fatal(1,
       "FP regfile unexpectedly internally forwarded");
+    @(posedge clk); #1;
 
     // Next cycle the new value is visible
     @(negedge clk) we = 0;

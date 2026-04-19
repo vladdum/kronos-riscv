@@ -34,7 +34,7 @@ module tb_fpu_fmul;
                         input logic [63:0] ain, bin);
     @(negedge clk); in_valid=1; op=o; fmt_d=fmtd; rm=r; a=ain; b=bin;
     @(negedge clk); in_valid=0;
-    repeat(4) @(posedge clk); #1;
+    repeat(6) @(posedge clk); #1;
   endtask
 
   int errors = 0, total = 0;
@@ -60,7 +60,7 @@ module tb_fpu_fmul;
         sf_f = sf_exceptions();
         expected = {32'hFFFF_FFFF, sf_r};
         if (!two_way_check("f32_mul", v.a, v.b, 0, v.rm, result, expected,
-                           fflags, sf_f[4:0]))
+                           8'(fflags), 8'(sf_f[4:0])))
           errors++;
         total++;
       end
@@ -81,7 +81,7 @@ module tb_fpu_fmul;
         sf_r = sf_f64_mul(v.a, v.b, v.rm);
         sf_f = sf_exceptions();
         if (!two_way_check("f64_mul", v.a, v.b, 0, v.rm, result, sf_r,
-                           fflags, sf_f[4:0]))
+                           8'(fflags), 8'(sf_f[4:0])))
           errors++;
         total++;
       end
@@ -128,7 +128,7 @@ module tb_fpu_fmul;
       end
     end
 
-    if (errors) $fatal(1, "tb_fpu_fmul: %0d/%0d mismatches", errors, total);
+    if (errors != 0) $fatal(1, "tb_fpu_fmul: %0d/%0d mismatches", errors, total);
     $display("tb_fpu_fmul PASS (%0d vectors)", total);
     $finish;
   end

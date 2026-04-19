@@ -495,11 +495,16 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
              sim-lsu-s1 sim-forward sim-hazard \
              sim-muldiv \
              sim-decompress sim-align sim-lsu-s3 sim-bpred \
-             sim-alu-s4 sim-decode-s4 sim-muldiv-s4 sim-lsu-s4
+             sim-alu-s4 sim-decode-s4 sim-muldiv-s4 sim-lsu-s4 \
+             sim-pkg-fp sim-hf-smoke sim-sf-smoke \
+             sim-fpu-scoreboard sim-regfile-fp sim-csr-fp sim-decode-fp sim-lsu-fp \
+             sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
+             sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc \
+             sim-fpu-iter sim-fpu-top sim-fpu-top-iter
 
 SIM_REPORT_DIR := $(OBJ_DIR)/sim-results
 
-sim-all:
+sim-all: $(SF_LIB)
 	@rm -rf $(SIM_REPORT_DIR) && mkdir -p $(SIM_REPORT_DIR)
 	@pids=""; \
 	for t in $(SIM_UNITS); do \
@@ -889,7 +894,6 @@ TB_LSU_FP_FILES := $(AXI_PKG_SV) \
                    $(TB_DIR)/stage5/tb_lsu_fp.sv
 sim-lsu-fp:
 	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
-	  --Wno-PROCASSINIT \
 	  --top-module tb_lsu_fp $(TB_LSU_FP_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/lsu_fp
 	$(OBJ_DIR)/lsu_fp/Vtb_lsu_fp
