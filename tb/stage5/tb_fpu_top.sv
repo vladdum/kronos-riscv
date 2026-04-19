@@ -7,7 +7,7 @@
 // Tests for kronos_fpu_top dispatch wrapper:
 //   1. FCVT then FMISC to same FP dest → FMISC is stalled (busy_o = 1) until
 //      FCVT WB slot frees.
-//   2. FADD completes at cycle 4, result visible on shared bus, tag passes through.
+//   2. FADD completes at cycle 6, result visible on shared bus, tag passes through.
 //   3. FMA completes at cycle 5, non-overlapping with FADD.
 //   4. Flush during FADD in-flight → out_valid never fires.
 
@@ -125,7 +125,7 @@ module tb_fpu_top;
     repeat (8) @(posedge clk);
 
     // -----------------------------------------------------------------
-    // Test 2: FADD completes at cycle 4, tag passes through.
+    // Test 2: FADD completes at cycle 6, tag passes through.
     //   a=1.0f, b=1.0f → result=2.0f (0x40000000)
     // -----------------------------------------------------------------
     begin : blk_fadd

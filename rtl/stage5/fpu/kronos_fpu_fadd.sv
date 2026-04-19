@@ -2,14 +2,15 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_fpu_fadd — 5-cycle pipelined FADD/FSUB unit (S and D precision).
+// kronos_fpu_fadd — 6-cycle pipelined FADD/FSUB unit (S and D precision).
 //
 // Pipeline layout:
-//   S1  decompose/unbox operands, classify specials, apply FSUB sign flip
-//   S2  exponent difference, align smaller operand, capture G/R/S
-//   S3  add / subtract significands, normalize (leading-zero count)
-//   S4  subnormal flush, rounding decision, increment
-//   S5  pack IEEE 754, generate flags, NaN-box single result
+//   S1   decompose/unbox operands, classify specials, apply FSUB sign flip
+//   S2   exponent difference, align smaller operand, capture G/R/S
+//   S3   add / subtract significands, normalize (leading-zero count)
+//   S3b  subnormal barrel shift, G/R/S extraction (timing split from S4)
+//   S4   rounding mode decision, round-up increment, overflow detection
+//   S5   pack IEEE 754, generate flags, NaN-box single result
 //
 // Internal representation uses a 56-bit significand (MSB is hidden 1 + mantissa
 // + 2 alignment bits) — enough to hold both S (24-bit) and D (53-bit) values
@@ -141,6 +142,25 @@ module kronos_fpu_fadd
     logic                result_zero;
   } s3_t;
 
+  // S3b: after subnormal barrel shift and G/R/S extraction, before rounding.
+  typedef struct packed {
+    logic                     valid;
+    logic                     fmt_d;
+    logic [2:0]               rm;
+    fpu_tag_t                 tag;
+    logic                     is_special;
+    logic [63:0]              special_res;
+    logic [4:0]               special_flg;
+    logic                     res_sign;
+    logic                     result_zero;
+    logic signed [EXP_W-1:0]  cur_exp;   // exponent after subnormal shift
+    logic [SIG_W-1:0]         cur_sig;   // significand after subnormal shift
+    logic                     g_bit;     // guard bit
+    logic                     r_bit;     // round bit
+    logic                     st_bit;    // sticky bit
+    logic                     lsb;       // LSB of kept significand (for RNE tie)
+  } s3b_t;
+
   typedef struct packed {
     logic                     valid;
     logic                     fmt_d;
@@ -161,10 +181,11 @@ module kronos_fpu_fadd
   // ---------------------------------------------------------------------------
   // Pipeline registers
   // ---------------------------------------------------------------------------
-  s1_t s1_q;
-  s2_t s2_q;
-  s3_t s3_q;
-  s4_t s4_q;
+  s1_t  s1_q;
+  s2_t  s2_q;
+  s3_t  s3_q;
+  s3b_t s3b_q;
+  s4_t  s4_q;
 
   // ===========================================================================
   // Stage 1: decompose / classify
@@ -545,65 +566,49 @@ module kronos_fpu_fadd
   end
 
   // ===========================================================================
-  // Stage 4: subnormal flush + rounding
+  // Stage 3b: subnormal barrel shift + G/R/S bit collection
   // ===========================================================================
-  s4_t s4_d;
+  s3b_t s3b_d;
 
   always_comb begin
     int unsigned              mant_w;
     logic signed [EXP_W-1:0] emin;
-    logic signed [EXP_W-1:0] emax;
     logic signed [EXP_W-1:0] cur_exp;
     logic [SIG_W-1:0]        cur_sig;
     logic                    g, r, st;
     int unsigned             i;
-    logic                    lsb;
-    logic                    round_up;
-    logic [SIG_W-1:0]        rounded_sig;
-    logic                    carry_up;
     logic [2:0]              grs_vec;
-    logic [SIG_W:0]          incremented;
-    logic [SIG_W-1:0]        mask_one;
     int unsigned             sh;
 
-    s4_d             = '0;
-    mant_w           = 0;
-    emin             = '0;
-    emax             = '0;
-    cur_exp          = '0;
-    cur_sig          = '0;
-    g                = 1'b0;
-    r                = 1'b0;
-    st               = 1'b0;
-    i                = 0;
-    lsb              = 1'b0;
-    round_up         = 1'b0;
-    rounded_sig      = '0;
-    carry_up         = 1'b0;
-    grs_vec          = '0;
-    incremented      = '0;
-    mask_one         = '0;
-    sh               = 0;
+    s3b_d             = '0;
+    mant_w            = 0;
+    emin              = '0;
+    cur_exp           = '0;
+    cur_sig           = '0;
+    g                 = 1'b0;
+    r                 = 1'b0;
+    st                = 1'b0;
+    i                 = 0;
+    grs_vec           = '0;
+    sh                = 0;
 
-    s4_d.valid       = s3_q.valid;
-    s4_d.fmt_d       = s3_q.fmt_d;
-    s4_d.rm          = s3_q.rm;
-    s4_d.tag         = s3_q.tag;
-    s4_d.is_special  = s3_q.is_special;
-    s4_d.special_res = s3_q.special_res;
-    s4_d.special_flg = s3_q.special_flg;
-    s4_d.res_sign    = s3_q.res_sign;
-    s4_d.result_zero = s3_q.result_zero;
+    s3b_d.valid       = s3_q.valid;
+    s3b_d.fmt_d       = s3_q.fmt_d;
+    s3b_d.rm          = s3_q.rm;
+    s3b_d.tag         = s3_q.tag;
+    s3b_d.is_special  = s3_q.is_special;
+    s3b_d.special_res = s3_q.special_res;
+    s3b_d.special_flg = s3_q.special_flg;
+    s3b_d.res_sign    = s3_q.res_sign;
+    s3b_d.result_zero = s3_q.result_zero;
 
-    if (!s3_q.is_special && !s3_q.result_zero) begin : round_blk
+    if (!s3_q.is_special && !s3_q.result_zero) begin
       if (s3_q.fmt_d) begin
         mant_w = 52;
         emin   = -13'sd1022;
-        emax   = 13'sd1023;
       end else begin
         mant_w = 23;
         emin   = -13'sd126;
-        emax   = 13'sd127;
       end
 
       cur_exp = s3_q.res_exp;
@@ -627,6 +632,8 @@ module kronos_fpu_fadd
         cur_exp = emin;
       end
 
+      // For single precision, re-extract G/R/S from the left-justified 24-bit
+      // significand stored in the upper bits of the SIG_W-wide cur_sig.
       if (!s3_q.fmt_d) begin
         g  = cur_sig[SIG_W - 1 - mant_w - 1];
         r  = cur_sig[SIG_W - 1 - mant_w - 2];
@@ -634,15 +641,72 @@ module kronos_fpu_fadd
           if (cur_sig[i]) st = 1'b1;
         end
       end
-      lsb = cur_sig[SIG_W - 1 - mant_w];
+
+      s3b_d.cur_exp = cur_exp;
+      s3b_d.cur_sig = cur_sig;
+      s3b_d.g_bit   = g;
+      s3b_d.r_bit   = r;
+      s3b_d.st_bit  = st;
+      s3b_d.lsb     = cur_sig[SIG_W - 1 - mant_w];
+    end
+  end
+
+  // ===========================================================================
+  // Stage 4: rounding decision + increment
+  // ===========================================================================
+  s4_t s4_d;
+
+  always_comb begin
+    int unsigned              mant_w;
+    logic signed [EXP_W-1:0] emax;
+    logic signed [EXP_W-1:0] cur_exp;
+    logic [SIG_W-1:0]        cur_sig;
+    logic                    round_up;
+    logic [SIG_W-1:0]        rounded_sig;
+    logic                    carry_up;
+    logic [SIG_W:0]          incremented;
+    logic [SIG_W-1:0]        mask_one;
+
+    s4_d             = '0;
+    mant_w           = 0;
+    emax             = '0;
+    cur_exp          = '0;
+    cur_sig          = '0;
+    round_up         = 1'b0;
+    rounded_sig      = '0;
+    carry_up         = 1'b0;
+    incremented      = '0;
+    mask_one         = '0;
+
+    s4_d.valid       = s3b_q.valid;
+    s4_d.fmt_d       = s3b_q.fmt_d;
+    s4_d.rm          = s3b_q.rm;
+    s4_d.tag         = s3b_q.tag;
+    s4_d.is_special  = s3b_q.is_special;
+    s4_d.special_res = s3b_q.special_res;
+    s4_d.special_flg = s3b_q.special_flg;
+    s4_d.res_sign    = s3b_q.res_sign;
+    s4_d.result_zero = s3b_q.result_zero;
+
+    if (!s3b_q.is_special && !s3b_q.result_zero) begin : round_blk
+      if (s3b_q.fmt_d) begin
+        mant_w = 52;
+        emax   = 13'sd1023;
+      end else begin
+        mant_w = 23;
+        emax   = 13'sd127;
+      end
+
+      cur_exp = s3b_q.cur_exp;
+      cur_sig = s3b_q.cur_sig;
 
       round_up = 1'b0;
-      unique case (s3_q.rm)
-        FP_RM_RNE: round_up = g && (r || st || lsb);
+      unique case (s3b_q.rm)
+        FP_RM_RNE: round_up = s3b_q.g_bit && (s3b_q.r_bit || s3b_q.st_bit || s3b_q.lsb);
         FP_RM_RTZ: round_up = 1'b0;
-        FP_RM_RDN: round_up = s3_q.res_sign && (g | r | st);
-        FP_RM_RUP: round_up = (!s3_q.res_sign) && (g | r | st);
-        FP_RM_RMM: round_up = g;
+        FP_RM_RDN: round_up = s3b_q.res_sign && (s3b_q.g_bit | s3b_q.r_bit | s3b_q.st_bit);
+        FP_RM_RUP: round_up = (!s3b_q.res_sign) && (s3b_q.g_bit | s3b_q.r_bit | s3b_q.st_bit);
+        FP_RM_RMM: round_up = s3b_q.g_bit;
         default:   round_up = 1'b0;
       endcase
 
@@ -662,7 +726,7 @@ module kronos_fpu_fadd
 
       s4_d.cur_exp          = cur_exp;
       s4_d.rounded_sig      = rounded_sig;
-      s4_d.inexact          = g | r | st;
+      s4_d.inexact          = s3b_q.g_bit | s3b_q.r_bit | s3b_q.st_bit;
       s4_d.overflow         = (cur_exp > emax);
       s4_d.is_subnormal_out = (rounded_sig[SIG_W-1] == 1'b0);
     end
@@ -750,20 +814,23 @@ module kronos_fpu_fadd
   // ===========================================================================
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      s1_q <= '0;
-      s2_q <= '0;
-      s3_q <= '0;
-      s4_q <= '0;
+      s1_q  <= '0;
+      s2_q  <= '0;
+      s3_q  <= '0;
+      s3b_q <= '0;
+      s4_q  <= '0;
     end else begin
-      s1_q <= s1_d;
-      s2_q <= s2_d;
-      s3_q <= s3_d;
-      s4_q <= s4_d;
+      s1_q  <= s1_d;
+      s2_q  <= s2_d;
+      s3_q  <= s3_d;
+      s3b_q <= s3b_d;
+      s4_q  <= s4_d;
       if (flush_i) begin
-        s1_q.valid <= 1'b0;
-        s2_q.valid <= 1'b0;
-        s3_q.valid <= 1'b0;
-        s4_q.valid <= 1'b0;
+        s1_q.valid  <= 1'b0;
+        s2_q.valid  <= 1'b0;
+        s3_q.valid  <= 1'b0;
+        s3b_q.valid <= 1'b0;
+        s4_q.valid  <= 1'b0;
       end
     end
   end
