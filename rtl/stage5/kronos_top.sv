@@ -110,7 +110,13 @@ module kronos_top
   logic        bpred_update_en;
   logic        actual_taken;
   logic        bpred_mispredict;
+  logic        bpred_mispredict_target; // MEM-stage: predicted target ≠ actual target
+  logic        mem_redirect;
   logic        is_branch_or_jump;
+
+  // STAGE5a: FRM/FCSR RAW hazard detection signals for u_hazard
+  logic        id_ex_is_frm_write;
+  logic        if_id_fp_dyn_rm;
 
   // -------------------------------------------------------------------------
   // MEM-stage wires (64-bit lsu data)
@@ -252,6 +258,22 @@ module kronos_top
   assign fpu_stall         = (fp_inflight_q | fpu_dispatching) & ~fp_result_avail;
   assign combined_stall    = mem_stall | muldiv_stall | instr_fetch_stall | fpu_stall;
 
+  // FRM/FCSR RAW hazard: a CSR write to FRM/FCSR in EX will update fcsr_q at
+  // the posedge, but decode reads frm combinatorially from fcsr_q. Stall 1
+  // cycle so the FP instruction in ID re-decodes after the new FRM is visible.
+  assign id_ex_is_frm_write = id_ex_q.valid & id_ex_q.dec.is_csr &
+                               (id_ex_q.dec.csr_addr == 12'h002 |  // FRM
+                                id_ex_q.dec.csr_addr == 12'h003);  // FCSR
+  // Detect FP instruction in ID that uses dynamic rounding mode (rm=3'b111).
+  // Covers OP-FP (0x53) and FMA variants (0x43/0x47/0x4B/0x4F).
+  assign if_id_fp_dyn_rm    = if_id_q.valid &
+                               (if_id_q.instr[14:12] == 3'b111) &
+                               (if_id_q.instr[6:0] == 7'b1010011 |  // OP-FP
+                                if_id_q.instr[6:0] == 7'b1000011 |  // FMADD
+                                if_id_q.instr[6:0] == 7'b1000111 |  // FMSUB
+                                if_id_q.instr[6:0] == 7'b1001011 |  // FNMSUB
+                                if_id_q.instr[6:0] == 7'b1001111);  // FNMADD
+
   kronos_hazard u_hazard (
     .id_ex_is_load_i      (id_ex_q.dec.is_load),
     .id_ex_rd_i           (id_ex_q.dec.rd),
@@ -270,7 +292,11 @@ module kronos_top
     .ex_mem_rd_i          (ex_mem_q.dec.rd),
     .ex_mem_rd_wen_i      (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
     .ex_mem_valid_i       (ex_mem_q.valid),
+    // FRM/FCSR RAW hazard
+    .id_ex_is_frm_write_i (id_ex_is_frm_write),
+    .if_id_fp_dyn_rm_i    (if_id_fp_dyn_rm),
     .ex_redirect_i        (ex_redirect),
+    .mem_redirect_i       (mem_redirect),
     .mem_stall_i          (combined_stall),
     .pc_en_o          (pc_en),
     .if_id_en_o       (if_id_en),
@@ -472,10 +498,11 @@ module kronos_top
     .rdata_i             (instr_axi_rsp_i.r.data),
     .rvalid_i            ((fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid),
     .stall_i             (align_instr_valid & ~if_id_en),
-    .flush_i             (if_id_flush | (pred_taken & pc_en & ~ex_redirect)),
-    .pc_offset_i         (ex_redirect ? ex_pc_next[1]
-                        : pred_taken  ? pred_target[1]
-                        :               pc_q[1]),
+    .flush_i             (if_id_flush | (pred_taken & pc_en & ~ex_redirect & ~mem_redirect)),
+    .pc_offset_i         (ex_redirect  ? ex_pc_next[1]
+                        : mem_redirect ? ex_mem_q.pc_next[1]
+                        : pred_taken   ? pred_target[1]
+                        :                pc_q[1]),
     .instr_o             (align_instr),
     .instr_valid_o       (align_instr_valid),
     .is_16b_o            (align_is_16b),
@@ -500,7 +527,11 @@ module kronos_top
   // =========================================================================
   // PC register
   // =========================================================================
-  assign pc_next = ex_redirect   ? ex_pc_next
+  // Priority: mem_redirect before ex_redirect so that when both fire simultaneously
+  // (MEM-stage target mismatch + speculative instr in EX also generates a redirect),
+  // the pipeline returns to the architecturally correct target from the MEM branch.
+  assign pc_next = mem_redirect  ? ex_mem_q.pc_next
+                 : ex_redirect   ? ex_pc_next
                  : pred_taken    ? pred_target
                  : align_is_16b  ? pc_q + 32'd2
                  :                 pc_q + 32'd4;
@@ -755,13 +786,18 @@ module kronos_top
   assign is_branch_or_jump = id_ex_q.dec.is_branch | id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr;
   assign actual_taken      = branch_taken | id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr;
 
+  // Direction-only misprediction: taken/not-taken disagrees with prediction.
+  // Target misprediction (both predicted and actually taken, but wrong target)
+  // is deferred to the MEM stage (bpred_mispredict_target) so that the JALR
+  // target adder and the 32-bit comparator are removed from the ex_redirect
+  // combinational path.
   assign bpred_mispredict = id_ex_q.valid & (
     (id_ex_q.pred_taken & ~actual_taken) |
-    (~id_ex_q.pred_taken & actual_taken) |
-    (id_ex_q.pred_taken & actual_taken & (id_ex_q.pred_target != ex_pc_next))
+    (~id_ex_q.pred_taken & actual_taken)
   );
 
-  assign bpred_update_en = id_ex_q.valid & ex_mem_en & is_branch_or_jump;
+  // Suppress BTB update from the speculative instruction in EX when mem_redirect fires.
+  assign bpred_update_en = id_ex_q.valid & ex_mem_en & is_branch_or_jump & ~mem_redirect;
 
   assign ex_redirect = bpred_mispredict |
     (id_ex_q.valid &
@@ -789,11 +825,25 @@ module kronos_top
       ex_mem_q.rs2_data   <= fwd_rs2_data;
       ex_mem_q.pc_next    <= ex_pc_next;
       ex_mem_q.csr_rdata  <= csr_rdata;
-      ex_mem_q.redirect   <= ex_redirect;
-      ex_mem_q.valid      <= id_ex_q.valid & ~irq_pending;
-      ex_mem_q.is_16b     <= id_ex_q.is_16b;
+      ex_mem_q.redirect    <= ex_redirect;
+      // When mem_redirect fires, the instruction currently in EX (id_ex_q) was
+      // fetched from the wrong BTB target. Invalidate it so it cannot trigger
+      // the LSU, WB, or bpred_mispredict_target on the next cycle.
+      ex_mem_q.valid       <= (id_ex_q.valid & ~irq_pending) & ~mem_redirect;
+      ex_mem_q.is_16b      <= id_ex_q.is_16b;
+      ex_mem_q.pred_taken  <= id_ex_q.pred_taken;
+      ex_mem_q.pred_target <= id_ex_q.pred_target;
     end
   end
+
+  // MEM-stage target misprediction: predictor predicted taken with the right
+  // direction (so EX did not redirect), but the predicted target was wrong.
+  // Both ex_mem_q.pc_next and ex_mem_q.pred_target are registered, so this
+  // comparison sits on a short path. Guard with ~ex_mem_q.redirect: if EX
+  // already redirected (direction mismatch or trap), no second redirect needed.
+  assign bpred_mispredict_target = ex_mem_q.valid & ~ex_mem_q.redirect &
+    ex_mem_q.pred_taken & (ex_mem_q.pred_target != ex_mem_q.pc_next);
+  assign mem_redirect = bpred_mispredict_target;
 
   // =========================================================================
   // MEM stage — mem_done_q / lsu_rdata_latch handle pipeline stall bridging

@@ -3,7 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // FCVT unit: integer<->FP conversions (W/WU/L/LU) and S<->D format conversion.
-// 2-stage pipelined. Latency = 2 cycles.
+// 3-stage pipelined. Latency = 3 cycles.
+//
+// Pipeline split:
+//   Stage 1: NaN-unbox single-precision inputs.
+//   Stage 2: INT->FP negation (8×CARRY8) + CLZ + normalise + pre-round mantissa.
+//            FP->INT shift + guard/sticky/round_up (before the 65-bit adder).
+//            S<->D full conversion (no long carry chains; result registered here).
+//   Stage 3: Rounding adders (INT->FP 54-bit, FP->INT 65-bit), sign, range-check.
+//            This breaks the 15×CARRY8 chain that limited Fmax at 200 MHz.
 
 module kronos_fpu_fcvt
   import kronos_pkg::*;
@@ -46,7 +54,7 @@ module kronos_fpu_fcvt
   fp_op_e      s1_op_q;
   logic        s1_fmt_d_q;
   logic [2:0]  s1_rm_q;
-  logic [63:0] s1_a_q;          // NaN-unboxed / raw source
+  logic [63:0] s1_a_q;
   fpu_tag_t    s1_tag_q;
 
   // ---------------------------------------------------------------------------
@@ -56,22 +64,17 @@ module kronos_fpu_fcvt
   logic        s1_src_is_single;
 
   always_comb begin
-    // Source-single operand? FP->INT or S->D read a single; everything else reads
-    // either a double (FP->INT with fmt_d) or an integer (INT->FP) or a double
-    // source (D->S). We only need to NaN-unbox when the source is a single FP
-    // value (FCVT.*.F with fmt_d=0, and FCVT.D.S).
     s1_src_is_single = 1'b0;
     unique case (op_i)
       FP_FCVT_W_F,
       FP_FCVT_WU_F,
       FP_FCVT_L_F,
-      FP_FCVT_LU_F: s1_src_is_single = ~fmt_d_i; // fmt_d_i == source format
+      FP_FCVT_LU_F: s1_src_is_single = ~fmt_d_i;
       FP_FCVT_D_S:  s1_src_is_single = 1'b1;
       default:      s1_src_is_single = 1'b0;
     endcase
 
     if (s1_src_is_single) begin
-      // NaN-unbox: if upper 32 bits aren't all ones, force canonical qNaN
       if (a_i[63:32] == FP_NANBOX_UPPER)
         s1_a_next = {32'h0, a_i[31:0]};
       else
@@ -102,14 +105,47 @@ module kronos_fpu_fcvt
   end
 
   // ---------------------------------------------------------------------------
-  // Stage-2 combinational logic: compute result from stage-1 registers
+  // Stage-2 registers
   // ---------------------------------------------------------------------------
-  logic [63:0] s2_result;
-  logic [4:0]  s2_fflags;
+  logic     s2_valid_q;
+  fp_op_e   s2_op_q;
+  logic     s2_fmt_d_q;
+  fpu_tag_t s2_tag_q;
 
-  // Source decomposition (for FP->INT and S/D convert)
+  // INT->FP intermediate (carry chain before the rounding adder)
+  logic        s2_ifp_isneg;
+  logic        s2_ifp_imag_zero;
+  logic [7:0]  s2_ifp_s_exp;
+  logic [10:0] s2_ifp_d_exp;
+  logic [23:0] s2_ifp_s_mant_pre;  // 24 bits: implicit 1 + 23 fractional
+  logic [52:0] s2_ifp_d_mant_pre;  // 53 bits: implicit 1 + 52 fractional
+  logic        s2_ifp_s_round_up;
+  logic        s2_ifp_d_round_up;
+  logic        s2_ifp_s_inexact;
+  logic        s2_ifp_d_inexact;
+
+  // FP->INT intermediate (before the 65-bit rounding adder)
+  logic        s2_fpi_overflow;
+  logic        s2_fpi_neg_of;
+  logic        s2_fpi_src_is_nan;
+  logic        s2_fpi_src_sign;
+  logic        s2_fpi_target_is_32b;
+  logic        s2_fpi_target_is_signed;
+  logic [63:0] s2_fpi_target_max;
+  logic [63:0] s2_fpi_target_min;
+  logic [63:0] s2_fpi_int_part;
+  logic        s2_fpi_round_up;
+  logic        s2_fpi_is_inexact;
+
+  // S<->D full result (no long carry chains; computed and registered in stage 2)
+  logic [63:0] s2_ds_result;
+  logic [4:0]  s2_ds_fflags;
+
+  // ---------------------------------------------------------------------------
+  // Stage-2 combinational: source decomposition (FP->INT and S<->D)
+  // ---------------------------------------------------------------------------
   logic        src_sign;
-  logic        src_is_s;           // source is single (low 32 of s1_a_q)
+  logic        src_is_s;
   logic [31:0] src_s;
   logic [63:0] src_d;
   logic [10:0] src_exp_d;
@@ -120,40 +156,14 @@ module kronos_fpu_fcvt
   logic        src_is_inf;
   logic        src_is_zero;
 
-  // FP->INT working signals
-  logic signed [12:0] unbiased_exp;  // signed for range check
-  logic [63:0]  int_part;
-  logic         rnd_g, rnd_s; // guard and sticky
-  logic         rnd_lsb;
-  logic         round_up;
-  logic [64:0]  int_rounded;         // one extra for overflow detect
-  logic         is_inexact_fpi;
-  logic [63:0]  target_max, target_min;
-  logic         target_is_signed;
-  logic         target_is_32b;
-  logic         fpi_overflow;
-  logic         fpi_neg_of;           // negative overflow (value < min)
-
-  // INT->FP working signals
-  logic [63:0]  ifp_result;
-  logic [4:0]   ifp_fflags;
-
-  // Format conversion (D->S) working signals
-  logic [63:0]  ds_result;
-  logic [4:0]   ds_fflags;
-
-  // ---------------------------------------------------------------------------
-  // Decompose source
-  // ---------------------------------------------------------------------------
   always_comb begin
-    src_s     = s1_a_q[31:0];
-    src_d     = s1_a_q;
-    src_exp_s = src_s[30:23];
+    src_s      = s1_a_q[31:0];
+    src_d      = s1_a_q;
+    src_exp_s  = src_s[30:23];
     src_mant_s = src_s[22:0];
     src_exp_d  = src_d[62:52];
     src_mant_d = src_d[51:0];
 
-    // We pick source format for FP->INT based on s1_fmt_d_q (source fmt for these)
     src_is_s = 1'b0;
     unique case (s1_op_q)
       FP_FCVT_W_F,
@@ -161,7 +171,7 @@ module kronos_fpu_fcvt
       FP_FCVT_L_F,
       FP_FCVT_LU_F: src_is_s = ~s1_fmt_d_q;
       FP_FCVT_D_S:  src_is_s = 1'b1;
-      FP_FCVT_S_D:  src_is_s = 1'b0; // double source
+      FP_FCVT_S_D:  src_is_s = 1'b0;
       default:      src_is_s = 1'b0;
     endcase
 
@@ -179,106 +189,88 @@ module kronos_fpu_fcvt
   end
 
   // ---------------------------------------------------------------------------
-  // FP -> INT conversion
+  // Stage-2 combinational: FP -> INT (compute int_part and round_up;
+  //                                    int_rounded adder deferred to stage 3)
   // ---------------------------------------------------------------------------
-  // unbiased exponent, and a 64-bit-left-aligned significand with 1.xxx
-  // For exp E (unbiased), the integer value is sig_64 >> (63 - E); fractional
-  // bits dropped to the right form guard+sticky.
+  logic signed [12:0] unbiased_exp;
+  logic [63:0]  int_part;
+  logic         rnd_g, rnd_s, rnd_lsb;
+  logic         fpi_round_up;
+  logic         is_inexact_fpi;
+  logic [63:0]  target_max, target_min;
+  logic         target_is_signed;
+  logic         target_is_32b;
+  logic         fpi_overflow;
+  logic         fpi_neg_of;
+
   always_comb begin
-    logic [63:0] sig64; // normalised with implicit 1 at bit 63
+    logic [63:0] sig64;
     logic [63:0] frac_mask;
     logic [6:0]  shift_r;
-    logic [7:0]  frac_bits;   // number of bits shifted right (fraction width)
-    logic [63:0] mag;
-    logic        over_after_round;
-    logic [63:0] signed_val;
+    logic [7:0]  frac_bits;
 
-    // Defaults for block-local variables
-    sig64            = '0;
-    frac_mask        = '0;
-    shift_r          = '0;
-    frac_bits        = '0;
-    mag              = '0;
-    over_after_round = 1'b0;
-    signed_val       = '0;
+    sig64     = '0;
+    frac_mask = '0;
+    shift_r   = '0;
+    frac_bits = '0;
 
-    // Decompose: build a 64-bit significand with implicit 1 at bit 63
     if (src_is_s) begin
       unbiased_exp = $signed({5'd0, src_exp_s}) - 13'sd127;
-      // 24-bit significand (1+23), place at bits [63:40]
       sig64 = {1'b1, src_mant_s, 40'd0};
     end else begin
       unbiased_exp = $signed({2'd0, src_exp_d}) - 13'sd1023;
-      // 53-bit significand (1+52), place at bits [63:11]
       sig64 = {1'b1, src_mant_d, 11'd0};
     end
 
-    // Target setup
     target_is_signed = (s1_op_q == FP_FCVT_W_F) || (s1_op_q == FP_FCVT_L_F);
     target_is_32b    = (s1_op_q == FP_FCVT_W_F) || (s1_op_q == FP_FCVT_WU_F);
 
-    // Saturation values per RISC-V spec
     if (target_is_32b && target_is_signed) begin
-      target_max    = {{32{1'b0}}, 32'h7FFF_FFFF};
-      target_min    = {{32{1'b1}}, 32'h8000_0000}; // sign-extended
+      target_max = {{32{1'b0}}, 32'h7FFF_FFFF};
+      target_min = {{32{1'b1}}, 32'h8000_0000};
     end else if (target_is_32b && !target_is_signed) begin
-      // RISC-V: FCVT.WU sign-extends 32-bit result; max u32 = 0xFFFF_FFFF sign-ext = all 1s
-      target_max    = {32'hFFFF_FFFF, 32'hFFFF_FFFF};
-      target_min    = 64'd0;
+      target_max = {32'hFFFF_FFFF, 32'hFFFF_FFFF};
+      target_min = 64'd0;
     end else if (!target_is_32b && target_is_signed) begin
-      target_max    = 64'h7FFF_FFFF_FFFF_FFFF;
-      target_min    = 64'h8000_0000_0000_0000;
+      target_max = 64'h7FFF_FFFF_FFFF_FFFF;
+      target_min = 64'h8000_0000_0000_0000;
     end else begin
-      target_max    = 64'hFFFF_FFFF_FFFF_FFFF;
-      target_min    = 64'd0;
+      target_max = 64'hFFFF_FFFF_FFFF_FFFF;
+      target_min = 64'd0;
     end
 
-    // Shift: result integer = sig64 >> (63 - exp); fraction bits = (63 - exp)
-    // If exp >= width, overflow. If exp < 0 (value < 1), integer=0, frac=all of sig64.
-    int_part    = '0;
-    rnd_g       = 1'b0;
-    rnd_s       = 1'b0;
-    rnd_lsb     = 1'b0;
+    int_part     = '0;
+    rnd_g        = 1'b0;
+    rnd_s        = 1'b0;
+    rnd_lsb      = 1'b0;
     fpi_overflow = 1'b0;
     fpi_neg_of   = 1'b0;
 
     if (src_is_nan) begin
       fpi_overflow = 1'b1;
-      fpi_neg_of   = 1'b0; // NaN -> max for signed, max for unsigned
+      fpi_neg_of   = 1'b0;
     end else if (src_is_inf) begin
       fpi_overflow = 1'b1;
       fpi_neg_of   = src_sign;
-    end else if (src_is_zero) begin
-      int_part = '0;
-    end else begin
-      // unbiased_exp in range [-1023,1023]
+    end else if (!src_is_zero) begin
       if (unbiased_exp < 0) begin
-        // |v| < 1; integer part = 0; fraction is the full significand
         int_part = '0;
-        // Explicit computation for guard/sticky bits:
         if (unbiased_exp == -13'sd1) begin
-          // value in [0.5, 1): G=1 (the implicit 1), rest sticky
           rnd_g = 1'b1;
           rnd_s = |sig64[62:0];
         end else begin
-          // value < 0.5: G=0, sticky = 1 if any non-zero
           rnd_g = 1'b0;
-          rnd_s = 1'b1; // any nonzero normal below 0.5 -> inexact sticky
+          rnd_s = 1'b1;
         end
         rnd_lsb = 1'b0;
       end else begin
-        // exp >= 0. Build 128-bit shifted: sig64 << exp, then top 64 = integer, bottom = fraction
-        // integer = sig64 >> (63 - exp)
         if (unbiased_exp >= 13'sd64) begin
           fpi_overflow = 1'b1;
           fpi_neg_of   = src_sign;
         end else begin
-          // int_part has (exp+1) bits of integer. Need to detect unsigned range after.
           shift_r   = 7'd63 - unbiased_exp[6:0];
           frac_bits = {1'b0, shift_r};
           int_part  = sig64 >> shift_r;
-          // Fraction bits are the low shift_r bits of sig64
-          // Extract G (bit shift_r-1) and sticky (bits below)
           if (shift_r == 0) begin
             rnd_g = 1'b0; rnd_s = 1'b0;
           end else begin
@@ -295,216 +287,112 @@ module kronos_fpu_fcvt
       end
     end
 
-    // Rounding decision (RNE/RTZ/RDN/RUP/RMM)
-    round_up = 1'b0;
+    fpi_round_up = 1'b0;
     if (!fpi_overflow) begin
       unique case (s1_rm_q)
-        3'b000: round_up = rnd_g && (rnd_s || rnd_lsb);          // RNE
-        3'b001: round_up = 1'b0;                                   // RTZ
-        3'b010: round_up = src_sign && (rnd_g || rnd_s);           // RDN: toward -inf
-        3'b011: round_up = !src_sign && (rnd_g || rnd_s);          // RUP: toward +inf
-        3'b100: round_up = rnd_g;                                  // RMM: ties to max magnitude
-        default: round_up = rnd_g && (rnd_s || rnd_lsb);
+        3'b000: fpi_round_up = rnd_g && (rnd_s || rnd_lsb);
+        3'b001: fpi_round_up = 1'b0;
+        3'b010: fpi_round_up = src_sign && (rnd_g || rnd_s);
+        3'b011: fpi_round_up = !src_sign && (rnd_g || rnd_s);
+        3'b100: fpi_round_up = rnd_g;
+        default: fpi_round_up = rnd_g && (rnd_s || rnd_lsb);
       endcase
     end
 
-    // Rounded magnitude (unsigned), plus 1-bit carry slot
-    int_rounded = {1'b0, int_part} + (round_up ? 65'd1 : 65'd0);
     is_inexact_fpi = rnd_g | rnd_s;
-
-    // Apply sign and range-check
-    s2_result = '0;
-    s2_fflags = '0;
-
-    if (src_is_nan) begin
-      // NaN → saturate to max value (signed or unsigned, per RISC-V F spec §11.2)
-      s2_result = target_max;
-      s2_fflags[FP_FFLAG_NV] = 1'b1;
-    end else if (fpi_overflow) begin
-      if (fpi_neg_of) s2_result = target_is_signed ? target_min : 64'd0;
-      else            s2_result = target_max;
-      s2_fflags[FP_FFLAG_NV] = 1'b1;
-    end else begin
-      // Take |value| = int_rounded (up to 65 bits), then apply sign.
-      mag = int_rounded[63:0];
-      over_after_round = 1'b0;
-
-      if (target_is_32b && target_is_signed) begin
-        // Range: [-2^31, 2^31-1]. mag must fit in 31 bits (positive) or 31 bits+1 for min.
-        if (src_sign) begin
-          // Negative: allow mag up to 2^31
-          if (int_rounded > 65'h0_0000_0000_8000_0000) over_after_round = 1'b1;
-        end else begin
-          if (int_rounded > 65'h0_0000_0000_7FFF_FFFF) over_after_round = 1'b1;
-        end
-      end else if (target_is_32b && !target_is_signed) begin
-        if (src_sign && (mag != 64'd0 || round_up)) begin
-          // Negative nonzero -> saturate to 0, NV
-          over_after_round = 1'b1;
-        end else if (int_rounded > 65'h0_0000_0000_FFFF_FFFF) begin
-          over_after_round = 1'b1;
-        end
-      end else if (!target_is_32b && target_is_signed) begin
-        if (src_sign) begin
-          if (int_rounded > 65'h0_8000_0000_0000_0000) over_after_round = 1'b1;
-        end else begin
-          if (int_rounded > 65'h0_7FFF_FFFF_FFFF_FFFF) over_after_round = 1'b1;
-        end
-      end else begin
-        if (src_sign && (mag != 64'd0 || round_up)) begin
-          over_after_round = 1'b1;
-        end else if (int_rounded[64]) begin
-          over_after_round = 1'b1;
-        end
-      end
-
-      if (over_after_round) begin
-        if (src_sign) s2_result = target_is_signed ? target_min : 64'd0;
-        else          s2_result = target_max;
-        s2_fflags[FP_FFLAG_NV] = 1'b1;
-      end else begin
-        // Apply sign
-        signed_val = src_sign ? (~mag + 64'd1) : mag;
-
-        // Sign-extend 32-bit results to 64 per RV spec
-        if (target_is_32b) begin
-          s2_result = {{32{signed_val[31]}}, signed_val[31:0]};
-        end else begin
-          s2_result = signed_val;
-        end
-
-        if (is_inexact_fpi) s2_fflags[FP_FFLAG_NX] = 1'b1;
-      end
-    end
   end
 
   // ---------------------------------------------------------------------------
-  // INT -> FP conversion (overrides s2_result/fflags when op is FP_FCVT_F_*)
+  // Stage-2 combinational: INT -> FP (two's complement + CLZ + normalise +
+  //                                    pre-round mantissa; rounding deferred)
   // ---------------------------------------------------------------------------
+  logic        ifp_isneg;
+  logic        ifp_imag_zero;
+  logic [7:0]  ifp_s_exp;
+  logic [10:0] ifp_d_exp;
+  logic [23:0] ifp_s_mant_pre;
+  logic [52:0] ifp_d_mant_pre;
+  logic        ifp_s_round_up;
+  logic        ifp_d_round_up;
+  logic        ifp_s_inexact;
+  logic        ifp_d_inexact;
 
   always_comb begin
     logic [63:0] imag;
     logic        isigned;
     logic        is32;
-    logic        isneg;
     logic [63:0] norm;
     integer      lz;
-    logic [7:0]  s_exp;
-    logic [10:0] d_exp;
-    logic [23:0] s_mant_pre;   // with implicit 1
-    logic [52:0] d_mant_pre;
-    logic        s_guard, s_round_sticky, s_lsb, s_round_up;
-    logic        d_guard, d_round_sticky, d_lsb, d_round_up;
-    logic [24:0] s_rounded;
-    logic [53:0] d_rounded;
-    logic        s_inexact, d_inexact;
-    logic [31:0] s_bits;
-    logic [63:0] d_bits;
+    logic        s_guard, s_round_sticky, s_lsb;
+    logic        d_guard, d_round_sticky, d_lsb;
 
     isigned = (s1_op_q == FP_FCVT_F_W) || (s1_op_q == FP_FCVT_F_L);
     is32    = (s1_op_q == FP_FCVT_F_W) || (s1_op_q == FP_FCVT_F_WU);
 
-    // Extract integer value
     if (is32) begin
-      // 32-bit: low 32 of s1_a_q
       if (isigned) begin
-        isneg = s1_a_q[31];
-        imag  = isneg ? {32'd0, (~s1_a_q[31:0] + 32'd1)} : {32'd0, s1_a_q[31:0]};
+        ifp_isneg = s1_a_q[31];
+        imag = ifp_isneg ? {32'd0, (~s1_a_q[31:0] + 32'd1)} : {32'd0, s1_a_q[31:0]};
       end else begin
-        isneg = 1'b0;
-        imag  = {32'd0, s1_a_q[31:0]};
+        ifp_isneg = 1'b0;
+        imag = {32'd0, s1_a_q[31:0]};
       end
     end else begin
       if (isigned) begin
-        isneg = s1_a_q[63];
-        imag  = isneg ? (~s1_a_q + 64'd1) : s1_a_q;
+        ifp_isneg = s1_a_q[63];
+        imag = ifp_isneg ? (~s1_a_q + 64'd1) : s1_a_q;  // 8×CARRY8 critical path
       end else begin
-        isneg = 1'b0;
-        imag  = s1_a_q;
+        ifp_isneg = 1'b0;
+        imag = s1_a_q;
       end
     end
 
-    // Normalise
+    ifp_imag_zero = (imag == 64'd0);
+
     lz = clz64(imag);
-    if (imag == 64'd0) begin
-      norm = '0;
-    end else begin
-      norm = imag << lz; // MSB at bit 63
-    end
+    norm = ifp_imag_zero ? 64'd0 : (imag << lz);
 
-    // Single-precision path ---------------------------------------------------
-    // exponent = 127 + (63 - lz)
-    s_exp = 8'd127 + 8'd63 - lz[7:0];
-    // top 24 bits of norm is 1.xxx (bit63=1 explicit)
-    s_mant_pre = norm[63:40]; // 24 bits including leading 1
-    s_guard    = norm[39];
+    // Single-precision path
+    ifp_s_exp      = 8'd127 + 8'd63 - lz[7:0];
+    ifp_s_mant_pre = norm[63:40];   // 24 bits (implicit 1 at [23])
+    s_guard        = norm[39];
     s_round_sticky = |norm[38:0];
-    s_lsb      = s_mant_pre[0];
-    s_round_up = 1'b0;
+    s_lsb          = ifp_s_mant_pre[0];
+    ifp_s_round_up = 1'b0;
     unique case (s1_rm_q)
-      3'b000: s_round_up = s_guard && (s_round_sticky || s_lsb);
-      3'b001: s_round_up = 1'b0;
-      3'b010: s_round_up = isneg && (s_guard || s_round_sticky);
-      3'b011: s_round_up = !isneg && (s_guard || s_round_sticky);
-      3'b100: s_round_up = s_guard;
-      default: s_round_up = s_guard && (s_round_sticky || s_lsb);
+      3'b000: ifp_s_round_up = s_guard && (s_round_sticky || s_lsb);
+      3'b001: ifp_s_round_up = 1'b0;
+      3'b010: ifp_s_round_up = ifp_isneg && (s_guard || s_round_sticky);
+      3'b011: ifp_s_round_up = !ifp_isneg && (s_guard || s_round_sticky);
+      3'b100: ifp_s_round_up = s_guard;
+      default: ifp_s_round_up = s_guard && (s_round_sticky || s_lsb);
     endcase
-    s_rounded = {1'b0, s_mant_pre} + (s_round_up ? 25'd1 : 25'd0);
-    s_inexact = s_guard | s_round_sticky;
+    ifp_s_inexact = s_guard | s_round_sticky;
 
-    if (imag == 64'd0) begin
-      s_bits = 32'd0;
-      if (isneg) s_bits[31] = 1'b0; // zero is positive
-    end else begin
-      // Check overflow from rounding (mantissa carried out)
-      if (s_rounded[24]) begin
-        s_bits = {isneg, s_exp + 8'd1, 23'd0}; // exponent bump, mantissa zero
-      end else begin
-        s_bits = {isneg, s_exp, s_rounded[22:0]};
-      end
-    end
-
-    // Double-precision path ---------------------------------------------------
-    d_exp = 11'd1023 + 11'd63 - {3'd0, lz[7:0]};
-    d_mant_pre = norm[63:11]; // 53 bits including leading 1
-    d_guard    = norm[10];
+    // Double-precision path
+    ifp_d_exp      = 11'd1023 + 11'd63 - {3'd0, lz[7:0]};
+    ifp_d_mant_pre = norm[63:11];   // 53 bits (implicit 1 at [52])
+    d_guard        = norm[10];
     d_round_sticky = |norm[9:0];
-    d_lsb      = d_mant_pre[0];
-    d_round_up = 1'b0;
+    d_lsb          = ifp_d_mant_pre[0];
+    ifp_d_round_up = 1'b0;
     unique case (s1_rm_q)
-      3'b000: d_round_up = d_guard && (d_round_sticky || d_lsb);
-      3'b001: d_round_up = 1'b0;
-      3'b010: d_round_up = isneg && (d_guard || d_round_sticky);
-      3'b011: d_round_up = !isneg && (d_guard || d_round_sticky);
-      3'b100: d_round_up = d_guard;
-      default: d_round_up = d_guard && (d_round_sticky || d_lsb);
+      3'b000: ifp_d_round_up = d_guard && (d_round_sticky || d_lsb);
+      3'b001: ifp_d_round_up = 1'b0;
+      3'b010: ifp_d_round_up = ifp_isneg && (d_guard || d_round_sticky);
+      3'b011: ifp_d_round_up = !ifp_isneg && (d_guard || d_round_sticky);
+      3'b100: ifp_d_round_up = d_guard;
+      default: ifp_d_round_up = d_guard && (d_round_sticky || d_lsb);
     endcase
-    d_rounded = {1'b0, d_mant_pre} + (d_round_up ? 54'd1 : 54'd0);
-    d_inexact = d_guard | d_round_sticky;
-
-    if (imag == 64'd0) begin
-      d_bits = 64'd0;
-    end else begin
-      if (d_rounded[53]) begin
-        d_bits = {isneg, d_exp + 11'd1, 52'd0};
-      end else begin
-        d_bits = {isneg, d_exp, d_rounded[51:0]};
-      end
-    end
-
-    ifp_fflags = '0;
-    if (s1_fmt_d_q) begin
-      ifp_result = d_bits;
-      if (imag != 64'd0 && d_inexact) ifp_fflags[FP_FFLAG_NX] = 1'b1;
-    end else begin
-      ifp_result = {FP_NANBOX_UPPER, s_bits};
-      if (imag != 64'd0 && s_inexact) ifp_fflags[FP_FFLAG_NX] = 1'b1;
-    end
+    ifp_d_inexact = d_guard | d_round_sticky;
   end
 
   // ---------------------------------------------------------------------------
-  // S <-> D format conversion
+  // Stage-2 combinational: S <-> D format conversion (full result; no long chains)
   // ---------------------------------------------------------------------------
+  logic [63:0] s2c_ds_result;
+  logic [4:0]  s2c_ds_fflags;
+
   always_comb begin
     logic [63:0] d_result;
     logic [31:0] s_result;
@@ -518,19 +406,16 @@ module kronos_fpu_fcvt
     logic [51:0] ds_dmant;
     logic signed [12:0] ds_unbiased;
     logic [7:0]  ds_sexp_out;
-    logic [23:0] ds_sig; // 1.xxx (24 bits)
+    logic [23:0] ds_sig;
     logic        ds_g, ds_sticky, ds_lsb, ds_round_up;
     logic [24:0] ds_rounded;
-    // D->S subnormal-rounding working signals
-    logic [9:0]  subn_shift_amt;     // 1..896 within the underflow branch
-                                     // (subnormals at <=25; deeper underflow handled
-                                     //  by the >=25 flush-to-zero arm)
-    logic [23:0] subn_sig24;         // pre-shift 24-bit significand (with implicit 1)
-    logic [23:0] subn_sig;           // post-shift significand (LSB = subnormal LSB)
-    logic        subn_g;             // guard bit
-    logic        subn_sticky;        // sticky from bits past guard
+    logic [9:0]  subn_shift_amt;
+    logic [23:0] subn_sig24;
+    logic [23:0] subn_sig;
+    logic        subn_g;
+    logic        subn_sticky;
     logic        subn_round_up;
-    logic [23:0] subn_rounded;       // 24-bit rounded subnormal mantissa
+    logic [23:0] subn_rounded;
     logic [22:0] subn_mant;
     logic [7:0]  subn_exp;
 
@@ -544,22 +429,13 @@ module kronos_fpu_fcvt
       sd_sexp  = s1_a_q[30:23];
       sd_smant = s1_a_q[22:0];
       if ((sd_sexp == 8'd0) && (sd_smant == 23'd0)) begin
-        // +/- zero
         d_result = {sd_sign, 63'd0};
       end else if ((sd_sexp == 8'hFF) && (sd_smant == 23'd0)) begin
-        // +/- inf
         d_result = {sd_sign, 11'h7FF, 52'd0};
       end else if (sd_sexp == 8'hFF) begin
-        // NaN: canonical qNaN in D (quiet sNaN by setting MSB of mantissa)
-        // Signal sNaN input -> NV flag
         if (sd_smant[22] == 1'b0) fs_flags[FP_FFLAG_NV] = 1'b1;
         d_result = FP_CANON_QNAN_D;
       end else if (sd_sexp == 8'd0) begin
-        // Subnormal single -> normalised double (always exact, fits).
-        // If the leading 1 of the 23-bit mantissa is at bit k, shift left by
-        // (22 - k) so that m[k] lands at bit 52 of new_mant (the implicit
-        // leading 1, discarded on output). The result's unbiased exponent
-        // is k - 149 + 0, i.e. biased = k + 874 = 896 - (22 - k).
         integer k;
         logic [22:0] m;
         integer shift_amt;
@@ -579,16 +455,15 @@ module kronos_fpu_fcvt
           d_result = {sd_sign, new_exp, new_mant[51:0]};
         end
       end else begin
-        // Normal: exp' = exp - 127 + 1023; mant zero-extended
         d_result = {sd_sign, ({3'd0, sd_sexp} + 11'd896), sd_smant, 29'd0};
       end
-      ds_result = d_result;
-      ds_fflags = fs_flags;
+      s2c_ds_result = d_result;
+      s2c_ds_fflags = fs_flags;
     end else begin
       // FP_FCVT_S_D: Double -> Single with rounding
-      ds_sign  = s1_a_q[63];
-      ds_dexp  = s1_a_q[62:52];
-      ds_dmant = s1_a_q[51:0];
+      ds_sign    = s1_a_q[63];
+      ds_dexp    = s1_a_q[62:52];
+      ds_dmant   = s1_a_q[51:0];
       ds_unbiased = $signed({2'd0, ds_dexp}) - 13'sd1023;
 
       if ((ds_dexp == 11'd0) && (ds_dmant == 52'd0)) begin
@@ -596,26 +471,17 @@ module kronos_fpu_fcvt
       end else if ((ds_dexp == 11'h7FF) && (ds_dmant == 52'd0)) begin
         s_result = {ds_sign, 8'hFF, 23'd0};
       end else if (ds_dexp == 11'h7FF) begin
-        // NaN
         if (ds_dmant[51] == 1'b0) fs_flags[FP_FFLAG_NV] = 1'b1;
         s_result = FP_CANON_QNAN_S;
       end else begin
-        // Normal/subnormal double. Exponent range of single: [-126, 127].
-        // Build 24-bit sig (with leading 1)
         if (ds_dexp == 11'd0) begin
-          // Subnormal double's magnitude is always strictly less than 0.5 ulp
-          // of the smallest single subnormal (double_subn < 2^-1022 while
-          // 0.5*single_ulp = 2^-150). Rounding is purely direction-driven:
-          //   RUP  + positive  -> +0x00000001
-          //   RDN  + negative  -> 0x80000001 (= sign|0x00000001)
-          //   RNE / RTZ / RMM  -> +/-0 (value is far below the tie point)
           logic nz_in;
-          nz_in = |ds_dmant; // any non-zero mantissa -> inexact, UF candidate
+          nz_in = |ds_dmant;
           unique case (s1_rm_q)
             3'b010: s_result = (ds_sign  && nz_in) ? {1'b1, 8'd0, 23'd1}
-                                                   : {ds_sign, 31'd0};
+                                                    : {ds_sign, 31'd0};
             3'b011: s_result = (!ds_sign && nz_in) ? {1'b0, 8'd0, 23'd1}
-                                                   : {ds_sign, 31'd0};
+                                                    : {ds_sign, 31'd0};
             default: s_result = {ds_sign, 31'd0};
           endcase
           if (nz_in) begin
@@ -623,11 +489,8 @@ module kronos_fpu_fcvt
             fs_flags[FP_FFLAG_NX] = 1'b1;
           end
         end else if (ds_unbiased > 13'sd127) begin
-          // Overflow
           fs_flags[FP_FFLAG_OF] = 1'b1;
           fs_flags[FP_FFLAG_NX] = 1'b1;
-          // Saturate to inf (for RNE/RUP+/RDN- etc.) - use inf per IEEE
-          // Round mode dependent: RTZ or RDN+ / RUP- -> max normal
           unique case (s1_rm_q)
             3'b001: s_result = {ds_sign, 8'hFE, 23'h7FFFFF};
             3'b010: s_result = ds_sign ? {1'b1, 8'hFF, 23'd0} : {1'b0, 8'hFE, 23'h7FFFFF};
@@ -635,23 +498,10 @@ module kronos_fpu_fcvt
             default: s_result = {ds_sign, 8'hFF, 23'd0};
           endcase
         end else if (ds_unbiased < -13'sd126) begin
-          // D->S: result is in single subnormal range or below.
-          // Build a 24-bit significand sig24 = {1'b1, ds_dmant[51:29]}, then
-          // right-shift by (-126 - ds_unbiased) to align the implicit-1 into
-          // the subnormal field. OR-collect dropped bits into sticky and RNE-
-          // round into the 23-bit subnormal mantissa.
-          //   ds_unbiased = -127  -> shift_amt = 1
-          //   ds_unbiased = -149  -> shift_amt = 23
-          //   ds_unbiased <= -150 -> shift_amt >= 24 -> rounds to +/-0
-          //   ds_unbiased = -1022 -> shift_amt = 896 (deepest double subnormal)
-          // shift_amt = -126 - ds_unbiased; in this branch this is in [1, 896].
-          // The 10-bit width fits the full range; the >= 25 guard below saturates
-          // deeply-tiny inputs to +/-0 (and the branch entry guarantees > 0).
           subn_shift_amt = 10'(-(ds_unbiased + 13'sd126));
           subn_sig24     = {1'b1, ds_dmant[51:29]};
 
           if (subn_shift_amt >= 10'd25) begin
-            // Beyond the smallest representable subnormal: rounds to +/-0.
             subn_sig    = '0;
             subn_g      = 1'b0;
             subn_sticky = (subn_sig24 != 24'd0) | (|ds_dmant[28:0]);
@@ -667,7 +517,6 @@ module kronos_fpu_fcvt
                             | (|ds_dmant[28:0]);
           end
 
-          // Rounding decision (mirrors normal-range rm handling above).
           subn_round_up = 1'b0;
           unique case (s1_rm_q)
             3'b000: subn_round_up = subn_g && (subn_sticky || subn_sig[0]);
@@ -682,7 +531,6 @@ module kronos_fpu_fcvt
           if (subn_g | subn_sticky) fs_flags[FP_FFLAG_NX] = 1'b1;
 
           if (subn_rounded[23]) begin
-            // Round-up promoted the subnormal to the smallest normal: exp=1.
             subn_mant = '0;
             subn_exp  = 8'd1;
           end else begin
@@ -691,17 +539,12 @@ module kronos_fpu_fcvt
           end
           s_result = {ds_sign, subn_exp, subn_mant};
 
-          // IEEE 754 7.5: UF only if the rounded result is tiny AND inexact.
-          // A result that lands on the smallest normal (subn_exp == 1) is no
-          // longer tiny, so suppress UF in that case.
           if ((subn_g | subn_sticky) && (subn_exp == 8'd0))
             fs_flags[FP_FFLAG_UF] = 1'b1;
         end else begin
           // Normal range: round 52-bit mantissa to 23 bits
-          // mant = 1.xxx (implicit 1), take top 24 bits (1 + 23 explicit)
-          // guard = bit 28 of mant, sticky = |bits[27:0]
-          ds_sig   = {1'b1, ds_dmant[51:29]}; // 24 bits
-          ds_g     = ds_dmant[28];
+          ds_sig    = {1'b1, ds_dmant[51:29]};
+          ds_g      = ds_dmant[28];
           ds_sticky = |ds_dmant[27:0];
           ds_lsb    = ds_sig[0];
           ds_round_up = 1'b0;
@@ -716,12 +559,9 @@ module kronos_fpu_fcvt
           ds_rounded = {1'b0, ds_sig} + (ds_round_up ? 25'd1 : 25'd0);
           if (ds_g || ds_sticky) fs_flags[FP_FFLAG_NX] = 1'b1;
 
-          // New exponent (may bump if rounding overflows)
           ds_sexp_out = ds_unbiased[7:0] + 8'd127;
           if (ds_rounded[24]) begin
-            // Mantissa overflow -> exp+1
             if ((ds_sexp_out + 8'd1) == 8'hFF) begin
-              // Exponent overflow
               s_result = {ds_sign, 8'hFF, 23'd0};
               fs_flags[FP_FFLAG_OF] = 1'b1;
             end else begin
@@ -732,47 +572,226 @@ module kronos_fpu_fcvt
           end
         end
       end
-      ds_result = {FP_NANBOX_UPPER, s_result};
-      ds_fflags = fs_flags;
+      s2c_ds_result = {FP_NANBOX_UPPER, s_result};
+      s2c_ds_fflags = fs_flags;
     end
   end
 
   // ---------------------------------------------------------------------------
-  // Stage-2 final mux
+  // Stage-2 registers: capture intermediate values
   // ---------------------------------------------------------------------------
-  logic [63:0] s2_final_result;
-  logic [4:0]  s2_final_fflags;
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      s2_valid_q <= 1'b0;
+      s2_op_q    <= FP_FCVT_W_F;
+      s2_fmt_d_q <= 1'b0;
+      s2_tag_q   <= '0;
+
+      s2_ifp_isneg      <= 1'b0;
+      s2_ifp_imag_zero  <= 1'b0;
+      s2_ifp_s_exp      <= '0;
+      s2_ifp_d_exp      <= '0;
+      s2_ifp_s_mant_pre <= '0;
+      s2_ifp_d_mant_pre <= '0;
+      s2_ifp_s_round_up <= 1'b0;
+      s2_ifp_d_round_up <= 1'b0;
+      s2_ifp_s_inexact  <= 1'b0;
+      s2_ifp_d_inexact  <= 1'b0;
+
+      s2_fpi_overflow        <= 1'b0;
+      s2_fpi_neg_of          <= 1'b0;
+      s2_fpi_src_is_nan      <= 1'b0;
+      s2_fpi_src_sign        <= 1'b0;
+      s2_fpi_target_is_32b   <= 1'b0;
+      s2_fpi_target_is_signed <= 1'b0;
+      s2_fpi_target_max      <= '0;
+      s2_fpi_target_min      <= '0;
+      s2_fpi_int_part        <= '0;
+      s2_fpi_round_up        <= 1'b0;
+      s2_fpi_is_inexact      <= 1'b0;
+
+      s2_ds_result <= '0;
+      s2_ds_fflags <= '0;
+    end else begin
+      s2_valid_q <= flush_i ? 1'b0 : s1_valid_q;
+      if (s1_valid_q) begin
+        s2_op_q    <= s1_op_q;
+        s2_fmt_d_q <= s1_fmt_d_q;
+        s2_tag_q   <= s1_tag_q;
+
+        s2_ifp_isneg      <= ifp_isneg;
+        s2_ifp_imag_zero  <= ifp_imag_zero;
+        s2_ifp_s_exp      <= ifp_s_exp;
+        s2_ifp_d_exp      <= ifp_d_exp;
+        s2_ifp_s_mant_pre <= ifp_s_mant_pre;
+        s2_ifp_d_mant_pre <= ifp_d_mant_pre;
+        s2_ifp_s_round_up <= ifp_s_round_up;
+        s2_ifp_d_round_up <= ifp_d_round_up;
+        s2_ifp_s_inexact  <= ifp_s_inexact;
+        s2_ifp_d_inexact  <= ifp_d_inexact;
+
+        s2_fpi_overflow        <= fpi_overflow;
+        s2_fpi_neg_of          <= fpi_neg_of;
+        s2_fpi_src_is_nan      <= src_is_nan;
+        s2_fpi_src_sign        <= src_sign;
+        s2_fpi_target_is_32b   <= target_is_32b;
+        s2_fpi_target_is_signed <= target_is_signed;
+        s2_fpi_target_max      <= target_max;
+        s2_fpi_target_min      <= target_min;
+        s2_fpi_int_part        <= int_part;
+        s2_fpi_round_up        <= fpi_round_up;
+        s2_fpi_is_inexact      <= is_inexact_fpi;
+
+        s2_ds_result <= s2c_ds_result;
+        s2_ds_fflags <= s2c_ds_fflags;
+      end
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // Stage-3 combinational: rounding adders + final assembly
+  // ---------------------------------------------------------------------------
+  logic [63:0] s3_final_result;
+  logic [4:0]  s3_final_fflags;
 
   always_comb begin
-    unique case (s1_op_q)
+    // All local variable declarations must precede procedural statements.
+    logic [24:0] s_rounded;
+    logic [53:0] d_rounded;
+    logic [31:0] s_bits;
+    logic [63:0] d_bits;
+    logic [63:0] ifp_result;
+    logic [4:0]  ifp_fflags;
+    logic [64:0] int_rounded;
+    logic [63:0] mag;
+    logic        over_after_round;
+    logic [63:0] signed_val;
+    logic [63:0] fpi_result;
+    logic [4:0]  fpi_fflags;
+
+    // Defaults (avoid latch inference)
+    signed_val      = '0;
+    s3_final_result = '0;
+    s3_final_fflags = '0;
+
+    // --- INT -> FP rounding (7×CARRY8 for double; 4×CARRY8 for single) ---
+    s_rounded = {1'b0, s2_ifp_s_mant_pre} + (s2_ifp_s_round_up ? 25'd1 : 25'd0);
+    d_rounded = {1'b0, s2_ifp_d_mant_pre} + (s2_ifp_d_round_up ? 54'd1 : 54'd0);
+
+    if (s2_ifp_imag_zero) begin
+      s_bits = {s2_ifp_isneg, 31'd0};
+      d_bits = 64'd0;
+    end else begin
+      if (s_rounded[24]) begin
+        s_bits = {s2_ifp_isneg, s2_ifp_s_exp + 8'd1, 23'd0};
+      end else begin
+        s_bits = {s2_ifp_isneg, s2_ifp_s_exp, s_rounded[22:0]};
+      end
+      if (d_rounded[53]) begin
+        d_bits = {s2_ifp_isneg, s2_ifp_d_exp + 11'd1, 52'd0};
+      end else begin
+        d_bits = {s2_ifp_isneg, s2_ifp_d_exp, d_rounded[51:0]};
+      end
+    end
+
+    ifp_fflags = '0;
+    if (s2_fmt_d_q) begin
+      ifp_result = d_bits;
+      if (!s2_ifp_imag_zero && s2_ifp_d_inexact) ifp_fflags[FP_FFLAG_NX] = 1'b1;
+    end else begin
+      ifp_result = {FP_NANBOX_UPPER, s_bits};
+      if (!s2_ifp_imag_zero && s2_ifp_s_inexact) ifp_fflags[FP_FFLAG_NX] = 1'b1;
+    end
+
+    // --- FP -> INT rounding (65-bit conditional increment + sign + range check) ---
+
+    int_rounded      = {1'b0, s2_fpi_int_part} + (s2_fpi_round_up ? 65'd1 : 65'd0);
+    mag              = int_rounded[63:0];
+    over_after_round = 1'b0;
+    fpi_result       = '0;
+    fpi_fflags       = '0;
+
+    if (s2_fpi_src_is_nan) begin
+      fpi_result               = s2_fpi_target_max;
+      fpi_fflags[FP_FFLAG_NV]  = 1'b1;
+    end else if (s2_fpi_overflow) begin
+      if (s2_fpi_neg_of) fpi_result = s2_fpi_target_is_signed ? s2_fpi_target_min : 64'd0;
+      else               fpi_result = s2_fpi_target_max;
+      fpi_fflags[FP_FFLAG_NV] = 1'b1;
+    end else begin
+      if (s2_fpi_target_is_32b && s2_fpi_target_is_signed) begin
+        if (s2_fpi_src_sign) begin
+          if (int_rounded > 65'h0_0000_0000_8000_0000) over_after_round = 1'b1;
+        end else begin
+          if (int_rounded > 65'h0_0000_0000_7FFF_FFFF) over_after_round = 1'b1;
+        end
+      end else if (s2_fpi_target_is_32b && !s2_fpi_target_is_signed) begin
+        if (s2_fpi_src_sign && (mag != 64'd0 || s2_fpi_round_up)) begin
+          over_after_round = 1'b1;
+        end else if (int_rounded > 65'h0_0000_0000_FFFF_FFFF) begin
+          over_after_round = 1'b1;
+        end
+      end else if (!s2_fpi_target_is_32b && s2_fpi_target_is_signed) begin
+        if (s2_fpi_src_sign) begin
+          if (int_rounded > 65'h0_8000_0000_0000_0000) over_after_round = 1'b1;
+        end else begin
+          if (int_rounded > 65'h0_7FFF_FFFF_FFFF_FFFF) over_after_round = 1'b1;
+        end
+      end else begin
+        if (s2_fpi_src_sign && (mag != 64'd0 || s2_fpi_round_up)) begin
+          over_after_round = 1'b1;
+        end else if (int_rounded[64]) begin
+          over_after_round = 1'b1;
+        end
+      end
+
+      if (over_after_round) begin
+        if (s2_fpi_src_sign) fpi_result = s2_fpi_target_is_signed ? s2_fpi_target_min : 64'd0;
+        else                 fpi_result = s2_fpi_target_max;
+        fpi_fflags[FP_FFLAG_NV] = 1'b1;
+      end else begin
+        signed_val = s2_fpi_src_sign ? (~mag + 64'd1) : mag;
+        if (s2_fpi_target_is_32b) begin
+          fpi_result = {{32{signed_val[31]}}, signed_val[31:0]};
+        end else begin
+          fpi_result = signed_val;
+        end
+        if (s2_fpi_is_inexact) fpi_fflags[FP_FFLAG_NX] = 1'b1;
+      end
+    end
+
+    // --- Final mux ---
+    s3_final_result = '0;
+    s3_final_fflags = '0;
+    unique case (s2_op_q)
       FP_FCVT_W_F,
       FP_FCVT_WU_F,
       FP_FCVT_L_F,
       FP_FCVT_LU_F: begin
-        s2_final_result = s2_result;
-        s2_final_fflags = s2_fflags;
+        s3_final_result = fpi_result;
+        s3_final_fflags = fpi_fflags;
       end
       FP_FCVT_F_W,
       FP_FCVT_F_WU,
       FP_FCVT_F_L,
       FP_FCVT_F_LU: begin
-        s2_final_result = ifp_result;
-        s2_final_fflags = ifp_fflags;
+        s3_final_result = ifp_result;
+        s3_final_fflags = ifp_fflags;
       end
       FP_FCVT_S_D,
       FP_FCVT_D_S: begin
-        s2_final_result = ds_result;
-        s2_final_fflags = ds_fflags;
+        s3_final_result = s2_ds_result;
+        s3_final_fflags = s2_ds_fflags;
       end
       default: begin
-        s2_final_result = '0;
-        s2_final_fflags = '0;
+        s3_final_result = '0;
+        s3_final_fflags = '0;
       end
     endcase
   end
 
   // ---------------------------------------------------------------------------
-  // Stage-2 output registers
+  // Stage-3 output registers
   // ---------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -781,11 +800,11 @@ module kronos_fpu_fcvt
       fflags_o    <= '0;
       tag_o       <= '0;
     end else begin
-      out_valid_o <= flush_i ? 1'b0 : s1_valid_q;
-      if (s1_valid_q) begin
-        result_o <= s2_final_result;
-        fflags_o <= s2_final_fflags;
-        tag_o    <= s1_tag_q;
+      out_valid_o <= flush_i ? 1'b0 : s2_valid_q;
+      if (s2_valid_q) begin
+        result_o <= s3_final_result;
+        fflags_o <= s3_final_fflags;
+        tag_o    <= s2_tag_q;
       end
     end
   end

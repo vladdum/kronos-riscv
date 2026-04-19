@@ -7,6 +7,13 @@ obj_dir/
 *.hex
 *.map
 *.log
+*.jou
+.Xil/
+vivado_pid*.str
+vivado_pid*.backup.jou
+clockInfo.txt
+cong/
+iter_*_Congested*.txt
 docs/superpowers/
 __pycache__/
 riscv-arch-test/*

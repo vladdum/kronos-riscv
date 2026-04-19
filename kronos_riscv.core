@@ -116,6 +116,14 @@ filesets:
       - rtl/stage5/kronos_top.sv
     file_type: systemVerilogSource
 
+  files_fpga_kv260:
+    depend:
+      - pulp-platform.org::axi:0.39.9
+    files:
+      - fpga/kv260/kronos_kv260_top.sv
+      - fpga/kv260/kronos_kv260.xdc: {file_type: xdc}
+    file_type: systemVerilogSource
+
   files_tb_s0:
     files:
       - tb/stage0/tb_alu.sv
@@ -192,3 +200,23 @@ targets:
   stage5:
     filesets: [files_rtl_s5]
     toplevel: kronos_top
+
+  impl-kv260:
+    default_tool: vivado
+    filesets:
+      - files_rtl_s5
+      - files_fpga_kv260
+    toplevel: kronos_kv260_top
+    tools:
+      vivado:
+        part: xck26-sfvc784-2LV-c
+        synth_options: [-flatten_hierarchy, rebuilt]
+    parameters:
+      - SYNTH_FREQ_MHZ
+
+parameters:
+  SYNTH_FREQ_MHZ:
+    datatype: int
+    default: 200
+    description: "Target clock frequency in MHz — sets PS PL0 clock and create_clock period in synth.tcl"
+    paramtype: generic

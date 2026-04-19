@@ -2,13 +2,10 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-# Vivado XDC constraints for kronos_top on KV260 (XCK26, -2LV speed grade)
-# Target: 148 MHz (6.757 ns period)
-
-# ---------------------------------------------------------------------------
-# Primary clock (adjust net name to match wrapper / board design)
-# ---------------------------------------------------------------------------
-# create_clock -period 6.757 -name clk_i [get_ports clk_i]
+# Vivado XDC multicycle path constraints for kronos_top on KV260 (XCK26, -2LV speed grade)
+# Target frequency is set by the calling synth script, not here.
+#   KV260 standalone flow (fpga/kv260/synth.tcl): 200 MHz (5.000 ns)
+#   OpenSoC flow (hw/fpga/kv260/synth.tcl):       148 MHz (6.757 ns)
 
 # ---------------------------------------------------------------------------
 # Fix #4: Multicycle path for the 64-bit branch comparator.

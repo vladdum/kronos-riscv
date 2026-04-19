@@ -103,7 +103,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-compliance-s1 sim-lsu-s1 sim-forward sim-hazard \
         sim-muldiv sim-compliance-s2 sim-decompress sim-align sim-lsu-s3 sim-bpred \
         sim-compliance-s3 build-s4 run-s4-% sim-compliance-s4 sim-alu-s4 sim-decode-s4 \
-        sim-muldiv-s4 sim-lsu-s4 sim-all clean \
+        sim-muldiv-s4 sim-lsu-s4 sim-all clean clean-vivado \
         build-s5 run-s5-% sim-s5 sim-core-fp-basic sim-core-fp-forwarding \
         gen-arch-tests-s1 sim-arch-test-s1 gen-arch-tests-s2 sim-arch-test-s2 gen-arch-tests-s3 sim-arch-test-s3 gen-arch-tests-s4 sim-arch-test-s4 gen-arch-tests-s5 sim-arch-test-s5 \
         sim-pkg-fp sim-regfile-fp sim-hf-smoke sim-sf-smoke \
@@ -991,3 +991,10 @@ clean:
 	rm -rf $(OBJ_DIR)
 	$(MAKE) -C $(SW_DIR) clean
 	$(MAKE) -C $(SW_DIR)/compliance clean
+
+clean-vivado:
+	rm -rf ../build/vivado_kv260_*
+	rm -f  ../*.jou ../vivado_pid*.str ../vivado_pid*.backup.jou
+	rm -rf ../.Xil
+	rm -f  ../clockInfo.txt ../iter_*_Congested*.txt
+	rm -rf ../cong
