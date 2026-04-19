@@ -11,7 +11,7 @@
 module tb_lsu_fp;
   import kronos_pkg::*;
 
-  logic             clk = 0, rst_n = 0;
+  logic             clk, rst_n;
   logic             req, we;
   logic [31:0]      addr;
   logic [63:0]      wdata;
@@ -108,6 +108,7 @@ module tb_lsu_fp;
   int errors = 0;
 
   initial begin
+    clk = 0; rst_n = 0;
     is_lr = 0; is_sc = 0; is_amo = 0; amo_funct5 = 0; amo_src = 0;
     fp_dest_req = 0; fp_store_data = '0;
     req = 0; we = 0;

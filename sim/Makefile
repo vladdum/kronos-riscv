@@ -504,7 +504,7 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
 
 SIM_REPORT_DIR := $(OBJ_DIR)/sim-results
 
-sim-all:
+sim-all: $(SF_LIB)
 	@rm -rf $(SIM_REPORT_DIR) && mkdir -p $(SIM_REPORT_DIR)
 	@pids=""; \
 	for t in $(SIM_UNITS); do \
@@ -894,7 +894,6 @@ TB_LSU_FP_FILES := $(AXI_PKG_SV) \
                    $(TB_DIR)/stage5/tb_lsu_fp.sv
 sim-lsu-fp:
 	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
-	  --Wno-PROCASSINIT \
 	  --top-module tb_lsu_fp $(TB_LSU_FP_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/lsu_fp
 	$(OBJ_DIR)/lsu_fp/Vtb_lsu_fp
