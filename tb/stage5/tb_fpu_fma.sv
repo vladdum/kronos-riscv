@@ -59,8 +59,8 @@ module tb_fpu_fma;
       c        = cin;
     @(negedge clk);
       in_valid = 0;
-    // 7-deep pipeline + output reg (S2b re-latch added for DSP timing)
-    repeat (7) @(posedge clk);
+    // 8-deep pipeline + output reg (S2b re-latch + S3b barrel-shift stage added)
+    repeat (8) @(posedge clk);
     #1;
   endtask
 

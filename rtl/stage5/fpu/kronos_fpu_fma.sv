@@ -4,15 +4,19 @@
 
 // Single-rounded fused multiply-add for binary32 and binary64.
 // Computes +/-(a*b) +/- c with a single rounding step applied after the
-// full-precision multiply-add.  Pipelined over 8 cycles:
+// full-precision multiply-add.  Pipelined over 9 cycles:
 // S1(decompose) → S2(mul operand reg) → S2b(mul operand re-latch) →
-//   S3(product reg + alignment prep) → S4(add) → S4b(LZC) →
-//   S5(shift) → S5b(round+pack) → output
+//   S3(product reg + alignment compute) → S3b(160-bit alignment shift) →
+//   S4(add) → S4b(LZC) → S5(shift) → S5b(round+pack) → output
 //
-// S2 and S2b together give Vivado two flops between the S2 multiplicand
-// source and the DSP cascade output, letting retiming
-// (global_retiming on) place one in the DSP48 internal MREG. This breaks
-// the 53x53 multiply critical path at 200/220 MHz.
+// S2 and S2b give Vivado two flops between the S2 multiplicand source and
+// the DSP cascade output, letting retiming (global_retiming on) place one
+// in the DSP48 internal MREG to close the 53×53 multiply.
+//
+// S3 computes the alignment shift amount and the pre-shift operands; S3b
+// performs the 160-bit variable right-shift + sticky collection. Splitting
+// alignment into two cycles breaks the s3_c_exp → shift_amt → barrel-shift
+// critical path at 220 MHz.
 //
 // Subnormal inputs are treated like normals with zero leading bit and the
 // biased exponent bumped to the subnormal emin.  Subnormal outputs fall out of
@@ -429,100 +433,204 @@ module kronos_fpu_fma
   // The result exponent candidate (before normalize) is the larger of
   // prod_exp and c_exp.
   // ---------------------------------------------------------------------------
-  logic [SUM_W-1:0]    s3_prod_lane_comb;
-  logic [SUM_W-1:0]    s3_c_lane_comb;
-  logic signed [12:0]  s3_base_exp_comb;
-  logic                s3_eff_sub_comb;
+  // Pre-shift outputs (written in the new S3 comb, read by proc_s3b_regs).
+  logic signed [12:0]   s3a_base_exp_comb;
+  logic                 s3a_eff_sub_comb;
+  logic [7:0]           s3a_sh_comb;         // clamped shift amount (0..159 fits in 8b)
+  logic [SUM_W-1:0]     s3a_shift_src_comb;  // operand to be shifted right
+  logic [SUM_W-1:0]     s3a_passthrough_comb;// operand to pass through unshifted
+  // s3a_shift_is_c_comb=1 → s3_c_lane = shifted, s3_prod_lane = passthrough (p_extended).
+  // s3a_shift_is_c_comb=0 → s3_c_lane = passthrough (c_extended), s3_prod_lane = shifted.
+  logic                 s3a_shift_is_c_comb;
+  logic                 s3a_zero_shift_comb; // 1 when one side is zero — no shift needed
+  logic                 s3a_prod_zero_comb;  // 1 → output s3_prod_lane forced to 0
+  logic                 s3a_c_zero_comb;     // 1 → output s3_c_lane forced to 0
 
-  always_comb begin
+  always_comb begin : proc_s3_align_amt
     logic signed [13:0] exp_diff;
     logic signed [13:0] shift_amt;
     logic [SUM_W-1:0]   c_extended;
     logic [SUM_W-1:0]   p_extended;
     int unsigned        sh;
-    logic [SUM_W-1:0]   shifted;
-    logic               sticky;
-    int unsigned        i;
 
-    // Defaults — prevents latches in branches that don't touch these.
-    exp_diff  = '0;
-    shift_amt = '0;
-    sh        = 0;
-    shifted   = '0;
-    sticky    = 1'b0;
+    // Defaults.
+    exp_diff              = '0;
+    shift_amt             = '0;
+    sh                    = 0;
+    s3a_base_exp_comb     = '0;
+    s3a_eff_sub_comb      = 1'b0;
+    s3a_sh_comb           = '0;
+    s3a_shift_src_comb    = '0;
+    s3a_passthrough_comb  = '0;
+    s3a_shift_is_c_comb   = 1'b0;
+    s3a_zero_shift_comb   = 1'b0;
+    s3a_prod_zero_comb    = 1'b0;
+    s3a_c_zero_comb       = 1'b0;
 
-    s3_eff_sub_comb = s3_prod_sign ^ s3_addend_sign;
+    s3a_eff_sub_comb = s3_prod_sign ^ s3_addend_sign;
 
-    // Place product so its top bit sits at [SUM_W-1-1 .. SUM_W-1]:
-    //   product is up to PROD_W bits (2.xxxx or 1.xxxx at top).  We align
-    //   its MSB to SUM_W-2 so that even the carry bit has room at SUM_W-1.
+    // Place product so its top bit sits at SUM_W-2 (matches original comment).
     p_extended = {1'b0, s3_product, {(PAD_W-1){1'b0}}};
 
-    // Place addend's hidden bit at the same position as the product's MSB-1
-    // (i.e. unit-of-least-precision line of the product's "1.xxxx" form).
-    // product significand is a*b in Q(2*SIG_W) form; since both a_sig and
-    // b_sig are in Q(SIG_W-1) (hidden-bit weight = 2^(SIG_W-1)), the product
-    // has weight 2^(2*(SIG_W-1)) for its logical leading bit.  We want the
-    // addend's hidden bit aligned to the same weight, i.e. at bit position
-    // (2*SIG_W-2) in the product-only representation.  In the extended lane
-    // the product MSB sits at bit index (PROD_W-1 + PAD_W-1) = SUM_W-2, and
-    // its "hidden*hidden" bit sits at SUM_W-3 (since product is 1.x or 1x.x).
-    //
-    // To keep this simple, align the addend so its hidden bit sits at
-    // position (SIG_W-1) + (PAD_W-1) when exp_diff == SIG_W-1, matching the
-    // weight of the product's ulp.  Equivalently: place c_sig left-justified
-    // and shift right by shift_amt = prod_exp - c_exp.
+    // Place addend's hidden bit at SUM_W-3, left-justified with s3_c_sig.
     c_extended = '0;
-    // Reference position REF = SUM_W-3 = 157.  Place c_sig so its hidden bit
-    // sits at REF when no alignment shift is needed.  The product occupies
-    // bits [PROD_W-1 + (PAD_W-1) : PAD_W-1] = [158:53] in p_extended; its top
-    // bit can be at 158 (2.x case) or 157 (1.x case).  Sharing REF with c
-    // keeps bit-weights matched.
     c_extended[(SUM_W-3) -: SIG_W] = s3_c_sig;
 
     exp_diff = s3_prod_exp - s3_c_exp;
 
     if (s3_prod_zero) begin
-      // Product is zero: result is just the addend.
-      s3_prod_lane_comb = '0;
-      s3_c_lane_comb    = c_extended;
-      s3_base_exp_comb  = s3_c_exp;
+      // Product is zero: result is just the addend. No shift needed; pass c through.
+      s3a_prod_zero_comb    = 1'b1;
+      s3a_zero_shift_comb   = 1'b1;
+      s3a_shift_src_comb    = '0;
+      s3a_passthrough_comb  = c_extended;
+      s3a_shift_is_c_comb   = 1'b0;  // passthrough goes to c_lane; prod_lane forced 0 by flag
+      s3a_base_exp_comb     = s3_c_exp;
     end else if (s3_c_zero) begin
-      s3_prod_lane_comb = p_extended;
-      s3_c_lane_comb    = '0;
-      s3_base_exp_comb  = s3_prod_exp;
+      s3a_c_zero_comb       = 1'b1;
+      s3a_zero_shift_comb   = 1'b1;
+      s3a_shift_src_comb    = '0;
+      s3a_passthrough_comb  = p_extended;
+      s3a_shift_is_c_comb   = 1'b1;  // passthrough goes to prod_lane
+      s3a_base_exp_comb     = s3_prod_exp;
     end else if (exp_diff >= 0) begin
-      // product >= addend: keep product, shift addend right by exp_diff.
+      // product >= addend: keep product unshifted, shift c right by exp_diff.
       shift_amt = exp_diff;
       if (shift_amt > 14'(SUM_W - 1)) sh = SUM_W - 1;
       else                              sh = {22'd0, shift_amt[9:0]};
-      shifted = c_extended >> sh;
-      // Sticky-OR the bits that fell off.
-      sticky = 1'b0;
-      if (sh > 0) begin
-        // collect shifted-out bits from c_extended's low sh bits
-        for (i = 0; i < SUM_W; i = i + 1) begin
-          if (i < sh) sticky = sticky | c_extended[i];
-        end
-      end
-      s3_prod_lane_comb = p_extended;
-      s3_c_lane_comb    = shifted | {{(SUM_W-1){1'b0}}, sticky};
-      s3_base_exp_comb  = s3_prod_exp;
+      s3a_sh_comb           = 8'(sh);
+      s3a_shift_src_comb    = c_extended;
+      s3a_passthrough_comb  = p_extended;
+      s3a_shift_is_c_comb   = 1'b1;
+      s3a_base_exp_comb     = s3_prod_exp;
     end else begin
-      // addend > product: shift product right by -exp_diff.
+      // addend > product: keep c unshifted, shift product right by -exp_diff.
       shift_amt = -exp_diff;
       if (shift_amt > 14'(SUM_W - 1)) sh = SUM_W - 1;
       else                              sh = {22'd0, shift_amt[9:0]};
-      shifted = p_extended >> sh;
-      sticky = 1'b0;
+      s3a_sh_comb           = 8'(sh);
+      s3a_shift_src_comb    = p_extended;
+      s3a_passthrough_comb  = c_extended;
+      s3a_shift_is_c_comb   = 1'b0;
+      s3a_base_exp_comb     = s3_c_exp;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // S3 -> S3b register: latches pre-shift inputs so the 160-bit right-shift
+  // runs in its own clock cycle. Breaks the s3_c_exp -> barrel-shift cone.
+  // -------------------------------------------------------------------------
+  logic                 s3b_valid;
+  logic                 s3b_special;
+  logic [63:0]          s3b_special_result;
+  logic [4:0]           s3b_special_flags;
+  logic                 s3b_fmt_d;
+  logic [2:0]           s3b_rm;
+  logic                 s3b_prod_sign;
+  logic                 s3b_addend_sign;
+  logic signed [12:0]   s3b_base_exp;
+  logic                 s3b_eff_sub;
+  logic [7:0]           s3b_sh;
+  logic [SUM_W-1:0]     s3b_shift_src;
+  logic [SUM_W-1:0]     s3b_passthrough;
+  logic                 s3b_shift_is_c;
+  logic                 s3b_zero_shift;
+  logic                 s3b_prod_zero_flag;
+  logic                 s3b_c_zero_flag;
+  fpu_tag_t             s3b_tag;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s3b_regs
+    if (!rst_ni) begin
+      s3b_valid          <= 1'b0;
+      s3b_special        <= 1'b0;
+      s3b_special_result <= '0;
+      s3b_special_flags  <= '0;
+      s3b_fmt_d          <= 1'b0;
+      s3b_rm             <= '0;
+      s3b_prod_sign      <= 1'b0;
+      s3b_addend_sign    <= 1'b0;
+      s3b_base_exp       <= '0;
+      s3b_eff_sub        <= 1'b0;
+      s3b_sh             <= '0;
+      s3b_shift_src      <= '0;
+      s3b_passthrough    <= '0;
+      s3b_shift_is_c     <= 1'b0;
+      s3b_zero_shift     <= 1'b0;
+      s3b_prod_zero_flag <= 1'b0;
+      s3b_c_zero_flag    <= 1'b0;
+      s3b_tag            <= '0;
+    end else begin
+      s3b_valid          <= flush_i ? 1'b0 : s3_valid;
+      s3b_special        <= s3_special;
+      s3b_special_result <= s3_special_result;
+      s3b_special_flags  <= s3_special_flags;
+      s3b_fmt_d          <= s3_fmt_d;
+      s3b_rm             <= s3_rm;
+      s3b_prod_sign      <= s3_prod_sign;
+      s3b_addend_sign    <= s3_addend_sign;
+      s3b_base_exp       <= s3a_base_exp_comb;
+      s3b_eff_sub        <= s3a_eff_sub_comb;
+      s3b_sh             <= s3a_sh_comb;
+      s3b_shift_src      <= s3a_shift_src_comb;
+      s3b_passthrough    <= s3a_passthrough_comb;
+      s3b_shift_is_c     <= s3a_shift_is_c_comb;
+      s3b_zero_shift     <= s3a_zero_shift_comb;
+      s3b_prod_zero_flag <= s3a_prod_zero_comb;
+      s3b_c_zero_flag    <= s3a_c_zero_comb;
+      s3b_tag            <= s3_tag;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // S3b combinational: perform the 160-bit right-shift + sticky collection.
+  // Outputs s3b_prod_lane_comb / s3b_c_lane_comb consumed by the S4 register.
+  // -------------------------------------------------------------------------
+  logic [SUM_W-1:0]     s3b_prod_lane_comb;
+  logic [SUM_W-1:0]     s3b_c_lane_comb;
+  logic signed [12:0]   s3b_base_exp_out_comb;
+  logic                 s3b_eff_sub_out_comb;
+
+  always_comb begin : proc_s3b_shift
+    logic [SUM_W-1:0] shifted;
+    logic             sticky;
+    int unsigned      i;
+    int unsigned      sh;
+
+    shifted = '0;
+    sticky  = 1'b0;
+    sh      = {24'd0, s3b_sh};
+
+    s3b_eff_sub_out_comb  = s3b_eff_sub;
+    s3b_base_exp_out_comb = s3b_base_exp;
+
+    if (s3b_zero_shift) begin
+      // One side was zero: no shift; route passthrough, force the other side to 0.
+      if (s3b_prod_zero_flag) begin
+        s3b_prod_lane_comb = '0;
+        s3b_c_lane_comb    = s3b_passthrough;
+      end else begin
+        // Treated as c_zero
+        s3b_prod_lane_comb = s3b_passthrough;
+        s3b_c_lane_comb    = '0;
+      end
+    end else begin
+      // Perform the shift and collect sticky.
+      shifted = s3b_shift_src >> sh;
       if (sh > 0) begin
         for (i = 0; i < SUM_W; i = i + 1) begin
-          if (i < sh) sticky = sticky | p_extended[i];
+          if (i < sh) sticky = sticky | s3b_shift_src[i];
         end
       end
-      s3_prod_lane_comb = shifted | {{(SUM_W-1){1'b0}}, sticky};
-      s3_c_lane_comb    = c_extended;
-      s3_base_exp_comb  = s3_c_exp;
+
+      if (s3b_shift_is_c) begin
+        // Shifted operand is c; product is passthrough.
+        s3b_prod_lane_comb = s3b_passthrough;
+        s3b_c_lane_comb    = shifted | {{(SUM_W-1){1'b0}}, sticky};
+      end else begin
+        // Shifted operand is product; c is passthrough.
+        s3b_prod_lane_comb = shifted | {{(SUM_W-1){1'b0}}, sticky};
+        s3b_c_lane_comb    = s3b_passthrough;
+      end
     end
   end
 
@@ -558,7 +666,7 @@ module kronos_fpu_fma
   logic              s4b_prod_sign;
   fpu_tag_t          s4b_tag;
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s4_regs
     if (!rst_ni) begin
       s4_valid          <= 1'b0;
       s4_special        <= 1'b0;
@@ -574,19 +682,19 @@ module kronos_fpu_fma
       s4_eff_sub        <= 1'b0;
       s4_tag            <= '0;
     end else begin
-      s4_valid          <= flush_i ? 1'b0 : s3_valid;
-      s4_special        <= s3_special;
-      s4_special_result <= s3_special_result;
-      s4_special_flags  <= s3_special_flags;
-      s4_fmt_d          <= s3_fmt_d;
-      s4_rm             <= s3_rm;
-      s4_prod_sign      <= s3_prod_sign;
-      s4_addend_sign    <= s3_addend_sign;
-      s4_base_exp       <= s3_base_exp_comb;
-      s4_prod_lane      <= s3_prod_lane_comb;
-      s4_c_lane         <= s3_c_lane_comb;
-      s4_eff_sub        <= s3_eff_sub_comb;
-      s4_tag            <= s3_tag;
+      s4_valid          <= flush_i ? 1'b0 : s3b_valid;
+      s4_special        <= s3b_special;
+      s4_special_result <= s3b_special_result;
+      s4_special_flags  <= s3b_special_flags;
+      s4_fmt_d          <= s3b_fmt_d;
+      s4_rm             <= s3b_rm;
+      s4_prod_sign      <= s3b_prod_sign;
+      s4_addend_sign    <= s3b_addend_sign;
+      s4_base_exp       <= s3b_base_exp_out_comb;
+      s4_prod_lane      <= s3b_prod_lane_comb;
+      s4_c_lane         <= s3b_c_lane_comb;
+      s4_eff_sub        <= s3b_eff_sub_out_comb;
+      s4_tag            <= s3b_tag;
     end
   end
 

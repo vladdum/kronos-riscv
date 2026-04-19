@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 module kronos_fpu_scoreboard #(
-  parameter int unsigned DEPTH = 8  // max FPU latency (FMA=8)
+  parameter int unsigned DEPTH = 9  // max FPU latency (FMA=9)
 ) (
   input  logic       clk_i,
   input  logic       rst_ni,
@@ -65,6 +65,7 @@ module kronos_fpu_scoreboard #(
       4'd6:    begin target_fp = slots_q[5].fp; target_intr = slots_q[5].intr; end
       4'd7:    begin target_fp = slots_q[6].fp; target_intr = slots_q[6].intr; end
       4'd8:    begin target_fp = slots_q[7].fp; target_intr = slots_q[7].intr; end
+      4'd9:    begin target_fp = slots_q[8].fp; target_intr = slots_q[8].intr; end
       default: begin target_fp = 1'b0;          target_intr = 1'b0;            end
     endcase
 
@@ -100,6 +101,8 @@ module kronos_fpu_scoreboard #(
                        slots_n[6].intr = slots_n[6].intr | int_dest_i; end
         4'd8:    begin slots_n[7].fp = slots_n[7].fp | fp_dest_i;
                        slots_n[7].intr = slots_n[7].intr | int_dest_i; end
+        4'd9:    begin slots_n[8].fp = slots_n[8].fp | fp_dest_i;
+                       slots_n[8].intr = slots_n[8].intr | int_dest_i; end
         default: ; // latency out of range, do nothing
       endcase
     end
@@ -116,6 +119,7 @@ module kronos_fpu_scoreboard #(
       4'd6:    late_target_fp = slots_q[5].fp;
       4'd7:    late_target_fp = slots_q[6].fp;
       4'd8:    late_target_fp = slots_q[7].fp;
+      4'd9:    late_target_fp = slots_q[8].fp;
       default: late_target_fp = 1'b0;
     endcase
 
@@ -134,6 +138,7 @@ module kronos_fpu_scoreboard #(
         4'd6:    slots_n[5].fp = slots_n[5].fp | late_fp_dest_i;
         4'd7:    slots_n[6].fp = slots_n[6].fp | late_fp_dest_i;
         4'd8:    slots_n[7].fp = slots_n[7].fp | late_fp_dest_i;
+        4'd9:    slots_n[8].fp = slots_n[8].fp | late_fp_dest_i;
         default: ; // latency out of range, do nothing
       endcase
     end

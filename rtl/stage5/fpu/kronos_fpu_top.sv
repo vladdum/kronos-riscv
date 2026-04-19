@@ -11,7 +11,7 @@
 //   FCVT   3  (FCVT.*.* integer↔FP conversions)
 //   FADD   6  (FADD, FSUB — extra S3b stage for timing closure at 148 MHz)
 //   FMUL   8  (FMUL — s1b+s1c pipeline stages added for DSP timing closure)
-//   FMA    8  (FMADD, FMSUB, FNMADD, FNMSUB — s2b re-latch for DSP timing closure)
+//   FMA    9  (FMADD, FMSUB, FNMADD, FNMSUB — s2b re-latch + s3b barrel-shift stage)
 //   ITER   variable (FDIV, FSQRT) — late-reservation via scoreboard
 //
 // busy_o is asserted when in_valid_i is high and the scoreboard detects a
@@ -80,7 +80,7 @@ module kronos_fpu_top
       end
       FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB: begin
         sel_fma          = 1'b1;
-        dispatch_latency = 4'd8;
+        dispatch_latency = 4'd9;
       end
       FP_FDIV, FP_FSQRT: begin
         sel_iter         = 1'b1;
@@ -103,7 +103,7 @@ module kronos_fpu_top
   logic iter_late_req, iter_late_fp_dest, iter_late_grant;
   logic iter_busy;
 
-  kronos_fpu_scoreboard #(.DEPTH(8)) u_scoreboard (
+  kronos_fpu_scoreboard #(.DEPTH(9)) u_scoreboard (
     .clk_i             (clk_i),
     .rst_ni            (rst_ni),
     .flush_i           (flush_i),
