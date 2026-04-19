@@ -50,9 +50,9 @@ module tb_fpu_fmisc;
 
     // ── FCLASS.D — all ten number categories ─────────────────────────────
     apply(FP_FCLASS, 1'b1, 64'h7FF4_0000_0000_0000, 64'h0); // sNaN.D
-    if (result[9] !== 1'b1) $fatal(1, "fclass.d sNaN: %h", result);
+    if (result[8] !== 1'b1) $fatal(1, "fclass.d sNaN: %h", result);
     apply(FP_FCLASS, 1'b1, 64'h7FF8_0000_0000_0000, 64'h0); // qNaN.D
-    if (result[8] !== 1'b1) $fatal(1, "fclass.d qNaN: %h", result);
+    if (result[9] !== 1'b1) $fatal(1, "fclass.d qNaN: %h", result);
     apply(FP_FCLASS, 1'b1, 64'hFFF0_0000_0000_0000, 64'h0); // -inf.D
     if (result[0] !== 1'b1) $fatal(1, "fclass.d -inf: %h", result);
     apply(FP_FCLASS, 1'b1, 64'h7FF0_0000_0000_0000, 64'h0); // +inf.D
@@ -72,9 +72,9 @@ module tb_fpu_fmisc;
 
     // ── FCLASS.S — all ten number categories (NaN-boxed) ─────────────────
     apply(FP_FCLASS, 1'b0, 64'hFFFF_FFFF_7FA0_0000, 64'h0); // sNaN.S
-    if (result[9] !== 1'b1) $fatal(1, "fclass.s sNaN: %h", result);
+    if (result[8] !== 1'b1) $fatal(1, "fclass.s sNaN: %h", result);
     apply(FP_FCLASS, 1'b0, 64'hFFFF_FFFF_7FC0_0000, 64'h0); // qNaN.S
-    if (result[8] !== 1'b1) $fatal(1, "fclass.s qNaN: %h", result);
+    if (result[9] !== 1'b1) $fatal(1, "fclass.s qNaN: %h", result);
     apply(FP_FCLASS, 1'b0, 64'hFFFF_FFFF_FF80_0000, 64'h0); // -inf.S
     if (result[0] !== 1'b1) $fatal(1, "fclass.s -inf: %h", result);
     apply(FP_FCLASS, 1'b0, 64'hFFFF_FFFF_7F80_0000, 64'h0); // +inf.S
@@ -193,9 +193,9 @@ module tb_fpu_fmisc;
     // zero: min(+0D, -0D) = -0D
     apply(FP_FMIN, 1'b1, 64'h0000_0000_0000_0000, 64'h8000_0000_0000_0000);
     if (!out_valid || result !== 64'h8000_0000_0000_0000) $fatal(1, "fmin.d +0/-0: %h", result);
-    // sNaN → canonical qNaN.D + NV
+    // sNaN → non-NaN operand + NV (per RISC-V spec: "result is the non-NaN operand")
     apply(FP_FMIN, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b1)
+    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b1)
       $fatal(1, "fmin.d sNaN: %h/%b", result, fflags);
     // qNaN a, number b → return b
     apply(FP_FMIN, 1'b1, 64'h7FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000);
@@ -211,9 +211,9 @@ module tb_fpu_fmisc;
     // zero: max(+0D, -0D) = +0D
     apply(FP_FMAX, 1'b1, 64'h0000_0000_0000_0000, 64'h8000_0000_0000_0000);
     if (!out_valid || result !== 64'h0000_0000_0000_0000) $fatal(1, "fmax.d +0/-0: %h", result);
-    // sNaN → canonical qNaN.D + NV
+    // sNaN → non-NaN operand + NV (per RISC-V spec: "result is the non-NaN operand")
     apply(FP_FMAX, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b1)
+    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b1)
       $fatal(1, "fmax.d sNaN: %h/%b", result, fflags);
     // qNaN a, number b → return b
     apply(FP_FMAX, 1'b1, 64'h7FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000);
@@ -303,11 +303,11 @@ module tb_fpu_fmisc;
         // Reference FLE.S: a <= b  iff  a < b  or  a == b (feq semantics)
         ref_fle = ref_flt | ref_feq;
 
-        // Reference FMIN.S (DUT behaviour: sNaN → canonical qNaN + NV;
-        // qNaN-only → non-NaN operand; -0 < +0 per IEEE 754-2008 minNum)
-        if (a_snan || b_snan) begin
-          ref_fmin = 32'h7FC0_0000;  // sNaN input → canonical qNaN
-        end else if (a_nan && b_nan) begin
+        // Reference FMIN.S per RISC-V spec:
+        // - Both NaN (any combo) → canonical qNaN
+        // - One NaN → the non-NaN operand (even if the NaN is signaling)
+        // - sNaN → also raise NV
+        if (a_nan && b_nan) begin
           ref_fmin = 32'h7FC0_0000;
         end else if (a_nan) begin
           ref_fmin = rb32;
@@ -322,10 +322,8 @@ module tb_fpu_fmisc;
           ref_fmin = rb32;
         end
 
-        // Reference FMAX.S: sNaN → canonical qNaN + NV; qNaN-only → non-NaN; +0 > -0
-        if (a_snan || b_snan) begin
-          ref_fmax = 32'h7FC0_0000;  // sNaN input → canonical qNaN
-        end else if (a_nan && b_nan) begin
+        // Reference FMAX.S per RISC-V spec: same NaN rules as FMIN.S
+        if (a_nan && b_nan) begin
           ref_fmax = 32'h7FC0_0000;
         end else if (a_nan) begin
           ref_fmax = rb32;

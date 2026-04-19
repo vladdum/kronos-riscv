@@ -495,7 +495,12 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
              sim-lsu-s1 sim-forward sim-hazard \
              sim-muldiv \
              sim-decompress sim-align sim-lsu-s3 sim-bpred \
-             sim-alu-s4 sim-decode-s4 sim-muldiv-s4 sim-lsu-s4
+             sim-alu-s4 sim-decode-s4 sim-muldiv-s4 sim-lsu-s4 \
+             sim-pkg-fp sim-hf-smoke sim-sf-smoke \
+             sim-fpu-scoreboard sim-regfile-fp sim-csr-fp sim-decode-fp sim-lsu-fp \
+             sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
+             sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc \
+             sim-fpu-iter sim-fpu-top sim-fpu-top-iter
 
 SIM_REPORT_DIR := $(OBJ_DIR)/sim-results
 

@@ -229,7 +229,7 @@ module tb_lsu_fp;
     end else
       $display("[FSW/FLW nanbox] OK: fp_rdata=%h", fp_rdata);
 
-    if (errors) $fatal(1, "tb_lsu_fp: %0d error(s)", errors);
+    if (errors != 0) $fatal(1, "tb_lsu_fp: %0d error(s)", errors);
     $display("tb_lsu_fp PASS");
     $finish;
   end
