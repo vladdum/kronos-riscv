@@ -144,7 +144,7 @@ module tb_fpu_top_iter;
       end
 
       // Collect both results (FADD arrives first at ~lat4, FDIV much later)
-      collect_valids(80, 2, collected, tags);
+      collect_valids(200, 2, collected, tags);
       if (collected < 2) begin
         $display("[blocking] FAIL: expected 2 out_valid pulses, got %0d", collected);
         errors++;
@@ -187,7 +187,7 @@ module tb_fpu_top_iter;
       dispatch(FP_FDIV, 1'b1, D_4_0, D_2_0, '0, tg_div);
 
       // Collect both results
-      collect_valids(80, 2, collected, tags);
+      collect_valids(200, 2, collected, tags);
       if (collected < 2) begin
         $display("[late-res] FAIL: expected 2 out_valid pulses, got %0d", collected);
         errors++;
@@ -231,7 +231,7 @@ module tb_fpu_top_iter;
       @(negedge clk); flush = 0;
 
       // Verify no writeback from the flushed FDIV
-      wait_out_valid(80, got);
+      wait_out_valid(200, got);
       if (got) begin
         $display("[flush] FAIL: out_valid fired after flush");
         errors++;
@@ -281,9 +281,9 @@ module tb_fpu_top_iter;
       dispatch(FP_FDIV, 1'b1, D_2_0, D_1_0, '0, tg1);
 
       // Wait for first to complete
-      wait_out_valid(80, got);
+      wait_out_valid(200, got);
       if (!got) begin
-        $display("[b2b] FAIL: first FDIV.D did not complete within 80 cycles");
+        $display("[b2b] FAIL: first FDIV.D did not complete within 200 cycles");
         errors++;
       end else begin
         if (tag_out.rd != tg1.rd) begin
@@ -300,9 +300,9 @@ module tb_fpu_top_iter;
         dispatch(FP_FDIV, 1'b1, D_4_0, D_2_0, '0, tg2);
 
         // Wait for second to complete
-        wait_out_valid(80, got);
+        wait_out_valid(200, got);
         if (!got) begin
-          $display("[b2b] FAIL: second FDIV.D did not complete within 80 cycles");
+          $display("[b2b] FAIL: second FDIV.D did not complete within 200 cycles");
           errors++;
         end else begin
           if (tag_out.rd != tg2.rd) begin

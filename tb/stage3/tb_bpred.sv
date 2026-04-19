@@ -30,13 +30,16 @@ module tb_bpred;
   always #5 clk = ~clk;
   task tick; @(posedge clk); #1; endtask
 
-  // update task: is_jal=0 for conditional branch, is_jal=1 for JAL
+  // update task: is_jal=0 for conditional branch, is_jal=1 for JAL.
+  // Two ticks are needed: tick 1 registers inputs into _q; tick 2 commits
+  // the _q values into BTB/counters (one-cycle update pipeline in DUT).
   task update(input logic [31:0] upc, input logic taken,
               input logic [31:0] tgt, input logic is_jal);
     upd_valid = 1; upd_pc = upc; upd_taken = taken;
     upd_target = tgt; upd_is_jal = is_jal;
     tick;
     upd_valid = 0;
+    tick;  // wait for _q values to commit into BTB / counters
   endtask
 
   initial begin

@@ -59,8 +59,8 @@ module tb_fpu_fma;
       c        = cin;
     @(negedge clk);
       in_valid = 0;
-    // 5-deep pipeline + output reg
-    repeat (6) @(posedge clk);
+    // 8-deep pipeline + output reg (S2b re-latch + S3b barrel-shift stage added)
+    repeat (8) @(posedge clk);
     #1;
   endtask
 
@@ -77,16 +77,16 @@ module tb_fpu_fma;
     sf_b = bs;
     sf_c = cs;
     unique case (o)
-      FP_FMADD:  begin sf_reset(); sf_r = sf_f32_mulAdd(sf_a, sf_b, sf_c, r); end
+      FP_FMADD:  begin sf_reset(); sf_r = sf_f32_mulAdd(sf_a, sf_b, sf_c, {5'b0, r}); end
       FP_FMSUB:  begin sf_reset();
-                       sf_r = sf_f32_mulAdd(sf_a, sf_b, {~sf_c[31], sf_c[30:0]}, r);
+                       sf_r = sf_f32_mulAdd(sf_a, sf_b, {~sf_c[31], sf_c[30:0]}, {5'b0, r});
                  end
       FP_FNMADD: begin sf_reset();
-                       sf_r = sf_f32_mulAdd({~sf_a[31], sf_a[30:0]}, sf_b, sf_c, r);
+                       sf_r = sf_f32_mulAdd({~sf_a[31], sf_a[30:0]}, sf_b,
+                                            {~sf_c[31], sf_c[30:0]}, {5'b0, r});
                  end
       FP_FNMSUB: begin sf_reset();
-                       sf_r = sf_f32_mulAdd({~sf_a[31], sf_a[30:0]}, sf_b,
-                                            {~sf_c[31], sf_c[30:0]}, r);
+                       sf_r = sf_f32_mulAdd({~sf_a[31], sf_a[30:0]}, sf_b, sf_c, {5'b0, r});
                  end
       default:   begin sf_r = '0; end
     endcase
@@ -107,16 +107,16 @@ module tb_fpu_fma;
     byte unsigned sf_f;
     apply5(o, 1'b1, r, ad, bd, cd);
     unique case (o)
-      FP_FMADD:  begin sf_reset(); sf_r = sf_f64_mulAdd(ad, bd, cd, r); end
+      FP_FMADD:  begin sf_reset(); sf_r = sf_f64_mulAdd(ad, bd, cd, {5'b0, r}); end
       FP_FMSUB:  begin sf_reset();
-                       sf_r = sf_f64_mulAdd(ad, bd, {~cd[63], cd[62:0]}, r);
+                       sf_r = sf_f64_mulAdd(ad, bd, {~cd[63], cd[62:0]}, {5'b0, r});
                  end
       FP_FNMADD: begin sf_reset();
-                       sf_r = sf_f64_mulAdd({~ad[63], ad[62:0]}, bd, cd, r);
+                       sf_r = sf_f64_mulAdd({~ad[63], ad[62:0]}, bd,
+                                            {~cd[63], cd[62:0]}, {5'b0, r});
                  end
       FP_FNMSUB: begin sf_reset();
-                       sf_r = sf_f64_mulAdd({~ad[63], ad[62:0]}, bd,
-                                            {~cd[63], cd[62:0]}, r);
+                       sf_r = sf_f64_mulAdd({~ad[63], ad[62:0]}, bd, cd, {5'b0, r});
                  end
       default:   begin sf_r = '0; end
     endcase
@@ -368,13 +368,13 @@ module tb_fpu_fma;
           // a and b exponents in [0x50, 0xB4] so that ea+eb-127 in [1, 0xE9] (always normal).
           // c exponent in [0x01, 0xFE] (any normal).
           for (iter = 0; iter < 200; iter++) begin
-            e8    = 8'($urandom_range(8'hB4, 8'h50));
+            e8    = 8'($urandom_range(32'hB4, 32'h50));
             raw32 = $urandom();
             ra32  = {raw32[31], e8, raw32[22:0]};
-            e8    = 8'($urandom_range(8'hB4, 8'h50));
+            e8    = 8'($urandom_range(32'hB4, 32'h50));
             raw32 = $urandom();
             rb32  = {raw32[31], e8, raw32[22:0]};
-            e8    = 8'($urandom_range(8'hFE, 8'h01));
+            e8    = 8'($urandom_range(32'hFE, 32'h01));
             raw32 = $urandom();
             rc32  = {raw32[31], e8, raw32[22:0]};
             apply5(rand_op, 1'b0, rm_i[2:0],
@@ -387,9 +387,9 @@ module tb_fpu_fma;
               FP_FMSUB:  sf_r32 = sf_f32_mulAdd(ra32, rb32,
                                     {~rc32[31], rc32[30:0]}, rm_i[7:0]);
               FP_FNMADD: sf_r32 = sf_f32_mulAdd({~ra32[31], ra32[30:0]}, rb32,
-                                    rc32, rm_i[7:0]);
-              FP_FNMSUB: sf_r32 = sf_f32_mulAdd({~ra32[31], ra32[30:0]}, rb32,
                                     {~rc32[31], rc32[30:0]}, rm_i[7:0]);
+              FP_FNMSUB: sf_r32 = sf_f32_mulAdd({~ra32[31], ra32[30:0]}, rb32,
+                                    rc32, rm_i[7:0]);
               default:   sf_r32 = '0;
             endcase
             sf_f   = sf_exceptions();
@@ -405,13 +405,13 @@ module tb_fpu_fma;
           // a and b exponents in [0x200, 0x5FE] so ea+eb-1023 in [1, 0x7FB] (always normal).
           // c exponent in [0x001, 0x7FE] (any normal).
           for (iter = 0; iter < 200; iter++) begin
-            e11   = 11'($urandom_range(11'h5FE, 11'h200));
+            e11   = 11'($urandom_range(32'h5FE, 32'h200));
             raw64a = {32'($urandom()), 32'($urandom())};
             ra64  = {raw64a[63], e11, raw64a[51:0]};
-            e11   = 11'($urandom_range(11'h5FE, 11'h200));
+            e11   = 11'($urandom_range(32'h5FE, 32'h200));
             raw64b = {32'($urandom()), 32'($urandom())};
             rb64  = {raw64b[63], e11, raw64b[51:0]};
-            e11   = 11'($urandom_range(11'h7FE, 11'h001));
+            e11   = 11'($urandom_range(32'h7FE, 32'h001));
             raw64c = {32'($urandom()), 32'($urandom())};
             rc64  = {raw64c[63], e11, raw64c[51:0]};
             apply5(rand_op, 1'b1, rm_i[2:0], ra64, rb64, rc64);
@@ -421,9 +421,9 @@ module tb_fpu_fma;
               FP_FMSUB:  sf_r64 = sf_f64_mulAdd(ra64, rb64,
                                     {~rc64[63], rc64[62:0]}, rm_i[7:0]);
               FP_FNMADD: sf_r64 = sf_f64_mulAdd({~ra64[63], ra64[62:0]}, rb64,
-                                    rc64, rm_i[7:0]);
-              FP_FNMSUB: sf_r64 = sf_f64_mulAdd({~ra64[63], ra64[62:0]}, rb64,
                                     {~rc64[63], rc64[62:0]}, rm_i[7:0]);
+              FP_FNMSUB: sf_r64 = sf_f64_mulAdd({~ra64[63], ra64[62:0]}, rb64,
+                                    rc64, rm_i[7:0]);
               default:   sf_r64 = '0;
             endcase
             sf_f   = sf_exceptions();
