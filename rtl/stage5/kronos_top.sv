@@ -93,6 +93,8 @@ module kronos_top
   // STAGE3: fetch FSM
   typedef enum logic { FETCH_IDLE = 1'b0, FETCH_WAIT_R = 1'b1 } fetch_state_e;
   fetch_state_e fetch_state_q;
+  logic         fetch_stale_q;
+  logic         fetch_flush;
   logic         instr_fetch_stall;
   logic         combined_stall;
 
@@ -498,11 +500,12 @@ module kronos_top
     .clk_i               (clk_i),
     .rst_ni              (rst_ni),
     .rdata_i             (instr_axi_rsp_i.r.data),
-    .rvalid_i            ((fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid),
+    .rvalid_i            ((fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid
+                        & ~fetch_stale_q),
     .stall_i             (align_instr_valid & ~if_id_en),
-    .flush_i             (if_id_flush | (pred_taken & pc_en & ~ex_redirect & ~mem_redirect)),
-    .pc_offset_i         (ex_redirect  ? ex_pc_next[1]
-                        : mem_redirect ? ex_mem_q.pc_next[1]
+    .flush_i             (fetch_flush),
+    .pc_offset_i         (mem_redirect ? ex_mem_q.pc_next[1]
+                        : ex_redirect  ? ex_pc_next[1]
                         : pred_taken   ? pred_target[1]
                         :                pc_q[1]),
     .instr_o             (align_instr),
@@ -547,12 +550,14 @@ module kronos_top
   // IF stage — 2-state fetch FSM (identical to stage3)
   // =========================================================================
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) fetch_state_q <= FETCH_IDLE;
-    else begin
+    if (!rst_ni) begin
+      fetch_state_q <= FETCH_IDLE;
+    end else begin
       unique case (fetch_state_q)
-        FETCH_IDLE:
+        FETCH_IDLE: begin
           if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready)
             fetch_state_q <= FETCH_WAIT_R;
+        end
         FETCH_WAIT_R:
           if (instr_axi_rsp_i.r_valid) fetch_state_q <= FETCH_IDLE;
         default: fetch_state_q <= FETCH_IDLE;
@@ -846,6 +851,28 @@ module kronos_top
   assign bpred_mispredict_target = ex_mem_q.valid & ~ex_mem_q.redirect &
     ex_mem_q.pred_taken & (ex_mem_q.pred_target != ex_mem_q.pc_next);
   assign mem_redirect = bpred_mispredict_target;
+
+  // Any flush that redirects the fetch stream.
+  assign fetch_flush = if_id_flush | (pred_taken & pc_en & ~ex_redirect & ~mem_redirect);
+
+  // Stale-fetch tracking: mark an in-flight AR as stale when a redirect fires.
+  // Two cases:
+  //   (a) FETCH_IDLE + AR accepted + flush this cycle: the AR just accepted
+  //       carries old pc_q; redirect target is already latched by kronos_align.
+  //   (b) FETCH_WAIT_R + flush before r_valid: redirect fired mid-wait.
+  // In both cases the eventual r_valid must be drained without forwarding.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      fetch_stale_q <= 1'b0;
+    end else begin
+      if ((fetch_state_q == FETCH_IDLE &&
+           instr_axi_req_o.ar_valid && instr_axi_rsp_i.ar_ready && fetch_flush) ||
+          (fetch_state_q == FETCH_WAIT_R && fetch_flush && !instr_axi_rsp_i.r_valid))
+        fetch_stale_q <= 1'b1;
+      else if (fetch_stale_q && instr_axi_rsp_i.r_valid)
+        fetch_stale_q <= 1'b0;
+    end
+  end
 
   // =========================================================================
   // MEM stage — mem_done_q / lsu_rdata_latch handle pipeline stall bridging
