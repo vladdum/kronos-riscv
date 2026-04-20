@@ -521,6 +521,12 @@ sim-all: $(SF_LIB)
 	      echo "FAIL  compliance  ($$(grep 'Stage 4 regression:' $(SIM_REPORT_DIR)/compliance.log | tail -1))"; }; \
 	  fi; } > $(SIM_REPORT_DIR)/compliance.result & \
 	pids="$$pids $$!"; \
+	{ if $(MAKE) sim-s5 > $(SIM_REPORT_DIR)/sim-s5.log 2>&1; then \
+	    echo "PASS  sim-s5"; \
+	  else \
+	    echo "FAIL  sim-s5"; \
+	  fi; } > $(SIM_REPORT_DIR)/sim-s5.result & \
+	pids="$$pids $$!"; \
 	wait $$pids || true; \
 	printf "\n%-50s\n" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
 	printf "  sim-all results\n"; \
@@ -528,6 +534,7 @@ sim-all: $(SF_LIB)
 	for t in $(SIM_UNITS); do printf "  %s\n" "$$(cat $(SIM_REPORT_DIR)/$$t.result)"; done; \
 	printf "  %-48s\n" "──────────────────────────────────────────────────"; \
 	printf "  %s\n" "$$(cat $(SIM_REPORT_DIR)/compliance.result)"; \
+	printf "  %s\n" "$$(cat $(SIM_REPORT_DIR)/sim-s5.result)"; \
 	printf "%-50s\n\n" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
 	for f in $(SIM_REPORT_DIR)/*.result; do \
 	  if grep -q "^FAIL" $$f; then \

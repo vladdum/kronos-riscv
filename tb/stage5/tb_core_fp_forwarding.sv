@@ -196,7 +196,7 @@ module tb_core_fp_forwarding;
         wait (halted > 0);
       end
       begin : timeout
-        repeat (700) @(posedge clk);
+        for (int i = 0; i < 700; i++) @(posedge clk);
         $display("FAIL tb_core_fp_forwarding: timeout (no halt within 700 cycles)");
         errors++;
         $finish(1);
