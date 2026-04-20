@@ -3,12 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Stage 3: RV32IMC (C extension + branch predictor)
-# Paths are relative to the kronos-riscv rtl/ directory.
+# Paths are relative to this file's directory (rtl/).
 
-[packages]
 kronos_pkg.sv
-
-[rtl]
 stage0/kronos_alu.sv
 stage0/kronos_regfile.sv
 stage0/kronos_csr.sv

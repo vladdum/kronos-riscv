@@ -113,7 +113,8 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-fpu-top-iter \
         sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov \
         sim-fpu-fma-cov coverage \
-        sim-s5b
+        sim-s5b \
+        sim-group-s1s2 sim-group-s3s4 sim-group-fp-unit sim-group-fp-top
 
 .DEFAULT_GOAL := help
 
@@ -501,6 +502,33 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
              sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
              sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc \
              sim-fpu-iter sim-fpu-top sim-fpu-top-iter
+
+# ── CI test groups ────────────────────────────────────────────────────────────
+# Run as: make -j$(nproc) sim-group-<name>
+# Make's job server serialises shared prerequisites (e.g. $(SF_LIB)), so there
+# is no race between concurrent targets that both depend on softfloat.a.
+
+SIM_GROUP_S1S2    := sim-alu sim-regfile sim-decode \
+                     sim-lsu-s1 sim-forward sim-hazard sim-muldiv
+
+SIM_GROUP_S3S4    := sim-decompress sim-align sim-lsu-s3 sim-bpred \
+                     sim-alu-s4 sim-decode-s4 sim-muldiv-s4 sim-lsu-s4 \
+                     sim-compliance-s4
+
+SIM_GROUP_FP_UNIT := sim-pkg-fp sim-hf-smoke sim-sf-smoke \
+                     sim-fpu-scoreboard sim-regfile-fp sim-csr-fp sim-decode-fp sim-lsu-fp \
+                     sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
+                     sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc
+
+SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
+
+$(OBJ_DIR):
+	mkdir -p $@
+
+sim-group-s1s2:    $(SIM_GROUP_S1S2)    | $(OBJ_DIR)
+sim-group-s3s4:    $(SIM_GROUP_S3S4)    | $(OBJ_DIR)
+sim-group-fp-unit: $(SIM_GROUP_FP_UNIT) | $(OBJ_DIR)
+sim-group-fp-top:  $(SIM_GROUP_FP_TOP)  | $(OBJ_DIR)
 
 SIM_REPORT_DIR := $(OBJ_DIR)/sim-results
 

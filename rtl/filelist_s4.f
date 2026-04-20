@@ -3,12 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Stage 4: RV64IMAC (64-bit + A extension)
-# Paths are relative to the kronos-riscv rtl/ directory.
+# Paths are relative to this file's directory (rtl/).
 
-[packages]
 kronos_pkg.sv
-
-[rtl]
 stage0/kronos_regfile.sv
 stage1/kronos_forward.sv
 stage1/kronos_hazard.sv

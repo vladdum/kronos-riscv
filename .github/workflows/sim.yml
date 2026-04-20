@@ -7,8 +7,13 @@ on:
     branches: [main]
 
 jobs:
-  sim-all:
+  sim-units:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [s1s2, s3s4, fp-unit, fp-top]
+    name: sim-${{ matrix.group }}
 
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +30,22 @@ jobs:
       - name: Clone PULP AXI
         run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
 
-      - name: Run sim-all
-        run: make -C sim sim-all PULP_AXI_ROOT=/tmp/pulp_axi
+      - name: Run sim-${{ matrix.group }}
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim -j$(nproc) sim-group-${{ matrix.group }} PULP_AXI_ROOT=/tmp/pulp_axi
+
+  sim-all:
+    runs-on: ubuntu-latest
+    needs: sim-units
+    if: always()
+    steps:
+      - run: |
+          result="${{ needs.sim-units.result }}"
+          if [ "$result" != "success" ]; then
+            echo "sim-units result: $result"
+            exit 1
+          fi
 
   compliance:
     runs-on: ubuntu-latest
