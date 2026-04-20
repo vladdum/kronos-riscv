@@ -8,79 +8,27 @@ description: "kronos-riscv: BOOM-inspired RISC-V CPU core in SystemVerilog"
 filesets:
   files_rtl_s0:
     files:
-      - rtl/kronos_pkg.sv
-      - rtl/stage0/kronos_alu.sv
-      - rtl/stage0/kronos_decode.sv
-      - rtl/stage0/kronos_regfile.sv
-      - rtl/stage0/kronos_lsu.sv
-      - rtl/stage0/kronos_csr.sv
-      - rtl/stage0/kronos_top.sv
-    file_type: systemVerilogSource
+      - rtl/filelist_s0.f: {file_type: f}
 
   files_rtl_s1:
     files:
-      - rtl/kronos_pkg.sv
-      - rtl/stage0/kronos_alu.sv
-      - rtl/stage0/kronos_decode.sv
-      - rtl/stage0/kronos_regfile.sv
-      - rtl/stage0/kronos_csr.sv
-      - rtl/stage1/kronos_lsu.sv
-      - rtl/stage1/kronos_forward.sv
-      - rtl/stage1/kronos_hazard.sv
-      - rtl/stage1/kronos_top.sv
-    file_type: systemVerilogSource
+      - rtl/filelist_s1.f: {file_type: f}
 
   files_rtl_s2:
     files:
-      - rtl/kronos_pkg.sv
-      - rtl/stage0/kronos_alu.sv
-      - rtl/stage2/kronos_decode.sv
-      - rtl/stage0/kronos_regfile.sv
-      - rtl/stage0/kronos_csr.sv
-      - rtl/stage1/kronos_lsu.sv
-      - rtl/stage1/kronos_forward.sv
-      - rtl/stage1/kronos_hazard.sv
-      - rtl/stage2/kronos_muldiv.sv
-      - rtl/stage2/kronos_top.sv
-    file_type: systemVerilogSource
+      - rtl/filelist_s2.f: {file_type: f}
 
   files_rtl_s3:
     depend:
       - pulp-platform.org::axi:0.39.9
     files:
-      - rtl/kronos_pkg.sv
-      - rtl/stage0/kronos_alu.sv
-      - rtl/stage2/kronos_decode.sv
-      - rtl/stage0/kronos_regfile.sv
-      - rtl/stage0/kronos_csr.sv
-      - rtl/stage3/kronos_lsu.sv
-      - rtl/stage1/kronos_forward.sv
-      - rtl/stage1/kronos_hazard.sv
-      - rtl/stage2/kronos_muldiv.sv
-      - rtl/stage3/kronos_decompress.sv
-      - rtl/stage3/kronos_align.sv
-      - rtl/stage3/kronos_bpred.sv
-      - rtl/stage3/kronos_top.sv
-    file_type: systemVerilogSource
+      - rtl/filelist_s3.f: {file_type: f}
 
   files_rtl_s4:
     depend:
       - pulp-platform.org::axi:0.39.9
     files:
-      - rtl/kronos_pkg.sv
-      - rtl/stage4/kronos_alu.sv
-      - rtl/stage4/kronos_decode.sv
-      - rtl/stage0/kronos_regfile.sv
-      - rtl/stage4/kronos_csr.sv
-      - rtl/stage4/kronos_lsu.sv
-      - rtl/stage1/kronos_forward.sv
-      - rtl/stage1/kronos_hazard.sv
-      - rtl/stage4/kronos_muldiv.sv
-      - rtl/stage4/kronos_decompress.sv
-      - rtl/stage3/kronos_align.sv
-      - rtl/stage3/kronos_bpred.sv
-      - rtl/stage4/kronos_top.sv
-    file_type: systemVerilogSource
+      - rtl/filelist_s4.f: {file_type: f}
 
   files_lint_waivers:
     files:
@@ -90,31 +38,7 @@ filesets:
     depend:
       - pulp-platform.org::axi:0.39.9
     files:
-      - rtl/kronos_pkg.sv
-      - rtl/stage5/kronos_alu.sv
-      - rtl/stage5/kronos_decode.sv
-      - rtl/stage0/kronos_regfile.sv
-      - rtl/stage5/kronos_regfile_fp.sv
-      - rtl/stage5/kronos_csr.sv
-      - rtl/stage5/kronos_lsu.sv
-      - rtl/stage1/kronos_forward.sv
-      - rtl/stage1/kronos_hazard.sv
-      - rtl/stage5/kronos_muldiv.sv
-      - rtl/stage5/kronos_decompress.sv
-      - rtl/stage3/kronos_align.sv
-      - rtl/stage3/kronos_bpred.sv
-      - rtl/stage5/fpu/kronos_fpu_scoreboard.sv
-      - rtl/stage5/fpu/kronos_fpu_fmisc.sv
-      - rtl/stage5/fpu/kronos_fpu_fcvt.sv
-      - rtl/stage5/fpu/kronos_fpu_fadd.sv
-      - rtl/stage5/fpu/kronos_fpu_fmul.sv
-      - rtl/stage5/fpu/kronos_fpu_fma.sv
-      - rtl/stage5/fpu/kronos_fpu_fdiv_core.sv
-      - rtl/stage5/fpu/kronos_fpu_fsqrt_core.sv
-      - rtl/stage5/fpu/kronos_fpu_iter.sv
-      - rtl/stage5/fpu/kronos_fpu_top.sv
-      - rtl/stage5/kronos_top.sv
-    file_type: systemVerilogSource
+      - rtl/filelist_s5.f: {file_type: f}
 
   files_fpga_kv260:
     depend:
