@@ -201,7 +201,7 @@ module tb_core_fp_basic;
         wait (halted > 0);
       end
       begin : timeout
-        repeat (500) @(posedge clk);
+        for (int i = 0; i < 500; i++) @(posedge clk);
         $display("FAIL tb_core_fp_basic: timeout (no halt within 500 cycles)");
         errors++;
         $finish(1);

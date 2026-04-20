@@ -240,7 +240,8 @@ module kronos_top
   );
 
   // STAGE3: combined_stall — mem_stall | muldiv_stall | instr_fetch_stall | fpu_stall
-  assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
+  assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid
+                             & ~ex_redirect & ~mem_redirect;
   assign instr_fetch_stall = ~align_instr_valid;
   // fpu_dispatching: the FPU dispatch will fire this cycle.  Stall immediately
   // so the following instruction stays in IF/ID and can receive the FP result
@@ -318,7 +319,8 @@ module kronos_top
   kronos_muldiv u_muldiv (
     .clk_i     (clk_i),
     .rst_ni    (rst_ni),
-    .req_i     (id_ex_q.valid & id_ex_q.dec.is_muldiv & muldiv_idle & ~mem_stall),
+    .req_i     (id_ex_q.valid & id_ex_q.dec.is_muldiv & muldiv_idle & ~mem_stall
+               & ~ex_redirect & ~mem_redirect),
     .op_i      (id_ex_q.dec.muldiv_op),
     .a_i       (fwd_rs1_data),
     .b_i       (fwd_rs2_data),
