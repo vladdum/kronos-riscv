@@ -137,7 +137,7 @@ module kronos_lsu
   assign amo_b64     = amo_src_q;
 
   always_comb begin
-    amo_r32 = '0;
+    amo_r32 = {32{1'b0}};
     unique case (amo_funct5_q)
       5'b00001: amo_r32 = amo_b32;                                              // AMOSWAP
       5'b00000: amo_r32 = amo_a32 + amo_b32;                                    // AMOADD
@@ -150,12 +150,12 @@ module kronos_lsu
                                                                  : amo_b32;     // AMOMAX
       5'b11000: amo_r32 = (amo_a32 <  amo_b32) ? amo_a32 : amo_b32;             // AMOMINU
       5'b11100: amo_r32 = (amo_a32 >= amo_b32) ? amo_a32 : amo_b32;             // AMOMAXU
-      default:  amo_r32 = '0;
+      default:  amo_r32 = {32{1'b0}};
     endcase
   end
 
   always_comb begin
-    amo_new_val = '0;
+    amo_new_val = {64{1'b0}};
     if (amo_is_word) begin
       amo_new_val = {32'b0, amo_r32};
     end else begin
@@ -171,7 +171,7 @@ module kronos_lsu
                                                                        : amo_b64;
         5'b11000: amo_new_val = (amo_a64 <  amo_b64) ? amo_a64 : amo_b64;
         5'b11100: amo_new_val = (amo_a64 >= amo_b64) ? amo_a64 : amo_b64;
-        default:  amo_new_val = '0;
+        default:  amo_new_val = {64{1'b0}};
       endcase
     end
   end
@@ -190,7 +190,7 @@ module kronos_lsu
   assign raw_half      = rdata_shifted[15:0];
 
   always_comb begin
-    rdata_o = '0;
+    rdata_o = {64{1'b0}};
     if (is_sc_q) begin
       // SC returns 0 on success, 1 on failure in the destination register.
       rdata_o = {63'b0, sc_result_q};
@@ -203,7 +203,7 @@ module kronos_lsu
         3'b100:  rdata_o = {56'b0, raw_byte};                     // LBU
         3'b101:  rdata_o = {48'b0, raw_half};                     // LHU
         3'b110:  rdata_o = {32'b0, rdata_q};                      // LWU
-        default: rdata_o = '0;
+        default: rdata_o = {64{1'b0}};
       endcase
     end
   end
@@ -212,11 +212,11 @@ module kronos_lsu
   // fp_dest_rsp_o fires alongside valid_o for FP loads; the top-level pipeline
   // routes the result to the FP regfile instead of the integer regfile.
   always_comb begin
-    fp_rdata_o = '0;
+    fp_rdata_o = {64{1'b0}};
     unique case (funct3_q)
       3'b010: fp_rdata_o = {FP_NANBOX_UPPER, rdata_q};  // FLW: NaN-box
       3'b011: fp_rdata_o = {rdata_hi_q, rdata_q};       // FLD: full 64-bit
-      default: fp_rdata_o = '0;
+      default: fp_rdata_o = {64{1'b0}};
     endcase
   end
 
@@ -229,11 +229,11 @@ module kronos_lsu
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q             <= IDLE;
-      addr_q              <= '0;
-      wdata_q             <= '0;
-      funct3_q            <= '0;
-      rdata_q             <= '0;
-      rdata_hi_q          <= '0;
+      addr_q              <= {32{1'b0}};
+      wdata_q             <= {64{1'b0}};
+      funct3_q            <= 3'b0;
+      rdata_q             <= {32{1'b0}};
+      rdata_hi_q          <= {32{1'b0}};
       is_dword_q          <= 1'b0;
       fp_dest_q           <= 1'b0;
       aw_acked_q          <= 1'b0;
@@ -241,10 +241,10 @@ module kronos_lsu
       is_lr_q             <= 1'b0;
       is_sc_q             <= 1'b0;
       is_amo_q            <= 1'b0;
-      amo_funct5_q        <= '0;
-      amo_src_q           <= '0;
+      amo_funct5_q        <= 5'b0;
+      amo_src_q           <= {64{1'b0}};
       reservation_valid_q <= 1'b0;
-      reservation_addr_q  <= '0;
+      reservation_addr_q  <= {32{1'b0}};
       sc_result_q         <= 1'b0;
     end else begin
       unique case (state_q)

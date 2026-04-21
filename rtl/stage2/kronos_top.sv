@@ -167,19 +167,19 @@ module kronos_top
     .if_id_rs1_i      (id_dec.rs1),
     .if_id_rs2_used_i (id_dec.rs2_used),
     .if_id_rs2_i          (id_dec.rs2),
-    .id_ex_is_fp_load_i   ('0),
-    .if_id_rs1_fp_i       ('0),
-    .if_id_rs2_fp_i       ('0),
-    .if_id_rs3_fp_i       ('0),
+    .id_ex_is_fp_load_i   (1'b0),
+    .if_id_rs1_fp_i       (1'b0),
+    .if_id_rs2_fp_i       (1'b0),
+    .if_id_rs3_fp_i       (1'b0),
     .if_id_rs3_i          (5'd0),
     .if_id_is_jalr_i      (id_dec.is_jalr),
     .ex_mem_rd_i          (ex_mem_q.dec.rd),
     .ex_mem_rd_wen_i      (ex_mem_q.dec.rd_wen & ex_mem_q.valid),
     .ex_mem_valid_i       (ex_mem_q.valid),
-    .id_ex_is_frm_write_i ('0),
-    .if_id_fp_dyn_rm_i    ('0),
+    .id_ex_is_frm_write_i (1'b0),
+    .if_id_fp_dyn_rm_i    (1'b0),
     .ex_redirect_i        (ex_redirect),
-    .mem_redirect_i       ('0),
+    .mem_redirect_i       (1'b0),
     .mem_stall_i          (combined_stall),
     .pc_en_o              (pc_en),
     .if_id_en_o           (if_id_en),
@@ -407,7 +407,7 @@ module kronos_top
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mem_done_q    <= 1'b0;
-      lsu_rdata_latch <= '0;
+      lsu_rdata_latch <= {32{1'b0}};
     end else begin
       if (lsu_valid) begin
         mem_done_q    <= 1'b1;

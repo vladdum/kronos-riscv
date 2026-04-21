@@ -107,11 +107,11 @@ module kronos_csr #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mstatus  <= 32'h0000_1800; // MPP=11 (machine mode)
-      mie      <= '0;
-      mtvec    <= '0;
-      mscratch <= '0;
-      mepc     <= '0;
-      mcause   <= '0;
+      mie      <= {32{1'b0}};
+      mtvec    <= {32{1'b0}};
+      mscratch <= {32{1'b0}};
+      mepc     <= {32{1'b0}};
+      mcause   <= {32{1'b0}};
     end else begin
       // Trap entry (highest priority)
       if (trap_i) begin

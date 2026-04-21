@@ -291,8 +291,8 @@ module kronos_fpu_iter
 
   always_comb begin : proc_specials
     is_special     = 1'b0;
-    special_result = '0;
-    special_fflags = '0;
+    special_result = 64'h0;
+    special_fflags = 5'h0;
 
     // Result sign for FDIV: sign_a XOR sign_b; for FSQRT: sign_a
     sp_result_sign = (op_q == FP_FDIV) ? (a_class.sign ^ b_class.sign)
@@ -325,7 +325,7 @@ module kronos_fpu_iter
         // Any qNaN input -> qNaN, no flags
         is_special     = 1'b1;
         special_result = sp_qnan;
-        special_fflags = '0;
+        special_fflags = 5'h0;
       end else if (a_class.is_zero && b_class.is_zero) begin
         // 0 / 0 -> qNaN, NV
         is_special     = 1'b1;
@@ -341,7 +341,7 @@ module kronos_fpu_iter
         // Must precede b_class.is_zero so inf/0 does NOT raise DZ.
         is_special     = 1'b1;
         special_result = sp_signed_inf;
-        special_fflags = '0;
+        special_fflags = 5'h0;
       end else if (b_class.is_zero) begin
         // x / 0 (x finite non-zero) -> signed inf, DZ
         is_special     = 1'b1;
@@ -351,12 +351,12 @@ module kronos_fpu_iter
         // 0 / x (x finite, non-zero) -> signed zero
         is_special     = 1'b1;
         special_result = sp_signed_zero;
-        special_fflags = '0;
+        special_fflags = 5'h0;
       end else if (b_class.is_inf) begin
         // x / inf (x finite) -> signed zero
         is_special     = 1'b1;
         special_result = sp_signed_zero;
-        special_fflags = '0;
+        special_fflags = 5'h0;
       end
     end else begin
       // ---- FSQRT specials ----
@@ -369,17 +369,17 @@ module kronos_fpu_iter
         // qNaN -> qNaN
         is_special     = 1'b1;
         special_result = sp_qnan;
-        special_fflags = '0;
+        special_fflags = 5'h0;
       end else if (a_class.is_zero) begin
         // +0 -> +0, -0 -> -0
         is_special     = 1'b1;
         special_result = a_class.sign ? sp_nzero : sp_pzero;
-        special_fflags = '0;
+        special_fflags = 5'h0;
       end else if (a_class.is_inf && !a_class.sign) begin
         // +inf -> +inf
         is_special     = 1'b1;
         special_result = sp_pinf;
-        special_fflags = '0;
+        special_fflags = 5'h0;
       end else if (a_class.sign) begin
         // Negative (including -inf, -normal, -subnorm) -> qNaN, NV
         is_special     = 1'b1;
@@ -398,11 +398,11 @@ module kronos_fpu_iter
   logic signed [12:0] bias;
 
   always_comb begin : proc_normalize
-    a_norm     = '0;
-    b_norm     = '0;
-    a_sqrt     = '0;
-    a_true_exp = '0;
-    b_true_exp = '0;
+    a_norm     = 53'h0;
+    b_norm     = 53'h0;
+    a_sqrt     = 54'h0;
+    a_true_exp = 13'h0;
+    b_true_exp = 13'h0;
 
     bias = fmt_d_q ? 13'sd1023 : 13'sd127;
 
@@ -443,7 +443,7 @@ module kronos_fpu_iter
   logic               result_sign_comb;   // result sign (UNPACK2)
 
   always_comb begin : proc_result_exp
-    result_exp_comb  = '0;
+    result_exp_comb  = 13'h0;
     result_sign_comb = 1'b0;
 
     // Result sign: FDIV = sign_a ^ sign_b, FSQRT = 0 (negative caught as special).
@@ -508,28 +508,28 @@ module kronos_fpu_iter
 
   always_comb begin : proc_round1
     // Defaults
-    rnd_shifted    = '0;
-    rnd_adj_exp    = '0;
+    rnd_shifted    = 56'h0;
+    rnd_adj_exp    = 13'h0;
     rnd_sticky_shift = 1'b0;
-    rnd_mantissa   = '0;
+    rnd_mantissa   = 52'h0;
     rnd_lsb        = 1'b0;
     rnd_g          = 1'b0;
     rnd_r          = 1'b0;
     rnd_s          = 1'b0;
     rnd_tiny       = 1'b0;
-    rnd_mant_shifted = '0;
+    rnd_mant_shifted = 52'h0;
     rnd_new_lsb    = 1'b0;
     rnd_new_g      = 1'b0;
     rnd_new_r      = 1'b0;
     rnd_new_s      = 1'b0;
-    rnd_final_exp  = '0;
-    rnd_shift_amt  = '0;
-    rnd_combined_d = '0;
-    rnd_shifted_out_d = '0;
-    rnd_combined_shifted_d = '0;
-    rnd_combined_s = '0;
-    rnd_shifted_out_s = '0;
-    rnd_combined_shifted_s = '0;
+    rnd_final_exp  = 13'h0;
+    rnd_shift_amt  = 7'h0;
+    rnd_combined_d = 56'h0;
+    rnd_shifted_out_d = 56'h0;
+    rnd_combined_shifted_d = 56'h0;
+    rnd_combined_s = 27'h0;
+    rnd_shifted_out_s = 27'h0;
+    rnd_combined_shifted_s = 27'h0;
 
     // ------------------------------------------------------------------
     // 1. Post-normalization shift (FDIV only: if integer bit is 0)
@@ -619,12 +619,12 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_round1_latch
     if (!rst_ni) begin
-      rnd_mant_shifted_q <= '0;
+      rnd_mant_shifted_q <= 52'h0;
       rnd_new_lsb_q      <= 1'b0;
       rnd_new_g_q        <= 1'b0;
       rnd_new_r_q        <= 1'b0;
       rnd_new_s_q        <= 1'b0;
-      rnd_final_exp_q    <= '0;
+      rnd_final_exp_q    <= 13'h0;
       rnd_tiny_q         <= 1'b0;
     end else if (state_q == ROUND1) begin
       rnd_mant_shifted_q <= rnd_mant_shifted;
@@ -642,11 +642,11 @@ module kronos_fpu_iter
   // Reads ROUND1 latches; writes round_result / round_fflags
   // -----------------------------------------------------------------------
   always_comb begin : proc_round2
-    round_result        = '0;
-    round_fflags        = '0;
+    round_result        = 64'h0;
+    round_fflags        = 5'h0;
     rnd_round_up        = 1'b0;
     rnd_inexact         = 1'b0;
-    rnd_rounded_mant    = '0;
+    rnd_rounded_mant    = 53'h0;
     rnd_carry           = 1'b0;
     rnd_overflow        = 1'b0;
     rnd_overflow_to_inf = 1'b0;
@@ -687,7 +687,7 @@ module kronos_fpu_iter
       mant_pack = rnd_rounded_mant;
       if (rnd_carry) begin
         exp_pack  = rnd_final_exp_q + 13'sd1;
-        mant_pack = '0;
+        mant_pack = 53'h0;
       end
 
       // ----------------------------------------------------------------
@@ -847,8 +847,8 @@ module kronos_fpu_iter
       fmt_d_q <= 1'b0;
       rm_q    <= 3'b0;
       tag_q   <= '0;
-      a_raw_q <= '0;
-      b_raw_q <= '0;
+      a_raw_q <= 64'h0;
+      b_raw_q <= 64'h0;
     end else if (state_q == IDLE && in_valid_i) begin
       op_q    <= op_i;
       fmt_d_q <= fmt_d_i;
@@ -877,14 +877,14 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_unpack1_latch
     if (!rst_ni) begin
-      a_norm_q         <= '0;
-      b_norm_q         <= '0;
-      a_sqrt_q         <= '0;
-      a_true_exp_q     <= '0;
-      b_true_exp_q     <= '0;
+      a_norm_q         <= 53'h0;
+      b_norm_q         <= 53'h0;
+      a_sqrt_q         <= 54'h0;
+      a_true_exp_q     <= 13'h0;
+      b_true_exp_q     <= 13'h0;
       is_special_q     <= 1'b0;
-      special_result_q <= '0;
-      special_fflags_q <= '0;
+      special_result_q <= 64'h0;
+      special_fflags_q <= 5'h0;
     end else if (state_q == UNPACK1) begin
       a_norm_q         <= a_norm;
       b_norm_q         <= b_norm;
@@ -903,7 +903,7 @@ module kronos_fpu_iter
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_unpack2_latch
     if (!rst_ni) begin
       result_sign_q <= 1'b0;
-      result_exp_q  <= '0;
+      result_exp_q  <= 13'h0;
     end else if (state_q == UNPACK2 && !is_special_q) begin
       result_sign_q <= result_sign_comb;
       result_exp_q  <= result_exp_comb;
@@ -915,7 +915,7 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_raw_latch
     if (!rst_ni) begin
-      raw_q_q      <= '0;
+      raw_q_q      <= 56'h0;
       raw_sticky_q <= 1'b0;
     end else if (core_done) begin
       raw_q_q      <= raw_q;
@@ -928,8 +928,8 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_result_latch
     if (!rst_ni) begin
-      result_q <= '0;
-      fflags_q <= '0;
+      result_q <= 64'h0;
+      fflags_q <= 5'h0;
     end else if (state_q == UNPACK2 && is_special_q) begin
       result_q <= special_result_q;
       fflags_q <= special_fflags_q;

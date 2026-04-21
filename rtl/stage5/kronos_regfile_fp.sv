@@ -24,7 +24,7 @@ module kronos_regfile_fp (
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      for (int i = 0; i < 32; i++) rf[i] <= '0;
+      for (int i = 0; i < 32; i++) rf[i] <= {64{1'b0}};
     end else begin
       if (we_i) rf[wa_i] <= wd_i;
     end

@@ -161,7 +161,7 @@ module kronos_top
       WB_MEM:  rd_wdata = {{32{lsu_rdata[31]}},  lsu_rdata};
       WB_PC4:  rd_wdata = {32'b0, pc + 32'd4};
       WB_CSR:  rd_wdata = {32'b0, csr_rdata};
-      default: rd_wdata = '0;
+      default: rd_wdata = {64{1'b0}};
     endcase
   end
 

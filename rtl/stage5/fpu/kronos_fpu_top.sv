@@ -262,8 +262,8 @@ module kronos_fpu_top
   always_comb begin
     out_valid_o = fmisc_out_valid | fcvt_out_valid | fadd_out_valid
                 | fmul_out_valid  | fma_out_valid  | iter_out_valid;
-    result_o = '0;
-    fflags_o = '0;
+    result_o = 64'h0;
+    fflags_o = 5'h0;
     tag_o    = '0;
     if (fmisc_out_valid) begin
       result_o = fmisc_result;

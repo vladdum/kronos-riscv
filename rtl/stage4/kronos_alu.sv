@@ -18,8 +18,8 @@ module kronos_alu
   logic [31:0] result_32;
 
   always_comb begin
-    result_64 = '0;
-    result_32 = '0;
+    result_64 = {64{1'b0}};
+    result_32 = {32{1'b0}};
 
     unique case (op_i)
       ALU_ADD: begin
@@ -67,8 +67,8 @@ module kronos_alu
         result_32 = b_i[31:0];
       end
       default: begin
-        result_64 = '0;
-        result_32 = '0;
+        result_64 = {64{1'b0}};
+        result_32 = {32{1'b0}};
       end
     endcase
 

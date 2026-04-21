@@ -115,19 +115,19 @@ module kronos_muldiv
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q     <= IDLE;
-      result_q    <= '0;
-      product_q   <= '0;
-      mul_a_q     <= '0;
-      mul_b_q     <= '0;
+      result_q    <= {32{1'b0}};
+      product_q   <= {66{1'b0}};
+      mul_a_q     <= {32{1'b0}};
+      mul_b_q     <= {32{1'b0}};
       mul_op_q    <= MULDIV_MUL;
-      dividend_q  <= '0;
-      remainder_q <= '0;
-      quotient_q  <= '0;
-      abs_b_q     <= '0;
-      count_q     <= '0;
-      div_neg_q   <= '0;
-      rem_neg_q   <= '0;
-      is_rem_q    <= '0;
+      dividend_q  <= {32{1'b0}};
+      remainder_q <= {33{1'b0}};
+      quotient_q  <= {32{1'b0}};
+      abs_b_q     <= {32{1'b0}};
+      count_q     <= {6{1'b0}};
+      div_neg_q   <= 1'b0;
+      rem_neg_q   <= 1'b0;
+      is_rem_q    <= 1'b0;
     end else begin
       unique case (state_q)
 
@@ -174,8 +174,8 @@ module kronos_muldiv
                 end else begin
                   // Normal case: iterative restoring division
                   dividend_q  <= abs_a;
-                  remainder_q <= '0;
-                  quotient_q  <= '0;
+                  remainder_q <= {33{1'b0}};
+                  quotient_q  <= {32{1'b0}};
                   abs_b_q     <= abs_b;
                   div_neg_q   <= (op_i == MULDIV_DIV) & (a_i[31] ^ b_i[31]);
                   rem_neg_q   <= (op_i == MULDIV_REM) & a_i[31];
