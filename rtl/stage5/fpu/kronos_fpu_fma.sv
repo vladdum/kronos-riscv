@@ -193,8 +193,8 @@ module kronos_fpu_fma
 
     // ---------- Special-case resolution ----------
     s1_special        = 1'b0;
-    s1_special_result = '0;
-    s1_special_flags  = '0;
+    s1_special_result = 64'h0;
+    s1_special_flags  = 5'h0;
 
     if (s1_a_snan || s1_b_snan || s1_c_snan) begin
       s1_special              = 1'b1;
@@ -262,17 +262,17 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s2_valid          <= 1'b0;
       s2_special        <= 1'b0;
-      s2_special_result <= '0;
-      s2_special_flags  <= '0;
+      s2_special_result <= 64'h0;
+      s2_special_flags  <= 5'h0;
       s2_fmt_d          <= 1'b0;
-      s2_rm             <= '0;
+      s2_rm             <= 3'h0;
       s2_prod_sign      <= 1'b0;
       s2_addend_sign    <= 1'b0;
-      s2_prod_exp       <= '0;
-      s2_c_exp          <= '0;
-      s2_a_sig          <= '0;
-      s2_b_sig          <= '0;
-      s2_c_sig          <= '0;
+      s2_prod_exp       <= 13'h0;
+      s2_c_exp          <= 13'h0;
+      s2_a_sig          <= 53'h0;
+      s2_b_sig          <= 53'h0;
+      s2_c_sig          <= 53'h0;
       s2_prod_zero      <= 1'b0;
       s2_c_zero         <= 1'b0;
       s2_tag            <= '0;
@@ -322,17 +322,17 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s2b_valid          <= 1'b0;
       s2b_special        <= 1'b0;
-      s2b_special_result <= '0;
-      s2b_special_flags  <= '0;
+      s2b_special_result <= 64'h0;
+      s2b_special_flags  <= 5'h0;
       s2b_fmt_d          <= 1'b0;
-      s2b_rm             <= '0;
+      s2b_rm             <= 3'h0;
       s2b_prod_sign      <= 1'b0;
       s2b_addend_sign    <= 1'b0;
-      s2b_prod_exp       <= '0;
-      s2b_c_exp          <= '0;
-      s2b_a_sig          <= '0;
-      s2b_b_sig          <= '0;
-      s2b_c_sig          <= '0;
+      s2b_prod_exp       <= 13'h0;
+      s2b_c_exp          <= 13'h0;
+      s2b_a_sig          <= 53'h0;
+      s2b_b_sig          <= 53'h0;
+      s2b_c_sig          <= 53'h0;
       s2b_prod_zero      <= 1'b0;
       s2b_c_zero         <= 1'b0;
       s2b_tag            <= '0;
@@ -386,16 +386,16 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s3_valid          <= 1'b0;
       s3_special        <= 1'b0;
-      s3_special_result <= '0;
-      s3_special_flags  <= '0;
+      s3_special_result <= 64'h0;
+      s3_special_flags  <= 5'h0;
       s3_fmt_d          <= 1'b0;
-      s3_rm             <= '0;
+      s3_rm             <= 3'h0;
       s3_prod_sign      <= 1'b0;
       s3_addend_sign    <= 1'b0;
-      s3_prod_exp       <= '0;
-      s3_c_exp          <= '0;
-      s3_product        <= '0;
-      s3_c_sig          <= '0;
+      s3_prod_exp       <= 13'h0;
+      s3_c_exp          <= 13'h0;
+      s3_product        <= {PROD_W{1'b0}};
+      s3_c_sig          <= 53'h0;
       s3_prod_zero      <= 1'b0;
       s3_c_zero         <= 1'b0;
       s3_tag            <= '0;
@@ -454,14 +454,14 @@ module kronos_fpu_fma
     int unsigned        sh;
 
     // Defaults.
-    exp_diff              = '0;
-    shift_amt             = '0;
+    exp_diff              = 14'h0;
+    shift_amt             = 14'h0;
     sh                    = 0;
-    s3a_base_exp_comb     = '0;
+    s3a_base_exp_comb     = 13'h0;
     s3a_eff_sub_comb      = 1'b0;
-    s3a_sh_comb           = '0;
-    s3a_shift_src_comb    = '0;
-    s3a_passthrough_comb  = '0;
+    s3a_sh_comb           = 8'h0;
+    s3a_shift_src_comb    = {SUM_W{1'b0}};
+    s3a_passthrough_comb  = {SUM_W{1'b0}};
     s3a_shift_is_c_comb   = 1'b0;
     s3a_zero_shift_comb   = 1'b0;
     s3a_prod_zero_comb    = 1'b0;
@@ -473,7 +473,7 @@ module kronos_fpu_fma
     p_extended = {1'b0, s3_product, {(PAD_W-1){1'b0}}};
 
     // Place addend's hidden bit at SUM_W-3, left-justified with s3_c_sig.
-    c_extended = '0;
+    c_extended = {SUM_W{1'b0}};
     c_extended[(SUM_W-3) -: SIG_W] = s3_c_sig;
 
     exp_diff = s3_prod_exp - s3_c_exp;
@@ -482,14 +482,14 @@ module kronos_fpu_fma
       // Product is zero: result is just the addend. No shift needed; pass c through.
       s3a_prod_zero_comb    = 1'b1;
       s3a_zero_shift_comb   = 1'b1;
-      s3a_shift_src_comb    = '0;
+      s3a_shift_src_comb    = {SUM_W{1'b0}};
       s3a_passthrough_comb  = c_extended;
       s3a_shift_is_c_comb   = 1'b0;  // passthrough goes to c_lane; prod_lane forced 0 by flag
       s3a_base_exp_comb     = s3_c_exp;
     end else if (s3_c_zero) begin
       s3a_c_zero_comb       = 1'b1;
       s3a_zero_shift_comb   = 1'b1;
-      s3a_shift_src_comb    = '0;
+      s3a_shift_src_comb    = {SUM_W{1'b0}};
       s3a_passthrough_comb  = p_extended;
       s3a_shift_is_c_comb   = 1'b1;  // passthrough goes to prod_lane
       s3a_base_exp_comb     = s3_prod_exp;
@@ -543,17 +543,17 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s3b_valid          <= 1'b0;
       s3b_special        <= 1'b0;
-      s3b_special_result <= '0;
-      s3b_special_flags  <= '0;
+      s3b_special_result <= 64'h0;
+      s3b_special_flags  <= 5'h0;
       s3b_fmt_d          <= 1'b0;
-      s3b_rm             <= '0;
+      s3b_rm             <= 3'h0;
       s3b_prod_sign      <= 1'b0;
       s3b_addend_sign    <= 1'b0;
-      s3b_base_exp       <= '0;
+      s3b_base_exp       <= 13'h0;
       s3b_eff_sub        <= 1'b0;
-      s3b_sh             <= '0;
-      s3b_shift_src      <= '0;
-      s3b_passthrough    <= '0;
+      s3b_sh             <= 8'h0;
+      s3b_shift_src      <= {SUM_W{1'b0}};
+      s3b_passthrough    <= {SUM_W{1'b0}};
       s3b_shift_is_c     <= 1'b0;
       s3b_zero_shift     <= 1'b0;
       s3b_prod_zero_flag <= 1'b0;
@@ -596,7 +596,7 @@ module kronos_fpu_fma
     int unsigned      i;
     int unsigned      sh;
 
-    shifted = '0;
+    shifted = {SUM_W{1'b0}};
     sticky  = 1'b0;
     sh      = {24'd0, s3b_sh};
 
@@ -606,12 +606,12 @@ module kronos_fpu_fma
     if (s3b_zero_shift) begin
       // One side was zero: no shift; route passthrough, force the other side to 0.
       if (s3b_prod_zero_flag) begin
-        s3b_prod_lane_comb = '0;
+        s3b_prod_lane_comb = {SUM_W{1'b0}};
         s3b_c_lane_comb    = s3b_passthrough;
       end else begin
         // Treated as c_zero
         s3b_prod_lane_comb = s3b_passthrough;
-        s3b_c_lane_comb    = '0;
+        s3b_c_lane_comb    = {SUM_W{1'b0}};
       end
     end else begin
       // Perform the shift and collect sticky.
@@ -670,15 +670,15 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s4_valid          <= 1'b0;
       s4_special        <= 1'b0;
-      s4_special_result <= '0;
-      s4_special_flags  <= '0;
+      s4_special_result <= 64'h0;
+      s4_special_flags  <= 5'h0;
       s4_fmt_d          <= 1'b0;
-      s4_rm             <= '0;
+      s4_rm             <= 3'h0;
       s4_prod_sign      <= 1'b0;
       s4_addend_sign    <= 1'b0;
-      s4_base_exp       <= '0;
-      s4_prod_lane      <= '0;
-      s4_c_lane         <= '0;
+      s4_base_exp       <= 13'h0;
+      s4_prod_lane      <= {SUM_W{1'b0}};
+      s4_c_lane         <= {SUM_W{1'b0}};
       s4_eff_sub        <= 1'b0;
       s4_tag            <= '0;
     end else begin
@@ -709,11 +709,11 @@ module kronos_fpu_fma
   always_comb begin
     logic [SUM_W-1:0] diff;
 
-    diff = '0;
-    s4_sum_comb      = '0;
+    diff = {SUM_W{1'b0}};
+    s4_sum_comb      = {(SUM_W+1){1'b0}};
     s4_res_sign_comb = 1'b0;
     s4_zero_comb     = 1'b0;
-    s4_mag_comb      = '0;
+    s4_mag_comb      = {SUM_W{1'b0}};
 
     if (!s4_eff_sub) begin
       s4_sum_comb = {1'b0, s4_prod_lane} + {1'b0, s4_c_lane};
@@ -731,7 +731,7 @@ module kronos_fpu_fma
       s4_mag_comb = diff;
     end
 
-    s4_zero_comb = (s4_mag_comb == '0);
+    s4_zero_comb = (s4_mag_comb == {SUM_W{1'b0}});
   end
 
   // Stage 4 -> Stage 4b register
@@ -739,14 +739,14 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s4b_valid          <= 1'b0;
       s4b_special        <= 1'b0;
-      s4b_special_result <= '0;
-      s4b_special_flags  <= '0;
+      s4b_special_result <= 64'h0;
+      s4b_special_flags  <= 5'h0;
       s4b_fmt_d          <= 1'b0;
-      s4b_rm             <= '0;
+      s4b_rm             <= 3'h0;
       s4b_res_sign       <= 1'b0;
       s4b_zero           <= 1'b0;
-      s4b_base_exp       <= '0;
-      s4b_mag            <= '0;
+      s4b_base_exp       <= 13'h0;
+      s4b_mag            <= {SUM_W{1'b0}};
       s4b_eff_sub        <= 1'b0;
       s4b_prod_sign      <= 1'b0;
       s4b_tag            <= '0;
@@ -783,7 +783,7 @@ module kronos_fpu_fma
     ref_pos_s = 13'(SUM_W - 3);  // 157
 
     s4b_msb_pos_comb  = 9'd0;
-    s4b_norm_exp_comb = '0;
+    s4b_norm_exp_comb = 13'h0;
 
     for (i = 0; i < SUM_W; i = i + 1) begin
       if (s4b_mag[i] && (m < $signed(i))) m = i;
@@ -791,7 +791,7 @@ module kronos_fpu_fma
 
     if (m < 0) begin
       s4b_msb_pos_comb  = 9'd0;
-      s4b_norm_exp_comb = '0;
+      s4b_norm_exp_comb = 13'h0;
     end else begin
       s4b_msb_pos_comb  = m[8:0];
       s4b_norm_exp_comb = s4b_base_exp + 13'(m) - ref_pos_s;
@@ -842,17 +842,17 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s5_valid          <= 1'b0;
       s5_special        <= 1'b0;
-      s5_special_result <= '0;
-      s5_special_flags  <= '0;
+      s5_special_result <= 64'h0;
+      s5_special_flags  <= 5'h0;
       s5_fmt_d          <= 1'b0;
-      s5_rm             <= '0;
+      s5_rm             <= 3'h0;
       s5_res_sign       <= 1'b0;
       s5_zero           <= 1'b0;
-      s5_norm_exp       <= '0;
-      s5_norm_mag       <= '0;
+      s5_norm_exp       <= 13'h0;
+      s5_norm_mag       <= {SUM_W{1'b0}};
       s5_eff_sub        <= 1'b0;
       s5_prod_sign      <= 1'b0;
-      s5_msb_pos        <= '0;
+      s5_msb_pos        <= 9'h0;
       s5_tag            <= '0;
     end else begin
       s5_valid          <= flush_i ? 1'b0 : s4b_valid;
@@ -899,24 +899,24 @@ module kronos_fpu_fma
 
     frac_w           = 0;
     bias             = 0;
-    emin             = '0;
-    mag              = '0;
-    exp              = '0;
-    exp_pre_tiny     = '0;
+    emin             = 13'h0;
+    mag              = {SUM_W{1'b0}};
+    exp              = 13'h0;
+    exp_pre_tiny     = 13'h0;
     tiny             = 1'b0;
     shift_right_amt  = 0;
     normal_shift     = 0;
     i                = 0;
-    pre_mag          = '0;
+    pre_mag          = {SUM_W{1'b0}};
 
-    s5_raw_sig_comb       = '0;
+    s5_raw_sig_comb       = 53'h0;
     s5_guard_comb         = 1'b0;
     s5_round_b_comb       = 1'b0;
     s5_sticky_comb        = 1'b0;
-    s5_exp_comb           = '0;
-    s5_exp_pre_tiny_comb  = '0;
+    s5_exp_comb           = 13'h0;
+    s5_exp_pre_tiny_comb  = 13'h0;
     s5_tiny_comb          = 1'b0;
-    s5_normal_shift_comb  = '0;
+    s5_normal_shift_comb  = 32'h0;
 
     if (!s5_special && !s5_zero) begin
       if (s5_fmt_d) begin
@@ -946,10 +946,10 @@ module kronos_fpu_fma
       end
 
       if (shift_right_amt >= SUM_W) begin
-        s5_raw_sig_comb  = '0;
+        s5_raw_sig_comb  = 53'h0;
         s5_guard_comb    = 1'b0;
         s5_round_b_comb  = 1'b0;
-        s5_sticky_comb   = (mag != '0);
+        s5_sticky_comb   = (mag != {SUM_W{1'b0}});
       end else begin
         pre_mag = mag >> shift_right_amt;
         s5_raw_sig_comb = pre_mag[52:0];
@@ -992,23 +992,23 @@ module kronos_fpu_fma
     if (!rst_ni) begin
       s5b_valid          <= 1'b0;
       s5b_special        <= 1'b0;
-      s5b_special_result <= '0;
-      s5b_special_flags  <= '0;
+      s5b_special_result <= 64'h0;
+      s5b_special_flags  <= 5'h0;
       s5b_fmt_d          <= 1'b0;
-      s5b_rm             <= '0;
+      s5b_rm             <= 3'h0;
       s5b_res_sign       <= 1'b0;
       s5b_zero           <= 1'b0;
       s5b_eff_sub        <= 1'b0;
       s5b_prod_sign      <= 1'b0;
-      s5b_exp            <= '0;
-      s5b_exp_pre_tiny   <= '0;
-      s5b_raw_sig        <= '0;
+      s5b_exp            <= 13'h0;
+      s5b_exp_pre_tiny   <= 13'h0;
+      s5b_raw_sig        <= 53'h0;
       s5b_guard          <= 1'b0;
       s5b_round_b        <= 1'b0;
       s5b_sticky         <= 1'b0;
       s5b_tiny           <= 1'b0;
-      s5b_mag            <= '0;
-      s5b_normal_shift   <= '0;
+      s5b_mag            <= {SUM_W{1'b0}};
+      s5b_normal_shift   <= 32'h0;
       s5b_tag            <= '0;
     end else begin
       s5b_valid          <= flush_i ? 1'b0 : s5_valid;
@@ -1063,26 +1063,26 @@ module kronos_fpu_fma
 
     frac_w       = 0;
     bias         = 0;
-    emin         = '0;
-    emax         = '0;
-    rounded_sig  = '0;
+    emin         = 13'h0;
+    emax         = 13'h0;
+    rounded_sig  = 54'h0;
     inexact      = 1'b0;
     overflow_ovf = 1'b0;
     round_up     = 1'b0;
-    final_exp    = '0;
-    final_sig    = '0;
-    exp_field_d  = '0;
-    exp_field_s  = '0;
-    raw_sig_n    = '0;
+    final_exp    = 13'h0;
+    final_sig    = 53'h0;
+    exp_field_d  = 11'h0;
+    exp_field_s  = 8'h0;
+    raw_sig_n    = 53'h0;
     guard_n      = 1'b0;
     round_n      = 1'b0;
     sticky_n     = 1'b0;
     round_up_n   = 1'b0;
     carry_n      = 1'b0;
-    pre_mag_n    = '0;
+    pre_mag_n    = {SUM_W{1'b0}};
     normal_shift = 0;
 
-    s5b_result_comb = '0;
+    s5b_result_comb = 64'h0;
     s5b_flags_comb  = s5b_special_flags;
 
     if (s5b_special) begin
@@ -1151,10 +1151,10 @@ module kronos_fpu_fma
         normal_shift = s5b_normal_shift;
         // verilator coverage_off
         if (normal_shift >= SUM_W) begin
-          raw_sig_n = '0;
+          raw_sig_n = 53'h0;
           guard_n   = 1'b0;
           round_n   = 1'b0;
-          sticky_n  = (s5b_mag != '0);
+          sticky_n  = (s5b_mag != {SUM_W{1'b0}});
         end else begin
           // verilator coverage_on
           pre_mag_n = s5b_mag >> normal_shift;
@@ -1260,8 +1260,8 @@ module kronos_fpu_fma
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       out_valid_o <= 1'b0;
-      result_o    <= '0;
-      fflags_o    <= '0;
+      result_o    <= 64'h0;
+      fflags_o    <= 5'h0;
       tag_o       <= '0;
     end else begin
       out_valid_o <= flush_i ? 1'b0 : s5b_valid;

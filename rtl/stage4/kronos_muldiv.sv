@@ -149,16 +149,16 @@ module kronos_muldiv
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q     <= IDLE;
-      result_q    <= '0;
-      dividend_q  <= '0;
-      remainder_q <= '0;
-      quotient_q  <= '0;
-      abs_b_q     <= '0;
-      count_q     <= '0;
-      div_neg_q   <= '0;
-      rem_neg_q   <= '0;
-      is_rem_q    <= '0;
-      word_op_q   <= '0;
+      result_q    <= {64{1'b0}};
+      dividend_q  <= {64{1'b0}};
+      remainder_q <= {65{1'b0}};
+      quotient_q  <= {64{1'b0}};
+      abs_b_q     <= {64{1'b0}};
+      count_q     <= {7{1'b0}};
+      div_neg_q   <= 1'b0;
+      rem_neg_q   <= 1'b0;
+      is_rem_q    <= 1'b0;
+      word_op_q   <= 1'b0;
     end else begin
       unique case (state_q)
 
@@ -235,8 +235,8 @@ module kronos_muldiv
                   // For word_op, left-align the 32-bit dividend into the
                   // upper 32 bits so the MSB-first shift consumes real bits.
                   dividend_q  <= word_op_i ? {abs_a[31:0], 32'd0} : abs_a;
-                  remainder_q <= '0;
-                  quotient_q  <= '0;
+                  remainder_q <= {65{1'b0}};
+                  quotient_q  <= {64{1'b0}};
                   abs_b_q     <= abs_b;
                   div_neg_q   <= (op_i == MULDIV_DIV) & (a_eff[63] ^ b_eff[63]);
                   rem_neg_q   <= (op_i == MULDIV_REM) & a_eff[63];

@@ -133,8 +133,8 @@ module kronos_fpu_fsqrt_core (
     q_n       = q_q;
     ctr_n     = ctr_q;
     ge        = 1'b0;
-    r_shifted = '0;
-    trial     = '0;
+    r_shifted = {R_W{1'b0}};
+    trial     = {R_W{1'b0}};
 
     unique case (state_q)
       ST_IDLE: begin
@@ -181,13 +181,13 @@ module kronos_fpu_fsqrt_core (
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q     <= ST_IDLE;
-      r_q         <= '0;
-      q_q         <= '0;
-      a_q         <= '0;
-      ctr_q       <= '0;
+      r_q         <= {R_W{1'b0}};
+      q_q         <= {Q_W{1'b0}};
+      a_q         <= 54'h0;
+      ctr_q       <= 7'h0;
       fmt_d_q     <= 1'b0;
-      r_shifted_q <= '0;
-      trial_q     <= '0;
+      r_shifted_q <= {R_W{1'b0}};
+      trial_q     <= {R_W{1'b0}};
       ge_q        <= 1'b0;
     end else begin
       state_q <= state_n;
@@ -204,9 +204,9 @@ module kronos_fpu_fsqrt_core (
       if (start_i && (state_q == ST_IDLE)) begin
         a_q     <= a_i;
         fmt_d_q <= fmt_d_i;
-        r_q     <= '0;
-        q_q     <= '0;
-        ctr_q   <= '0;
+        r_q     <= {R_W{1'b0}};
+        q_q     <= {Q_W{1'b0}};
+        ctr_q   <= 7'h0;
       end else begin
         r_q   <= r_n;
         q_q   <= q_n;

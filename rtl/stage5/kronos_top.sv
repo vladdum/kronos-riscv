@@ -481,7 +481,7 @@ module kronos_top
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       fp_result_valid_q <= 1'b0;
-      fp_result_q       <= '0;
+      fp_result_q       <= {64{1'b0}};
       fp_tag_q          <= '0;
     end else begin
       if (fpu_out_valid & combined_stall) begin
@@ -500,8 +500,8 @@ module kronos_top
   // Priority: FP load (MEM stage) > FP arithmetic WB
   always_comb begin
     fp_we = 1'b0;
-    fp_wa = '0;
-    fp_wd = '0;
+    fp_wa = 5'b0;
+    fp_wd = {64{1'b0}};
 
     if (lsu_valid & ex_mem_q.valid & ex_mem_q.dec.fp_load) begin
       // FP load: write NaN-boxed data directly
@@ -908,7 +908,7 @@ module kronos_top
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mem_done_q      <= 1'b0;
-      lsu_rdata_latch <= '0;
+      lsu_rdata_latch <= {64{1'b0}};
     end else begin
       if (lsu_valid) begin
         mem_done_q      <= 1'b1;

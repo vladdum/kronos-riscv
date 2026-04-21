@@ -45,7 +45,7 @@ module kronos_decompress (
   logic [5:0]  shamt;
 
   always_comb begin
-    instr32_o = '0;
+    instr32_o = {32{1'b0}};
     illegal_o = 1'b0;
 
     unique case (instr16_i[1:0])
@@ -59,7 +59,7 @@ module kronos_decompress (
           3'b000: begin  // C.ADDI4SPN → ADDI rd', x2, nzuimm
             uimm = {2'b0, instr16_i[10:7], instr16_i[12:11],
                     instr16_i[5], instr16_i[6], 2'b0};
-            if (uimm == '0) illegal_o = 1'b1;
+            if (uimm == {12{1'b0}}) illegal_o = 1'b1;
             else instr32_o = {uimm, 5'd2, 3'b000, rd_full, OP_IMM};
           end
 
@@ -126,11 +126,11 @@ module kronos_decompress (
             if (rd == 5'd2) begin  // C.ADDI16SP → ADDI x2, x2, nzimm
               nzimm = {{23{instr16_i[12]}}, instr16_i[4:3], instr16_i[5],
                        instr16_i[2], instr16_i[6], 4'b0};
-              if (nzimm == '0) illegal_o = 1'b1;
+              if (nzimm == {32{1'b0}}) illegal_o = 1'b1;
               else instr32_o = {nzimm[11:0], 5'd2, 3'b000, 5'd2, OP_IMM};
             end else begin  // C.LUI → LUI rd, nzimm
               nzimm = {{15{instr16_i[12]}}, instr16_i[6:2], 12'b0};
-              if (nzimm == '0) illegal_o = 1'b1;
+              if (nzimm == {32{1'b0}}) illegal_o = 1'b1;
               else instr32_o = {nzimm[31:12], rd, OP_LUI};
             end
           end

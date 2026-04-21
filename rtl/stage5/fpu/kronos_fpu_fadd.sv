@@ -70,11 +70,8 @@ module kronos_fpu_fadd
     int unsigned i;
     clz_sig = SIG_W;
     for (i = 0; i < SIG_W; i++) begin
-      if (x[SIG_W-1-i]) begin
-        // verilator coverage_off
+      if (x[SIG_W-1-i] && (clz_sig == SIG_W)) begin
         clz_sig = i;
-        break;
-        // verilator coverage_on
       end
     end
   endfunction
@@ -307,9 +304,9 @@ module kronos_fpu_fadd
       // Left-justify a 24-bit significand into SIG_W (56-bit) field.
       // For S, 53-bit equivalent: put the 24 bits at the top, zeros below.
       a_sig_sel = {(a_s_subn || a_s_zero) ? 1'b0 : 1'b1, a_s_mant,
-                   (SIG_W - 1 - 23)'('0)};
+                   {(SIG_W-1-23){1'b0}}};
       b_sig_sel = {(b_s_subn || b_s_zero) ? 1'b0 : 1'b1, b_s_mant,
-                   (SIG_W - 1 - 23)'('0)};
+                   {(SIG_W-1-23){1'b0}}};
     end
 
     // FSUB: logical sign flip on b at this stage.
@@ -350,7 +347,7 @@ module kronos_fpu_fadd
       both_zero_early   = a_zero_sel && b_zero_sel;
 
       s1_d.is_special  = 1'b0;
-      s1_d.special_res = '0;
+      s1_d.special_res = {64{1'b0}};
       s1_d.special_flg = 5'd0;
 
       if (a_nan_sel || b_nan_sel) begin
@@ -451,8 +448,8 @@ module kronos_fpu_fadd
       // only sticky.
       max_shift = SIG_W + 2;
       if (shift_amt > max_shift) begin
-        shifted      = '0;
-        sticky_extra = (small_raw != '0);
+        shifted      = {SIG_W{1'b0}};
+        sticky_extra = (small_raw != {SIG_W{1'b0}});
       end else begin
         // Shift right, OR-collect the bits that fall off into sticky_extra.
         shifted      = small_raw >> shift_amt;
@@ -497,11 +494,11 @@ module kronos_fpu_fadd
       logic                    result_zero;
       logic                    small_sticky;
 
-      sum_sig      = '0;
+      sum_sig      = {SIG_W{1'b0}};
       carry_out    = 1'b0;
       lzc          = 0;
-      norm_sig     = '0;
-      norm_exp     = '0;
+      norm_sig     = {SIG_W{1'b0}};
+      norm_exp     = {EXP_W{1'b0}};
       result_zero  = 1'b0;
       small_sticky = s2_q.small_sticky_extra;
 
@@ -528,7 +525,7 @@ module kronos_fpu_fadd
         s3_d.sticky  = norm_sig[0] | small_sticky;
         // Clear the sub-ULP bits in the stored significand (they were G/R/S).
         s3_d.res_sig[2:0] = 3'd0;
-        result_zero = (norm_sig == '0);
+        result_zero = (norm_sig == {SIG_W{1'b0}});
       end else begin
         // Subtraction: big - small. Include the extra sticky in the subtract as
         // a "borrow that would be used by sticky" — we handle it by subtracting
@@ -540,8 +537,8 @@ module kronos_fpu_fadd
         lzc = clz_sig(sum_sig);
         if (lzc == SIG_W) begin
           result_zero = 1'b1;
-          norm_sig    = '0;
-          norm_exp    = '0;
+          norm_sig    = {SIG_W{1'b0}};
+          norm_exp    = {EXP_W{1'b0}};
         end else begin
           result_zero = 1'b0;
           norm_sig    = sum_sig << lzc;
@@ -584,14 +581,14 @@ module kronos_fpu_fadd
 
     s3b_d             = '0;
     mant_w            = 0;
-    emin              = '0;
-    cur_exp           = '0;
-    cur_sig           = '0;
+    emin              = {EXP_W{1'b0}};
+    cur_exp           = {EXP_W{1'b0}};
+    cur_sig           = {SIG_W{1'b0}};
     g                 = 1'b0;
     r                 = 1'b0;
     st                = 1'b0;
     i                 = 0;
-    grs_vec           = '0;
+    grs_vec           = 3'b000;
     sh                = 0;
 
     s3b_d.valid       = s3_q.valid;
@@ -671,14 +668,14 @@ module kronos_fpu_fadd
 
     s4_d             = '0;
     mant_w           = 0;
-    emax             = '0;
-    cur_exp          = '0;
-    cur_sig          = '0;
+    emax             = {EXP_W{1'b0}};
+    cur_exp          = {EXP_W{1'b0}};
+    cur_sig          = {SIG_W{1'b0}};
     round_up         = 1'b0;
-    rounded_sig      = '0;
+    rounded_sig      = {SIG_W{1'b0}};
     carry_up         = 1'b0;
-    incremented      = '0;
-    mask_one         = '0;
+    incremented      = {(SIG_W+1){1'b0}};
+    mask_one         = {SIG_W{1'b0}};
 
     s4_d.valid       = s3b_q.valid;
     s4_d.fmt_d       = s3b_q.fmt_d;
@@ -712,7 +709,7 @@ module kronos_fpu_fadd
         default:   round_up = 1'b0;
       endcase
 
-      mask_one = '0;
+      mask_one = {SIG_W{1'b0}};
       mask_one[SIG_W - 1 - mant_w] = 1'b1;
       if (round_up)
         incremented = {1'b0, cur_sig} + {1'b0, mask_one};
@@ -749,14 +746,14 @@ module kronos_fpu_fadd
     logic [7:0]               out_expf_s;
     logic                     to_inf;
 
-    s5_result  = '0;
+    s5_result  = {64{1'b0}};
     s5_flags   = 5'd0;
     mant_w     = 0;
-    bias       = '0;
-    out_mant_d = '0;
-    out_mant_s = '0;
-    out_expf_d = '0;
-    out_expf_s = '0;
+    bias       = {EXP_W{1'b0}};
+    out_mant_d = {52{1'b0}};
+    out_mant_s = {23{1'b0}};
+    out_expf_d = {11{1'b0}};
+    out_expf_s = {8{1'b0}};
     to_inf     = 1'b0;
 
     if (s4_q.is_special) begin
@@ -840,8 +837,8 @@ module kronos_fpu_fadd
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       out_valid_o <= 1'b0;
-      result_o    <= '0;
-      fflags_o    <= '0;
+      result_o    <= {64{1'b0}};
+      fflags_o    <= {5{1'b0}};
       tag_o       <= '0;
     end else begin
       out_valid_o <= flush_i ? 1'b0 : s4_q.valid;

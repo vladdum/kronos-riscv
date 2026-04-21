@@ -69,7 +69,7 @@ module kronos_align (
   // Output logic (combinational)
   // -------------------------------------------------------------------------
   always_comb begin
-    instr_o            = '0;
+    instr_o            = {32{1'b0}};
     instr_valid_o      = 1'b0;
     is_16b_o           = 1'b0;
     align_stall_o      = need_upper_q;
@@ -124,14 +124,14 @@ module kronos_align (
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       buf_valid_q  <= 1'b0;
-      buf_data_q   <= '0;
+      buf_data_q   <= {16{1'b0}};
       need_upper_q <= 1'b0;
       skip_lower_q <= 1'b0;
       span_valid_q <= 1'b0;
-      span_instr_q <= '0;
+      span_instr_q <= {32{1'b0}};
     end else if (flush_i) begin
       buf_valid_q  <= 1'b0;
-      buf_data_q   <= '0;
+      buf_data_q   <= {16{1'b0}};
       need_upper_q <= 1'b0;
       skip_lower_q <= pc_offset_i;
       span_valid_q <= 1'b0;

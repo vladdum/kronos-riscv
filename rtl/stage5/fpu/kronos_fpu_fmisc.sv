@@ -223,8 +223,8 @@ module kronos_fpu_fmisc
   // Main combinational result computation
   // -------------------------------------------------------------------------
   always_comb begin
-    result_comb = '0;
-    fflags_comb = '0;
+    result_comb = {64{1'b0}};
+    fflags_comb = {5{1'b0}};
 
     unique case (op_i)
       // --- Sign injection ---
@@ -393,8 +393,8 @@ module kronos_fpu_fmisc
       end
 
       default: begin
-        result_comb = '0;
-        fflags_comb = '0;
+        result_comb = {64{1'b0}};
+        fflags_comb = {5{1'b0}};
       end
     endcase
   end
@@ -405,8 +405,8 @@ module kronos_fpu_fmisc
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       out_valid_o <= 1'b0;
-      result_o    <= '0;
-      fflags_o    <= '0;
+      result_o    <= {64{1'b0}};
+      fflags_o    <= {5{1'b0}};
       tag_o       <= '0;
     end else begin
       out_valid_o <= flush_i ? 1'b0 : in_valid_i;

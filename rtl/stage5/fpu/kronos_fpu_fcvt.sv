@@ -40,11 +40,8 @@ module kronos_fpu_fcvt
     integer i;
     clz64 = 64;
     for (i = 63; i >= 0; i = i - 1) begin
-      if (x[i]) begin
-        // verilator coverage_off
+      if (x[i] && (clz64 == 64)) begin
         clz64 = 63 - i;
-        break;
-        // verilator coverage_on
       end
     end
   endfunction
@@ -92,7 +89,7 @@ module kronos_fpu_fcvt
       s1_op_q    <= FP_FCVT_W_F;
       s1_fmt_d_q <= 1'b0;
       s1_rm_q    <= 3'd0;
-      s1_a_q     <= '0;
+      s1_a_q     <= {64{1'b0}};
       s1_tag_q   <= '0;
     end else begin
       s1_valid_q <= flush_i ? 1'b0 : in_valid_i;
@@ -211,10 +208,10 @@ module kronos_fpu_fcvt
     logic [6:0]  shift_r;
     logic [7:0]  frac_bits;
 
-    sig64     = '0;
-    frac_mask = '0;
-    shift_r   = '0;
-    frac_bits = '0;
+    sig64     = {64{1'b0}};
+    frac_mask = {64{1'b0}};
+    shift_r   = {7{1'b0}};
+    frac_bits = {8{1'b0}};
 
     if (src_is_s) begin
       unbiased_exp = $signed({5'd0, src_exp_s}) - 13'sd127;
@@ -241,7 +238,7 @@ module kronos_fpu_fcvt
       target_min = 64'd0;
     end
 
-    int_part     = '0;
+    int_part     = {64{1'b0}};
     rnd_g        = 1'b0;
     rnd_s        = 1'b0;
     rnd_lsb      = 1'b0;
@@ -256,7 +253,7 @@ module kronos_fpu_fcvt
       fpi_neg_of   = src_sign;
     end else if (!src_is_zero) begin
       if (unbiased_exp < 0) begin
-        int_part = '0;
+        int_part = {64{1'b0}};
         if (unbiased_exp == -13'sd1) begin
           rnd_g = 1'b1;
           rnd_s = |sig64[62:0];
@@ -421,9 +418,9 @@ module kronos_fpu_fcvt
     logic [22:0] subn_mant;
     logic [7:0]  subn_exp;
 
-    fs_flags = '0;
-    d_result = '0;
-    s_result = '0;
+    fs_flags = {5{1'b0}};
+    d_result = {64{1'b0}};
+    s_result = {32{1'b0}};
 
     if (s1_op_q == FP_FCVT_D_S) begin
       // Single -> Double (exact)
@@ -441,14 +438,14 @@ module kronos_fpu_fcvt
         integer k;
         logic [22:0] m;
         integer shift_amt;
+        logic found_k;
         m = sd_smant;
+        found_k = 1'b0;
         shift_amt = 22;
         for (k = 22; k >= 0; k = k - 1) begin
-          if (m[k]) begin
-            // verilator coverage_off
+          if (m[k] && !found_k) begin
             shift_amt = 22 - k;
-            break;
-            // verilator coverage_on
+            found_k = 1'b1;
           end
         end
         begin
@@ -506,7 +503,7 @@ module kronos_fpu_fcvt
           subn_sig24     = {1'b1, ds_dmant[51:29]};
 
           if (subn_shift_amt >= 10'd25) begin
-            subn_sig    = '0;
+            subn_sig    = {24{1'b0}};
             subn_g      = 1'b0;
             subn_sticky = (subn_sig24 != 24'd0) | (|ds_dmant[28:0]);
           end else begin
@@ -535,7 +532,7 @@ module kronos_fpu_fcvt
           if (subn_g | subn_sticky) fs_flags[FP_FFLAG_NX] = 1'b1;
 
           if (subn_rounded[23]) begin
-            subn_mant = '0;
+            subn_mant = {23{1'b0}};
             subn_exp  = 8'd1;
           end else begin
             subn_mant = subn_rounded[22:0];
@@ -593,10 +590,10 @@ module kronos_fpu_fcvt
 
       s2_ifp_isneg      <= 1'b0;
       s2_ifp_imag_zero  <= 1'b0;
-      s2_ifp_s_exp      <= '0;
-      s2_ifp_d_exp      <= '0;
-      s2_ifp_s_mant_pre <= '0;
-      s2_ifp_d_mant_pre <= '0;
+      s2_ifp_s_exp      <= {8{1'b0}};
+      s2_ifp_d_exp      <= {11{1'b0}};
+      s2_ifp_s_mant_pre <= {24{1'b0}};
+      s2_ifp_d_mant_pre <= {53{1'b0}};
       s2_ifp_s_round_up <= 1'b0;
       s2_ifp_d_round_up <= 1'b0;
       s2_ifp_s_inexact  <= 1'b0;
@@ -608,14 +605,14 @@ module kronos_fpu_fcvt
       s2_fpi_src_sign        <= 1'b0;
       s2_fpi_target_is_32b   <= 1'b0;
       s2_fpi_target_is_signed <= 1'b0;
-      s2_fpi_target_max      <= '0;
-      s2_fpi_target_min      <= '0;
-      s2_fpi_int_part        <= '0;
+      s2_fpi_target_max      <= {64{1'b0}};
+      s2_fpi_target_min      <= {64{1'b0}};
+      s2_fpi_int_part        <= {64{1'b0}};
       s2_fpi_round_up        <= 1'b0;
       s2_fpi_is_inexact      <= 1'b0;
 
-      s2_ds_result <= '0;
-      s2_ds_fflags <= '0;
+      s2_ds_result <= {64{1'b0}};
+      s2_ds_fflags <= {5{1'b0}};
     end else begin
       s2_valid_q <= flush_i ? 1'b0 : s1_valid_q;
       if (s1_valid_q) begin
@@ -674,9 +671,9 @@ module kronos_fpu_fcvt
     logic [4:0]  fpi_fflags;
 
     // Defaults (avoid latch inference)
-    signed_val      = '0;
-    s3_final_result = '0;
-    s3_final_fflags = '0;
+    signed_val      = {64{1'b0}};
+    s3_final_result = {64{1'b0}};
+    s3_final_fflags = {5{1'b0}};
 
     // --- INT -> FP rounding (7×CARRY8 for double; 4×CARRY8 for single) ---
     s_rounded = {1'b0, s2_ifp_s_mant_pre} + (s2_ifp_s_round_up ? 25'd1 : 25'd0);
@@ -698,7 +695,7 @@ module kronos_fpu_fcvt
       end
     end
 
-    ifp_fflags = '0;
+    ifp_fflags = {5{1'b0}};
     if (s2_fmt_d_q) begin
       ifp_result = d_bits;
       if (!s2_ifp_imag_zero && s2_ifp_d_inexact) ifp_fflags[FP_FFLAG_NX] = 1'b1;
@@ -712,8 +709,8 @@ module kronos_fpu_fcvt
     int_rounded      = {1'b0, s2_fpi_int_part} + (s2_fpi_round_up ? 65'd1 : 65'd0);
     mag              = int_rounded[63:0];
     over_after_round = 1'b0;
-    fpi_result       = '0;
-    fpi_fflags       = '0;
+    fpi_result       = {64{1'b0}};
+    fpi_fflags       = {5{1'b0}};
 
     if (s2_fpi_src_is_nan) begin
       fpi_result               = s2_fpi_target_max;
@@ -767,8 +764,8 @@ module kronos_fpu_fcvt
     end
 
     // --- Final mux ---
-    s3_final_result = '0;
-    s3_final_fflags = '0;
+    s3_final_result = {64{1'b0}};
+    s3_final_fflags = {5{1'b0}};
     unique case (s2_op_q)
       FP_FCVT_W_F,
       FP_FCVT_WU_F,
@@ -790,8 +787,8 @@ module kronos_fpu_fcvt
         s3_final_fflags = s2_ds_fflags;
       end
       default: begin
-        s3_final_result = '0;
-        s3_final_fflags = '0;
+        s3_final_result = {64{1'b0}};
+        s3_final_fflags = {5{1'b0}};
       end
     endcase
   end
@@ -802,8 +799,8 @@ module kronos_fpu_fcvt
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       out_valid_o <= 1'b0;
-      result_o    <= '0;
-      fflags_o    <= '0;
+      result_o    <= {64{1'b0}};
+      fflags_o    <= {5{1'b0}};
       tag_o       <= '0;
     end else begin
       out_valid_o <= flush_i ? 1'b0 : s2_valid_q;

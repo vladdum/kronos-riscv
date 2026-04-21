@@ -12,7 +12,7 @@ module kronos_alu
 );
 
   always_comb begin
-    result_o = '0;
+    result_o = {32{1'b0}};
     unique case (op_i)
       ALU_ADD:   result_o = a_i + b_i;
       ALU_SUB:   result_o = a_i - b_i;
@@ -25,7 +25,7 @@ module kronos_alu
       ALU_OR:    result_o = a_i | b_i;
       ALU_AND:   result_o = a_i & b_i;
       ALU_PASSB: result_o = b_i;
-      default:   result_o = '0;
+      default:   result_o = {32{1'b0}};
     endcase
   end
 

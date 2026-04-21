@@ -106,10 +106,10 @@ module kronos_lsu
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q    <= IDLE;
-      addr_q     <= '0;
-      wdata_q    <= '0;
-      funct3_q   <= '0;
-      rdata_q    <= '0;
+      addr_q     <= {32{1'b0}};
+      wdata_q    <= {32{1'b0}};
+      funct3_q   <= {3{1'b0}};
+      rdata_q    <= {32{1'b0}};
       aw_acked_q <= 1'b0;
       w_acked_q  <= 1'b0;
     end else begin

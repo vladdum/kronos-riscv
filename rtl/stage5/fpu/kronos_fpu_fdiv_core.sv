@@ -81,7 +81,7 @@ module kronos_fpu_fdiv_core (
     q_n     = q_q;
     ctr_n   = ctr_q;
     ge      = 1'b0;
-    p_shift = '0;
+    p_shift = 54'h0;
 
     unique case (state_q)
       ST_IDLE: begin
@@ -138,12 +138,12 @@ module kronos_fpu_fdiv_core (
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q   <= ST_IDLE;
-      p_q       <= '0;
-      b_q       <= '0;
-      q_q       <= '0;
-      ctr_q     <= '0;
+      p_q       <= 54'h0;
+      b_q       <= 53'h0;
+      q_q       <= 56'h0;
+      ctr_q     <= 6'h0;
       fmt_d_q   <= 1'b0;
-      p_shift_q <= '0;
+      p_shift_q <= 54'h0;
       ge_q      <= 1'b0;
     end else begin
       state_q <= state_n;
@@ -159,8 +159,8 @@ module kronos_fpu_fdiv_core (
       if (start_i && (state_q == ST_IDLE)) begin
         p_q     <= {1'b0, a_i};
         b_q     <= b_i;
-        q_q     <= '0;
-        ctr_q   <= '0;
+        q_q     <= 56'h0;
+        ctr_q   <= 6'h0;
         fmt_d_q <= fmt_d_i;
       end
     end
@@ -171,6 +171,6 @@ module kronos_fpu_fdiv_core (
   // -------------------------------------------------------------------------
   assign done_o   = (state_q == ST_DONE);
   assign quot_o   = q_q;
-  assign rem_nz_o = (p_q != '0);
+  assign rem_nz_o = (p_q != 54'h0);
 
 endmodule

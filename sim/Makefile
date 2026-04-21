@@ -1160,7 +1160,7 @@ coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov s
 	  $(OBJ_DIR)/lsu_s5_cov/coverage.dat \
 	  $(OBJ_DIR)/decode_fp_cov/coverage.dat \
 	  $(OBJ_DIR)/lsu_fp_cov/coverage.dat
-	python3 ../tools/coverage_gate.py $(COV_DIR)/merged.info 98
+	python3 ../tools/coverage_gate.py $(COV_DIR)/merged.info 100
 
 clean:
 	rm -rf $(OBJ_DIR)

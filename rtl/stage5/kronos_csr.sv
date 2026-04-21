@@ -136,14 +136,14 @@ module kronos_csr #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mstatus  <= 64'h0000_0000_0000_3800; // MPP=11, FS=01 (Initial) — FP enabled at boot
-      mie      <= '0;
-      mtvec    <= '0;
-      mscratch <= '0;
-      mepc     <= '0;
-      mcause   <= '0;
+      mie      <= {64{1'b0}};
+      mtvec    <= {64{1'b0}};
+      mscratch <= {64{1'b0}};
+      mepc     <= {64{1'b0}};
+      mcause   <= {64{1'b0}};
       fcsr_q   <= 8'h00;
-      mcycle   <= '0;
-      minstret <= '0;
+      mcycle   <= {64{1'b0}};
+      minstret <= {64{1'b0}};
     end else begin
       // Zicntr counters
       mcycle   <= mcycle + 64'd1;

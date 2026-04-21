@@ -88,9 +88,9 @@ module kronos_bpred
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_upd_pipe
     if (!rst_ni) begin
       upd_valid_q  <= 1'b0;
-      upd_pc_q     <= '0;
+      upd_pc_q     <= {32{1'b0}};
       upd_taken_q  <= 1'b0;
-      upd_target_q <= '0;
+      upd_target_q <= {32{1'b0}};
       upd_is_jal_q <= 1'b0;
     end else begin
       upd_valid_q  <= upd_valid_i;
