@@ -260,6 +260,186 @@ module tb_fpu_fadd;
       errors++;
     end
 
+    // ---- Directed: carry-up rounding  [covers lines 722-724] ----
+    // F64: 0x3FFFFFFFFFFFFFFF + 0x3CA0000000000000 rounds to 2.0 in RNE
+    begin : blk_fadd_carry_d
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'h3FFF_FFFF_FFFF_FFFF, 64'h3CA0_0000_0000_0000, 8'd0);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd0,
+             64'h3FFF_FFFF_FFFF_FFFF, 64'h3CA0_0000_0000_0000);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d carry_up: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // F32: 0x3FFFFFFF + 0x33800000 (with NaN-boxing) → carry-up to 2.0f
+    begin : blk_fadd_carry_s
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_add(32'h3FFF_FFFF, 32'h3380_0000, 8'd0);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b0, 3'd0,
+             {32'hFFFF_FFFF, 32'h3FFF_FFFF},
+             {32'hFFFF_FFFF, 32'h3380_0000});
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fadd.s carry_up: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: overflow RM variants  [covers lines 775-792] ----
+    // F32 overflow RDN positive → FLT_MAX  [covers line 791: else branch for F32 to_inf=false]
+    begin : blk_fadd_ovf_f32_rdn_pos
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_add(32'h7F7F_FFFF, 32'h7F7F_FFFF, 8'd2);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b0, 3'd2,
+             {32'hFFFF_FFFF, 32'h7F7F_FFFF},
+             {32'hFFFF_FFFF, 32'h7F7F_FFFF});
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fadd.s ovf RDN+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // RTZ positive → DBL_MAX
+    begin : blk_fadd_ovf_rtz
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF, 8'd1);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd1,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d ovf RTZ+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN positive → DBL_MAX, negative → -Inf
+    begin : blk_fadd_ovf_rdn_pos
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF, 8'd2);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd2,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d ovf RDN+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    begin : blk_fadd_ovf_rdn_neg
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'hFFEF_FFFF_FFFF_FFFF, 64'hFFEF_FFFF_FFFF_FFFF, 8'd2);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd2,
+             64'hFFEF_FFFF_FFFF_FFFF, 64'hFFEF_FFFF_FFFF_FFFF);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d ovf RDN-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RUP positive → +Inf, negative → -DBL_MAX
+    begin : blk_fadd_ovf_rup_pos
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF, 8'd3);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd3,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d ovf RUP+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    begin : blk_fadd_ovf_rup_neg
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'hFFEF_FFFF_FFFF_FFFF, 64'hFFEF_FFFF_FFFF_FFFF, 8'd3);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd3,
+             64'hFFEF_FFFF_FFFF_FFFF, 64'hFFEF_FFFF_FFFF_FFFF);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d ovf RUP-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RMM → +Inf
+    begin : blk_fadd_ovf_rmm
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF, 8'd4);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd4,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d ovf RMM: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: F32 subnormal result  [covers lines 610-632] ----
+    // 0x00800001 + (-0x00800000) → 0x00000001 (denorm, NX+UF)
+    begin : blk_fadd_subn_s
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_add(32'h0080_0001, 32'h8080_0000, 8'd0);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b0, 3'd0,
+             {32'hFFFF_FFFF, 32'h0080_0001},
+             {32'hFFFF_FFFF, 32'h8080_0000});
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fadd.s subn: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: flush mid-pipeline  [covers lines 828-833] ----
+    begin : blk_fadd_flush
+      @(negedge clk); in_valid=1; op=FP_FADD; fmt_d=1'b1; rm=3'd0;
+                      a=64'h3FF0_0000_0000_0000; b=64'h3FF0_0000_0000_0000;
+      @(negedge clk); in_valid=0; flush=1;
+      @(negedge clk); flush=0;
+      repeat(6) @(posedge clk); #1;
+      if (out_valid) begin
+        $error("fadd flush: out_valid still asserted after flush"); errors++;
+      end
+    end
+
+    // ---- Directed: invalid rm=5 inexact  [covers line 712 default] ----
+    // 1.0 + 2^-53: with rm=5 (default→round_up=0 / RTZ), result = 1.0 (truncate)
+    begin : blk_fadd_rm5_inexact
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'h3FF0_0000_0000_0000, 64'h3CA0_0000_0000_0000, 8'd1);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd5,
+             64'h3FF0_0000_0000_0000, 64'h3CA0_0000_0000_0000);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d rm5 inexact: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: invalid rm=5 overflow  [covers line 786 default] ----
+    // DBL_MAX + DBL_MAX: with rm=5 (default→to_inf=1), same as RNE → +Inf
+    begin : blk_fadd_rm5_ovf
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_add(64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF, 8'd0);
+      sf_f = sf_exceptions();
+      apply6(FP_FADD, 1'b1, 3'd5,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h7FEF_FFFF_FFFF_FFFF);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fadd.d rm5 ovf: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
     if (errors) $fatal(1, "tb_fpu_fadd: %0d/%0d mismatches", errors, total);
     $display("tb_fpu_fadd PASS (%0d vectors)", total);
     $finish;

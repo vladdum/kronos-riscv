@@ -159,6 +159,9 @@ per-stage section.
 | `test_muldiv_redirect`    | `sw/stage5/test_muldiv_redirect.S`         | Muldiv request under EX/MEM redirect   | `make run-s5-test_muldiv_redirect`   |
 | `test_blt64`              | `sw/stage5/test_blt64.S`                   | RV64 branch edge case                  | `make run-s5-test_blt64`             |
 | `test_blt_act4`           | `sw/stage5/test_blt_act4.S`                | BLT regression from ACT4               | `make run-s5-test_blt_act4`          |
+| `test_mret_rvc`           | `sw/stage5/test_mret_rvc.S`                | MRET into compressed instruction       | `make run-s5-test_mret_rvc`          |
+| `test_csr_warl`           | `sw/stage5/test_csr_warl.S`                | WARL/WLRL CSR field probing            | `make run-s5-test_csr_warl`          |
+| `test_illegal_insn`       | `sw/stage5/test_illegal_insn.S`            | Illegal instruction trap coverage      | `make run-s5-test_illegal_insn`      |
 
 ### ACT4 compliance
 - 303 tests (rv64imafdc). Run: `make sim-arch-test-s5`.
@@ -178,6 +181,7 @@ per-stage section.
 | `test_fsqrt_subnormal`   | `sw/stage5b/test_fsqrt_subnormal.S`         | Subnormal FSQRT handling              | `make run-s5-test_fsqrt_subnormal`   |
 | `test_fdiv_nan_box`      | `sw/stage5b/test_fdiv_nan_box.S`            | NaN-boxing on FDIV result             | `make run-s5-test_fdiv_nan_box`      |
 | `test_fdiv_stall`        | `sw/stage5b/test_fdiv_stall.S`              | Pipeline stall during FDIV iteration  | `make run-s5-test_fdiv_stall`        |
+| `test_fdiv_irq`          | `sw/stage5b/test_fdiv_irq.S`                | FDIV results preserved after IRQ/MRET | `make run-s5b-test_fdiv_irq`         |
 
 ## Cross-cutting verification
 
@@ -199,11 +203,31 @@ per-stage section.
 - Run: `make coverage`.
 - Reports: `sim/obj_dir/coverage/merged.info` (lcov-compatible).
 
-## Interaction / scenario tests
+## Interaction / scenario tests (Phase 2)
 
-*Populated in Phase 2 (P2.x).* Placeholder for cross-cutting programs that
-exercise combinations (IRQ×muldiv-stall, misalign×4K boundary, MRET→RVC,
-CSR WAW hazard, etc.).
+### P2.1 — Pipeline/interrupt interaction
+
+| Test               | File                                | Exercises                                   | Run                                |
+|--------------------|-------------------------------------|---------------------------------------------|------------------------------------|
+| `test_fdiv_irq`    | `sw/stage5b/test_fdiv_irq.S`        | FDIV results survive IRQ/MRET cycle         | `make run-s5b-test_fdiv_irq`       |
+| `test_mret_rvc`    | `sw/stage5/test_mret_rvc.S`         | MRET into 2-byte compressed instruction     | `make run-s5-test_mret_rvc`        |
+
+### P2.2 — CSR probing
+
+| Test              | File                               | Exercises                                              | Run                               |
+|-------------------|------------------------------------|--------------------------------------------------------|-----------------------------------|
+| `test_csr_warl`   | `sw/stage5/test_csr_warl.S`        | mstatus SD read-only; frm=5 → DYN trap; mepc storage  | `make run-s5-test_csr_warl`       |
+
+### P2.3 — Illegal instruction coverage
+
+| Test                  | File                                   | Exercises                                        | Run                                   |
+|-----------------------|----------------------------------------|--------------------------------------------------|---------------------------------------|
+| `test_illegal_insn`   | `sw/stage5/test_illegal_insn.S`        | 4× reserved-opcode 32-bit + 1× C.ILLEGAL 16-bit | `make run-s5-test_illegal_insn`       |
+
+**Notes:**
+- `test_fdiv_irq` uses IRQ injection (non-deterministic vs Sail) and lives in `sw/stage5b/`; not included in `sim-diff-all`.
+- `test_mret_rvc`, `test_csr_warl`, `test_illegal_insn` are deterministic and covered by `sim-diff-all`.
+- Misaligned load straddling 4K boundary: deferred (kronos has no misalignment exception; `misaligned.supported = false` in sail.json).
 
 ## Gap register
 
@@ -211,11 +235,8 @@ Known untested behaviour, and why:
 
 | Gap                                                      | Status   | Plan              |
 |----------------------------------------------------------|----------|-------------------|
-| IRQ injection during FDIV/FSQRT stall                    | Untested | Phase 2 P2.1      |
-| Misaligned load straddling 4K boundary                   | Untested | Phase 2 P2.1      |
-| MRET into RVC                                            | Untested | Phase 2 P2.1      |
-| Systematic illegal-instruction encoding coverage         | Untested | Phase 2 P2.3      |
-| WARL/WLRL CSR probing                                    | Untested | Phase 2 P2.2      |
+| IRQ injection during active FDIV stall (hardware level)  | Partial  | `test_fdiv_irq` tests post-FDIV result preservation; stall-window injection requires sim IRQ extension |
+| Misaligned load straddling 4K boundary                   | Deferred | No misalignment exception in kronos; `misaligned.supported=false` |
 | Constrained-random instruction generation + cov. groups  | Deferred | Phase 3 / Stage 6 |
 | Formal properties on LSU / CSR                           | Deferred | Phase 3 (if needed)|
 

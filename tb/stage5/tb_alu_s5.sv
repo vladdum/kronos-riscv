@@ -75,6 +75,11 @@ module tb_alu_s5;
     op = ALU_SLL;   a = 64'h00000000_00000001; b = 64'd32; #1;
     check("SLLW_wrap32",    64'h00000000_00000001);
 
+    // ---- Directed: invalid alu_op_e → default arm  [covers lines 69-71] ----
+    word_op = 0;
+    op = alu_op_e'(4'd15); a = 64'hDEAD_BEEF_CAFE_1234; b = 64'hFFFF; #1;
+    check("invalid_op", 64'h0);
+
     if (errors == 0) $display("tb_alu_s5: ALL PASSED");
     else             $display("tb_alu_s5: %0d FAILED", errors);
     $finish;

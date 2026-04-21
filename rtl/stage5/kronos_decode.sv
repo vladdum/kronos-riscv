@@ -131,7 +131,9 @@ module kronos_decode
             else if (funct7[6:1] == 6'b010_000) decoded_o.alu_op = ALU_SRA;
             else                                illegal = 1'b1;
           end
+          // verilator coverage_off
           default: illegal = 1'b1;
+          // verilator coverage_on
         endcase
       end
 

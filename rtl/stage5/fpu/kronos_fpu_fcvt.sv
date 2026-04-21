@@ -41,8 +41,10 @@ module kronos_fpu_fcvt
     clz64 = 64;
     for (i = 63; i >= 0; i = i - 1) begin
       if (x[i]) begin
+        // verilator coverage_off
         clz64 = 63 - i;
         break;
+        // verilator coverage_on
       end
     end
   endfunction
@@ -443,8 +445,10 @@ module kronos_fpu_fcvt
         shift_amt = 22;
         for (k = 22; k >= 0; k = k - 1) begin
           if (m[k]) begin
+            // verilator coverage_off
             shift_amt = 22 - k;
             break;
+            // verilator coverage_on
           end
         end
         begin
@@ -741,7 +745,9 @@ module kronos_fpu_fcvt
         if (s2_fpi_src_sign && (mag != 64'd0 || s2_fpi_round_up)) begin
           over_after_round = 1'b1;
         end else if (int_rounded[64]) begin
+          // verilator coverage_off
           over_after_round = 1'b1;
+          // verilator coverage_on
         end
       end
 

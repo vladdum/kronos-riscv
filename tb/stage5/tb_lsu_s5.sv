@@ -222,6 +222,227 @@ module tb_lsu_s5;
       $display("FAIL AMOSWAP_mem: got %08h", mem[24]); errors++;
     end
 
+    // SH then LH/LHU
+    req = 1; we = 1; addr = 32'h70; funct3 = 3'b001;
+    wdata = 64'h0000_ABCD;
+    @(posedge clk); req = 0;
+    wait_valid;
+    @(posedge clk);
+
+    req = 1; we = 0; addr = 32'h70; funct3 = 3'b001;
+    @(posedge clk); req = 0;
+    wait_valid;
+    if (rdata !== 64'hFFFFFFFF_FFFFABCD) begin
+      $display("FAIL LH_sext: got %016h", rdata); errors++;
+    end
+    @(posedge clk);
+
+    req = 1; we = 0; addr = 32'h70; funct3 = 3'b101;
+    @(posedge clk); req = 0;
+    wait_valid;
+    if (rdata !== 64'h0000_0000_0000_ABCD) begin
+      $display("FAIL LHU: got %016h", rdata); errors++;
+    end
+    @(posedge clk);
+
+    // AMOXOR.W
+    mem[32] = 32'hFF00_FF00;
+    req = 1; we = 0; addr = 32'h80; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b00100; amo_src = 64'hF0F0_F0F0;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[32] !== 32'h0FF0_0FF0) begin
+      $display("FAIL AMOXOR_mem: got %08h", mem[32]); errors++;
+    end
+
+    // AMOAND.W
+    mem[36] = 32'hFFFF_0000;
+    req = 1; we = 0; addr = 32'h90; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b01100; amo_src = 64'hFF00_FF00;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[36] !== 32'hFF00_0000) begin
+      $display("FAIL AMOAND_mem: got %08h", mem[36]); errors++;
+    end
+
+    // AMOOR.W
+    mem[40] = 32'h0000_FF00;
+    req = 1; we = 0; addr = 32'hA0; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b01000; amo_src = 64'hFF00_0000;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[40] !== 32'hFF00_FF00) begin
+      $display("FAIL AMOOR_mem: got %08h", mem[40]); errors++;
+    end
+
+    // AMOMIN.W (signed min: -1 vs 1 → -1 wins)
+    mem[44] = 32'hFFFF_FFFF;   // -1 signed
+    req = 1; we = 0; addr = 32'hB0; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b10000; amo_src = 64'd1;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[44] !== 32'hFFFF_FFFF) begin
+      $display("FAIL AMOMIN_mem: got %08h", mem[44]); errors++;
+    end
+
+    // AMOMAX.W (signed max: 5 vs 3 → 5 stays)
+    mem[48] = 32'd5;
+    req = 1; we = 0; addr = 32'hC0; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b10100; amo_src = 64'd3;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[48] !== 32'd5) begin
+      $display("FAIL AMOMAX_mem: got %08h", mem[48]); errors++;
+    end
+
+    // AMOMINU.W (unsigned min: 0xFFFF vs 0x1 → 0x1 wins)
+    mem[52] = 32'hFFFF_FFFF;
+    req = 1; we = 0; addr = 32'hD0; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b11000; amo_src = 64'd1;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[52] !== 32'd1) begin
+      $display("FAIL AMOMINU_mem: got %08h", mem[52]); errors++;
+    end
+
+    // AMOMAXU.W (unsigned max: 1 vs 0xFF → 0xFF wins)
+    mem[56] = 32'd1;
+    req = 1; we = 0; addr = 32'hE0; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b11100; amo_src = 64'hFF;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[56] !== 32'hFF) begin
+      $display("FAIL AMOMAXU_mem: got %08h", mem[56]); errors++;
+    end
+
+    // 64-bit AMO suite — covers doubleword amo_new_val paths (lines 161-169)
+    // AMOXOR.D
+    mem[64] = 32'hFF00_FF00; mem[65] = 32'h0000_0000;
+    req = 1; we = 0; addr = 32'h100; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b00100; amo_src = 64'hF0F0_F0F0;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[64] !== 32'h0FF0_0FF0) begin
+      $display("FAIL AMOXOR_D_mem: got %08h", mem[64]); errors++;
+    end
+
+    // AMOAND.D
+    mem[68] = 32'hFFFF_0000; mem[69] = 32'hFFFF_FFFF;
+    req = 1; we = 0; addr = 32'h110; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b01100; amo_src = 64'hFF00_0000_FF00_0000;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[68] !== 32'hFF00_0000) begin
+      $display("FAIL AMOAND_D_mem_lo: got %08h", mem[68]); errors++;
+    end
+
+    // AMOOR.D
+    mem[72] = 32'h0000_FF00; mem[73] = 32'h0;
+    req = 1; we = 0; addr = 32'h120; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b01000; amo_src = 64'hFF00_0000;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[72] !== 32'hFF00_FF00) begin
+      $display("FAIL AMOOR_D_mem: got %08h", mem[72]); errors++;
+    end
+
+    // AMOMIN.D (signed: -1 vs 1 → -1 wins)
+    mem[76] = 32'hFFFF_FFFF; mem[77] = 32'hFFFF_FFFF;  // -1 as int64
+    req = 1; we = 0; addr = 32'h130; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b10000; amo_src = 64'd1;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[76] !== 32'hFFFF_FFFF || mem[77] !== 32'hFFFF_FFFF) begin
+      $display("FAIL AMOMIN_D_mem: %08h_%08h", mem[77], mem[76]); errors++;
+    end
+
+    // AMOMAX.D (signed: 5 vs 3 → 5 stays)
+    mem[80] = 32'd5; mem[81] = 32'd0;
+    req = 1; we = 0; addr = 32'h140; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b10100; amo_src = 64'd3;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[80] !== 32'd5) begin
+      $display("FAIL AMOMAX_D_mem: got %08h", mem[80]); errors++;
+    end
+
+    // AMOMINU.D (unsigned: 0xFFFFFFFFFFFFFFFF vs 1 → 1 wins)
+    mem[84] = 32'hFFFF_FFFF; mem[85] = 32'hFFFF_FFFF;
+    req = 1; we = 0; addr = 32'h150; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b11000; amo_src = 64'd1;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[84] !== 32'd1 || mem[85] !== 32'd0) begin
+      $display("FAIL AMOMINU_D_mem: %08h_%08h", mem[85], mem[84]); errors++;
+    end
+
+    // AMOMAXU.D (unsigned: 1 vs 0xFF → 0xFF wins)
+    mem[88] = 32'd1; mem[89] = 32'd0;
+    req = 1; we = 0; addr = 32'h160; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b11100; amo_src = 64'hFF;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[88] !== 32'hFF) begin
+      $display("FAIL AMOMAXU_D_mem: got %08h", mem[88]); errors++;
+    end
+
+    // AMOADD.D (doubleword AMO — activates 64-bit amo_new_val path)
+    mem[60] = 32'd10; mem[61] = 32'd0;   // 64-bit value = 10
+    req = 1; we = 0; addr = 32'hF0; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b00000; amo_src = 64'd7;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[60] !== 32'd17) begin
+      $display("FAIL AMOADDD_mem: got %08h", mem[60]); errors++;
+    end
+
+    // ---- Directed: load with invalid funct3=7 → default arm  [covers line 206] ----
+    mem[4] = 32'hDEAD_BEEF;
+    req = 1; we = 0; addr = 32'h10; funct3 = 3'b111;
+    @(posedge clk); req = 0;
+    wait_valid;
+    if (rdata !== 64'h0) begin
+      $display("FAIL LOAD_BAD_F3: got %016h", rdata); errors++;
+    end
+    @(posedge clk);
+
+    // ---- Directed: AMO word with invalid funct5=2 → default arm  [covers line 153] ----
+    mem[8] = 32'd10;
+    req = 1; we = 0; addr = 32'h20; funct3 = 3'b010; is_amo = 1;
+    amo_funct5 = 5'b00010; amo_src = 64'd7;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[8] !== 32'd0) begin
+      $display("FAIL AMO_BAD_F5W: got %08h", mem[8]); errors++;
+    end
+
+    // ---- Directed: AMO dword with invalid funct5=2 → default arm  [covers line 174] ----
+    mem[12] = 32'd5; mem[13] = 32'd0;
+    req = 1; we = 0; addr = 32'h30; funct3 = 3'b011; is_amo = 1;
+    amo_funct5 = 5'b00010; amo_src = 64'd3;
+    @(posedge clk); req = 0; is_amo = 0;
+    wait_valid;
+    @(posedge clk); @(posedge clk);
+    if (mem[12] !== 32'd0 || mem[13] !== 32'd0) begin
+      $display("FAIL AMO_BAD_F5D: got %08h/%08h", mem[13], mem[12]); errors++;
+    end
+
     if (errors == 0) $display("tb_lsu_s5: ALL PASSED");
     else $display("tb_lsu_s5: %0d FAILED", errors);
     $finish;

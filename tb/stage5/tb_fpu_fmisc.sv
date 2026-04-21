@@ -222,6 +222,21 @@ module tb_fpu_fmisc;
     apply(FP_FMAX, 1'b1, 64'h3FF0_0000_0000_0000, 64'h7FF8_0000_0000_0000);
     if (!out_valid || result !== 64'h3FF0_0000_0000_0000) $fatal(1, "fmax.d qNaN-b: %h", result);
 
+    // FMIN.D(qNaN, qNaN) → canonical qNaN, no NV  [covers both-NaN branch]
+    apply(FP_FMIN, 1'b1, 64'h7FF8_0000_0000_0000, 64'h7FF8_0000_0000_0000);
+    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b0)
+      $fatal(1, "fmin.d both-qNaN: r=%h f=%b", result, fflags);
+
+    // FMAX.D(qNaN, qNaN) → canonical qNaN, no NV
+    apply(FP_FMAX, 1'b1, 64'h7FF8_0000_0000_0000, 64'h7FF8_0000_0000_0000);
+    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b0)
+      $fatal(1, "fmax.d both-qNaN: r=%h f=%b", result, fflags);
+
+    // FMAX.S(-0, -0) → -0  [covers the -0/-0 equal-zero branch for FMAX.S]
+    apply(FP_FMAX, 1'b0, 64'hFFFF_FFFF_8000_0000, 64'hFFFF_FFFF_8000_0000);
+    if (result[31:0] !== 32'h8000_0000)
+      $fatal(1, "fmax.s -0/-0: %h", result);
+
     // ── FMV.X.D / FMV.D.X ────────────────────────────────────────────────
     apply(FP_FMV_X_D, 1'b1, 64'hDEAD_BEEF_1234_5678, 64'h0);
     if (!out_valid || result !== 64'hDEAD_BEEF_1234_5678) $fatal(1, "fmv.x.d: %h", result);
@@ -388,6 +403,14 @@ module tb_fpu_fmisc;
         $fatal(1, "random fmisc: %0d/%0d errors", rand_errors, rand_total);
       $display("random fmisc: %0d checks passed", rand_total);
     end
+
+    // ---- Directed: invalid fp_op_e → default arm  [covers lines 395-397] ----
+    apply(fp_op_e'(4'd15), 1'b1, 64'hDEAD_BEEF_CAFE_1234, 64'hABCD_1234_5678_9ABC);
+    if (result !== 64'h0 || fflags !== 5'b0) begin
+      $error("fmisc invalid op: dut=%h/%b expected 0/0", result, fflags);
+      $fatal(1, "invalid op test failed");
+    end
+    $display("fmisc invalid op check passed");
 
     $display("tb_fpu_fmisc PASS");
     $finish;

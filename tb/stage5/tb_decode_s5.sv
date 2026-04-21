@@ -320,6 +320,51 @@ module tb_decode_s5;
     instr = {7'b111_1111, 5'd0, 5'd0, 3'b000, 5'd0, 7'b101_0011}; #1;
     check_field("ILLEGAL_FP.illegal", {63'b0, illegal}, 64'h1);
 
+    // OP invalid funct7/funct3 (opcode=OP, not mul, not valid combo)
+    instr = {7'b010_0000, 5'd0, 5'd0, 3'b010, 5'd0, 7'b011_0011}; #1;
+    check_field("OP_ill.illegal", {63'b0, illegal}, 64'h1);
+
+    // OP_IMM SRLI with invalid funct7 (line 132 in decode)
+    instr = {7'b110_0000, 5'd0, 5'd0, 3'b101, 5'd0, 7'b001_0011}; #1;
+    check_field("SRLI_ill.illegal", {63'b0, illegal}, 64'h1);
+
+    // OP_IMM_32 SRLIW with invalid funct7
+    instr = {7'b110_0000, 5'd0, 5'd0, 3'b101, 5'd0, 7'b001_1011}; #1;
+    check_field("SRLIW_ill.illegal", {63'b0, illegal}, 64'h1);
+
+    // OP_IMM_32 default (funct3 not in {000,001,101})
+    instr = {12'd0, 5'd0, 3'b010, 5'd0, 7'b001_1011}; #1;
+    check_field("OP_IMM32_ill.illegal", {63'b0, illegal}, 64'h1);
+
+    // OP_32 invalid funct7/funct3
+    instr = {7'b011_0000, 5'd0, 5'd0, 3'b010, 5'd0, 7'b011_1011}; #1;
+    check_field("OP32_ill.illegal", {63'b0, illegal}, 64'h1);
+
+    // ── SYSTEM instructions ────────────────────────────────────────────────
+    // ECALL
+    instr = 32'h0000_0073; #1;
+    check_field("ECALL.is_ecall",  {63'b0, dec.is_ecall},  64'h1);
+    check_field("ECALL.illegal",   dec.illegal,             0);
+
+    // EBREAK
+    instr = 32'h0010_0073; #1;
+    check_field("EBREAK.is_ebreak", {63'b0, dec.is_ebreak}, 64'h1);
+
+    // MRET
+    instr = 32'h3020_0073; #1;
+    check_field("MRET.is_mret", {63'b0, dec.is_mret}, 64'h1);
+
+    // CSRRW x0, mstatus, x1  (csr=0x300, funct3=001)
+    instr = {12'h300, 5'd1, 3'b001, 5'd0, 7'b111_0011}; #1;
+    check_field("CSRRW.is_csr",   {63'b0, dec.is_csr},  64'h1);
+    check_field("CSRRW.rd_wen",   dec.rd_wen,            1);
+    check_field("CSRRW.csr_addr", dec.csr_addr,          12'h300);
+    check_field("CSRRW.illegal",  dec.illegal,            0);
+
+    // SYSTEM with invalid funct12 (not ECALL/EBREAK/MRET) → illegal  [covers line 297]
+    instr = {12'h100, 5'd0, 3'b000, 5'd0, 7'b111_0011}; #1;
+    check_field("SYSTEM_BAD_F12.illegal", {63'b0, dec.illegal}, 64'h1);
+
     if (errors == 0) $display("tb_decode_s5: ALL PASSED");
     else $display("tb_decode_s5: %0d FAILED", errors);
     $finish;

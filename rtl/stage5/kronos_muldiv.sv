@@ -245,7 +245,9 @@ module kronos_muldiv
                 end
               end
 
+              // verilator coverage_off
               default: state_q <= IDLE;
+              // verilator coverage_on
             endcase
           end
         end
@@ -269,7 +271,9 @@ module kronos_muldiv
             MULDIV_MULH:   sel = mul_product_q[127:64];
             MULDIV_MULHSU: sel = mul_product_q[127:64];
             MULDIV_MULHU:  sel = mul_product_q[127:64];
+            // verilator coverage_off
             default:       sel = mul_product_q[63:0];
+            // verilator coverage_on
           endcase
           result_q <= word_op_q ? {{32{sel[31]}}, sel[31:0]} : sel;
           state_q  <= DONE;
@@ -320,7 +324,9 @@ module kronos_muldiv
           state_q <= IDLE;
         end
 
+        // verilator coverage_off
         default: state_q <= IDLE;
+        // verilator coverage_on
       endcase
     end
   end

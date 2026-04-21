@@ -144,6 +144,169 @@ module tb_decode_fp;
     #1;
     check("fdiv.s legal", !illegal);
 
+    // FSUB.S f1, f2, f3
+    instr = {7'b0000100, 5'd3, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fsub.s op", dec.fp_op === FP_FSUB);
+    check("fsub.s rd_fp", dec.rd_fp);
+    check("fsub.s legal", !illegal);
+
+    // FSGNJN.S f1, f2, f3
+    instr = {7'b0010000, 5'd3, 5'd2, 3'b001, 5'd1, 7'b1010011};
+    #1;
+    check("fsgnjn.s op", dec.fp_op === FP_FSGNJN);
+
+    // FSGNJX.S f1, f2, f3
+    instr = {7'b0010000, 5'd3, 5'd2, 3'b010, 5'd1, 7'b1010011};
+    #1;
+    check("fsgnjx.s op", dec.fp_op === FP_FSGNJX);
+
+    // FSGNJ illegal funct3
+    instr = {7'b0010000, 5'd3, 5'd2, 3'b011, 5'd1, 7'b1010011};
+    #1;
+    check("fsgnj_ill illegal", illegal);
+
+    // FMAX.S f1, f2, f3
+    instr = {7'b0010100, 5'd3, 5'd2, 3'b001, 5'd1, 7'b1010011};
+    #1;
+    check("fmax.s op", dec.fp_op === FP_FMAX);
+
+    // FMIN/FMAX illegal funct3
+    instr = {7'b0010100, 5'd3, 5'd2, 3'b010, 5'd1, 7'b1010011};
+    #1;
+    check("fminmax_ill illegal", illegal);
+
+    // FCVT.S.D f1, f2  (funct7=0100000, funct7[1:0]=00 → D→S)
+    instr = {7'b0100000, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fcvt.s.d op",    dec.fp_op === FP_FCVT_S_D);
+    check("fcvt.s.d legal", !illegal);
+
+    // FCVT S/D format illegal (funct7[1:0]=10)
+    instr = {7'b0100010, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fcvt_fmt_ill illegal", illegal);
+
+    // FSQRT.S f1, f2  (rs2 must be 00000)
+    instr = {7'b0101100, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fsqrt.s op",    dec.fp_op === FP_FSQRT);
+    check("fsqrt.s rd_fp", dec.rd_fp);
+    check("fsqrt.s legal", !illegal);
+
+    // FLT.S f2, f3 -> x1
+    instr = {7'b1010000, 5'd3, 5'd2, 3'b001, 5'd1, 7'b1010011};
+    #1;
+    check("flt.s op", dec.fp_op === FP_FLT);
+
+    // FLE.S f2, f3 -> x1
+    instr = {7'b1010000, 5'd3, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fle.s op", dec.fp_op === FP_FLE);
+
+    // FEQ/FLT/FLE illegal funct3
+    instr = {7'b1010000, 5'd3, 5'd2, 3'b011, 5'd1, 7'b1010011};
+    #1;
+    check("feqflt_ill illegal", illegal);
+
+    // FCVT.WU.S f1 -> x2  (rs2=00001)
+    instr = {7'b1100000, 5'b00001, 5'd1, 3'b000, 5'd2, 7'b1010011};
+    #1;
+    check("fcvt.wu.s op", dec.fp_op === FP_FCVT_WU_F);
+
+    // FCVT.L.S f1 -> x2  (rs2=00010)
+    instr = {7'b1100000, 5'b00010, 5'd1, 3'b000, 5'd2, 7'b1010011};
+    #1;
+    check("fcvt.l.s op", dec.fp_op === FP_FCVT_L_F);
+
+    // FCVT.LU.S f1 -> x2  (rs2=00011)
+    instr = {7'b1100000, 5'b00011, 5'd1, 3'b000, 5'd2, 7'b1010011};
+    #1;
+    check("fcvt.lu.s op", dec.fp_op === FP_FCVT_LU_F);
+
+    // FCVT.W.F illegal rs2
+    instr = {7'b1100000, 5'b00100, 5'd1, 3'b000, 5'd2, 7'b1010011};
+    #1;
+    check("fcvt_wf_ill illegal", illegal);
+
+    // FCVT.S.W x2 -> f1  (funct7=1101000, rs2=00000)
+    instr = {7'b1101000, 5'b00000, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fcvt.s.w op",    dec.fp_op === FP_FCVT_F_W);
+    check("fcvt.s.w rd_fp", dec.rd_fp);
+    check("fcvt.s.w legal", !illegal);
+
+    // FCVT.S.WU x2 -> f1  (rs2=00001)
+    instr = {7'b1101000, 5'b00001, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fcvt.s.wu op", dec.fp_op === FP_FCVT_F_WU);
+
+    // FCVT.S.L x2 -> f1  (rs2=00010)
+    instr = {7'b1101000, 5'b00010, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fcvt.s.l op", dec.fp_op === FP_FCVT_F_L);
+
+    // FCVT.S.LU x2 -> f1  (rs2=00011)
+    instr = {7'b1101000, 5'b00011, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fcvt.s.lu op", dec.fp_op === FP_FCVT_F_LU);
+
+    // FCVT.F.W illegal rs2
+    instr = {7'b1101000, 5'b00100, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fcvt_fw_ill illegal", illegal);
+
+    // FMV.X.W x1, f2  (funct7=1110000, instr[25]=0 single, funct3=000)
+    instr = {7'b1110000, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fmv.x.w op",     dec.fp_op === FP_FMV_X_W);
+    check("fmv.x.w rs1_fp", dec.rs1_fp);
+    check("fmv.x.w !rd_fp", !dec.rd_fp);
+
+    // FCLASS.S x1, f2  (funct7=1110000, funct3=001)
+    instr = {7'b1110000, 5'd0, 5'd2, 3'b001, 5'd1, 7'b1010011};
+    #1;
+    check("fclass.s op", dec.fp_op === FP_FCLASS);
+
+    // FMV.X.W/FCLASS.S illegal funct3
+    instr = {7'b1110000, 5'd0, 5'd2, 3'b010, 5'd1, 7'b1010011};
+    #1;
+    check("fmvxw_ill illegal", illegal);
+
+    // FMV.X.D x1, f2  (funct7=1110001, instr[25]=1 double, funct3=000)
+    instr = {7'b1110001, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fmv.x.d op", dec.fp_op === FP_FMV_X_D);
+
+    // FMV.X.D/FCLASS.D illegal funct3
+    instr = {7'b1110001, 5'd0, 5'd2, 3'b010, 5'd1, 7'b1010011};
+    #1;
+    check("fmvxd_ill illegal", illegal);
+
+    // FMV.D.X f1, x2  (funct7=1111001, instr[25]=1 double)
+    instr = {7'b1111001, 5'd0, 5'd2, 3'b000, 5'd1, 7'b1010011};
+    #1;
+    check("fmv.d.x op",    dec.fp_op === FP_FMV_D_X);
+    check("fmv.d.x rd_fp", dec.rd_fp);
+
+    // FMSUB.S f1, f2, f3, f5  (opcode=0x47 FMSUB_OP, fmt=00)
+    instr = {5'd5, 2'b00, 5'd3, 5'd2, 3'b000, 5'd1, 7'b1000111};
+    #1;
+    check("fmsub.s op",     dec.fp_op === FP_FMSUB);
+    check("fmsub.s rs3_fp", dec.rs3_fp);
+    check("fmsub.s !fmt_d", !dec.fmt_d);
+
+    // FNMSUB.S f1, f2, f3, f5  (opcode=0x4B FNMSUB_OP, fmt=00)
+    instr = {5'd5, 2'b00, 5'd3, 5'd2, 3'b000, 5'd1, 7'b1001011};
+    #1;
+    check("fnmsub.s op",     dec.fp_op === FP_FNMSUB);
+    check("fnmsub.s rs3_fp", dec.rs3_fp);
+
+    // Reserved opcode — triggers top-level default: illegal
+    instr = 32'h0000000B;
+    #1;
+    check("reserved_op illegal", illegal);
+
     $display("tb_decode_fp PASS");
     $finish;
   end

@@ -128,6 +128,71 @@ module tb_fpu_fmul;
       end
     end
 
+    // Directed: +Inf.S × 1.0S → +Inf.S, no flags  [covers s4_res_is_inf_q path]
+    apply4(FP_FMUL, 1'b0, 3'd0,
+           {32'hFFFF_FFFF, 32'h7F80_0000},
+           {32'hFFFF_FFFF, 32'h3F80_0000});
+    total++;
+    if (result !== 64'hFFFF_FFFF_7F80_0000 || fflags !== 5'b0) begin
+      $error("inf.s*1.s: dut=%h/%b", result, fflags); errors++;
+    end
+
+    // Directed: -Inf.D × 2.0D → -Inf.D, no flags
+    apply4(FP_FMUL, 1'b1, 3'd0,
+           64'hFFF0_0000_0000_0000,
+           64'h4000_0000_0000_0000);
+    total++;
+    if (result !== 64'hFFF0_0000_0000_0000 || fflags !== 5'b0) begin
+      $error("inf.d*2.d: dut=%h/%b", result, fflags); errors++;
+    end
+
+    // F32 subnormal × near-2.0 → min_normal (subn→norm, exp_in=0)  [covers line 774]
+    // a=0x00400000 (subnormal 2^-127), b=0x3FFFFFFF (≈1.9999999)
+    // product = (2^24-1)×2^-150 = midpoint(max_subn, min_norm) → rounds to min_norm (RNE)
+    // DUT uses tininess-after-rounding: result is min_normal (not subnormal) → UF not set
+    begin : blk_fmul_subn_norm_s
+      apply4(FP_FMUL, 1'b0, 3'd0,
+             {32'hFFFF_FFFF, 32'h0040_0000},
+             {32'hFFFF_FFFF, 32'h3FFF_FFFF});
+      total++;
+      if (result !== {32'hFFFF_FFFF, 32'h0080_0000} || fflags !== 5'b00001) begin
+        $error("fmul.s subn->norm: dut=%h/%02h expected ffffffff00800000/01",
+               result, fflags); errors++;
+      end
+    end
+
+    // F64 subnormal→normal via SoftFloat oracle  [covers lines 762-763]
+    begin : blk_fmul_subn_norm_d
+      longint unsigned sf_r;
+      byte unsigned    sf_f;
+      sf_reset();
+      sf_r = sf_f64_mul(64'h000F_FFFF_FFFF_FFFF, 64'h3FF0_0000_0000_0001, 8'd0);
+      sf_f = sf_exceptions();
+      apply4(FP_FMUL, 1'b1, 3'd0,
+             64'h000F_FFFF_FFFF_FFFF,
+             64'h3FF0_0000_0000_0001);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fmul.d subn->norm: dut=%h/%02h sf=%h/%02h",
+               result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: invalid rm=5 for FMUL  [covers lines 695-696 default] ----
+    // (1/3) * 10.0 = 3.333...: inexact with rm=5 (default→round_up=0 / RTZ-like)
+    begin : blk_fmul_rm5
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mul(64'h3FD5_5555_5555_5555, 64'h4024_0000_0000_0000, 8'd1);
+      sf_f = sf_exceptions();
+      apply4(FP_FMUL, 1'b1, 3'd5,
+             64'h3FD5_5555_5555_5555, 64'h4024_0000_0000_0000);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fmul.d rm5: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
     if (errors != 0) $fatal(1, "tb_fpu_fmul: %0d/%0d mismatches", errors, total);
     $display("tb_fpu_fmul PASS (%0d vectors)", total);
     $finish;

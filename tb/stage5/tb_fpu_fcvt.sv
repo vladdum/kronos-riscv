@@ -387,6 +387,253 @@ module tb_fpu_fcvt;
       end
     end
 
+    // ---- Directed: FCVT.D.S with subnormal f32 input  [covers lines 445-447] ----
+    // A subnormal f32 (exponent=0, mantissa non-zero) triggers the CLZ loop body
+    begin : blk_fcvt_d_s_subn
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_to_f64(32'h0000_0001);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_D_S, 1'b1, 3'd0, {32'hFFFF_FFFF, 32'h0000_0001});
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fcvt.d.s subn: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: FCVT.S.D subnormal-input RM variants  [covers lines 480-486] ----
+    // Tiny positive subnormal double → +min_subnormal_f32 (RUP)
+    begin : blk_fcvt_ds_subn_rup
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h0001_0000_0000_0000, 8'd3);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd3, 64'h0001_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d subn RUP+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // Tiny negative subnormal double → -min_subnormal_f32 (RDN)
+    begin : blk_fcvt_ds_subn_rdn
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h8001_0000_0000_0000, 8'd2);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd2, 64'h8001_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d subn RDN-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: FCVT.S.D overflow RM variants  [covers lines 494-498] ----
+    // Large double (e=1024) → overflow, RTZ → FLT_MAX
+    begin : blk_fcvt_ds_ovf_rtz
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h4C70_0000_0000_0000, 8'd1);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd1, 64'h4C70_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d ovf RTZ: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN positive → FLT_MAX
+    begin : blk_fcvt_ds_ovf_rdn_pos
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h4C70_0000_0000_0000, 8'd2);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd2, 64'h4C70_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d ovf RDN+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN negative → -Inf
+    begin : blk_fcvt_ds_ovf_rdn_neg
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'hCC70_0000_0000_0000, 8'd2);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd2, 64'hCC70_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d ovf RDN-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RUP positive → +Inf
+    begin : blk_fcvt_ds_ovf_rup_pos
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h4C70_0000_0000_0000, 8'd3);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd3, 64'h4C70_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d ovf RUP+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RUP negative → -FLT_MAX
+    begin : blk_fcvt_ds_ovf_rup_neg
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'hCC70_0000_0000_0000, 8'd3);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd3, 64'hCC70_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d ovf RUP-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: FCVT.S.D tiny negative subnormal double + RUP → -0  [covers line 484] ----
+    begin : blk_fcvt_ds_subn_rup_neg
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h8001_0000_0000_0000, 8'd3);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd3, 64'h8001_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d subn RUP neg->-0: dut=%h/%b sf=%h/%b",
+               result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: FCVT.S.D subn_shift_amt=2 (ds_unbiased=-128) RM variants  ----
+    // [covers lines 515-517 sticky computation, 523 RNE, 524 RTZ, 526 RMM]
+    // RTZ: round toward zero → no sticky rounding
+    begin : blk_fcvt_ds_subn_shift2_rtz
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h37F0_0000_0000_0000, 8'd1);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd1, 64'h37F0_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d shift2 RTZ: dut=%h/%b sf=%h/%b",
+               result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN: with guard bit set, rounds down for positive → truncate
+    begin : blk_fcvt_ds_subn_shift2_rdn
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h37F8_0000_0000_0000, 8'd2);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd2, 64'h37F8_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d shift2 RDN: dut=%h/%b sf=%h/%b",
+               result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RMM: rounds based on guard bit
+    begin : blk_fcvt_ds_subn_shift2_rmm
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h37F8_0000_0000_0000, 8'd4);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd4, 64'h37F8_0000_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d shift2 RMM: dut=%h/%b sf=%h/%b",
+               result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: FCVT.S.D subnormal result non-huge + carry-up  [covers lines 508-535] ----
+    // ds_unbiased=-127, many guard bits set, RUP → round up to smallest normal (carry-up in subn path)
+    // Note: result only checked — SoftFloat uses tininess-before-rounding (UF set on pre-round
+    // subnormal) but RISC-V mandates tininess-after-rounding (UF cleared when post-round result
+    // is the smallest normal).  This is a known, intentional discrepancy.
+    begin : blk_fcvt_ds_subn_carry
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h380F_FFFF_E000_0000, 8'd3);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd3, 64'h380F_FFFF_E000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r}) begin
+        $error("fcvt.s.d subn carry RUP result: dut=%h sf=%h", result, sf_r); errors++;
+      end
+    end
+
+    // ---- Directed: FCVT.S.D normal result with carry-up  [covers lines 563-568] ----
+    // 0x3FFF_FFFF_FFF0_0000 RNE → 2.0f (carry-up, no overflow)
+    begin : blk_fcvt_ds_norm_carry
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h3FFF_FFFF_FFF0_0000, 8'd0);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd0, 64'h3FFF_FFFF_FFF0_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d norm carry: dut=%h/%b sf=%h/%b",
+               result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // 0x47EF_FFFF_FFF0_0000 RNE → +Inf (carry-up causes overflow)
+    begin : blk_fcvt_ds_norm_carry_ovf
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_to_f32(64'h47EF_FFFF_FFF0_0000, 8'd0);
+      sf_f = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd0, 64'h47EF_FFFF_FFF0_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fcvt.s.d norm carry ovf: dut=%h/%b sf=%h/%b",
+               result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: invalid rm=5 for FP→INT  [covers line 300 default] ----
+    // 1.5f → int64 with rm=5 (default→RNE-like): same as RNE → 2
+    begin : blk_fcvt_rm5_fp2int
+      sf_reset();
+      sf_r64s = sf_f32_to_i64(32'h3FC0_0000, 8'd0);
+      sf_fl   = sf_exceptions();
+      apply_and_wait(FP_FCVT_L_F, 1'b0, 3'd5, {32'hFFFF_FFFF, 32'h3FC0_0000});
+      check_val("fcvt.l.f rm5", 64'(sf_r64s), sf_fl[4:0]);
+    end
+
+    // ---- Directed: invalid rm=5 for INT→FP single  [covers line 370 default] ----
+    // 2^24+1=16777217 → f32 with rm=5 (default→RNE): rounds to 16777216 (NX)
+    begin : blk_fcvt_rm5_int2fps
+      apply_and_wait(FP_FCVT_F_W, 1'b0, 3'd5, 64'h0000_0000_0100_0001);
+      check_val("fcvt.f.w rm5", {32'hFFFF_FFFF, 32'h4B80_0000}, 5'b00001);
+    end
+
+    // ---- Directed: invalid rm=5 for INT→FP double  [covers line 387 default] ----
+    // 2^53+1 → f64 with rm=5 (default→RNE): rounds to 2^53 (NX)
+    begin : blk_fcvt_rm5_int2fpd
+      apply_and_wait(FP_FCVT_F_L, 1'b1, 3'd5, 64'd9007199254740993);
+      check_val("fcvt.f.l rm5", 64'h4340_0000_0000_0000, 5'b00001);
+    end
+
+    // ---- Directed: invalid rm=5 for FCVT.S.D subnormal  [covers line 531 default] ----
+    // D→S subnormal result with rm=5 (default→RNE-like)
+    begin : blk_fcvt_rm5_ds_subn
+      sf_reset();
+      sf_r32 = sf_f64_to_f32(64'h3800_0000_0000_0000, 8'd0);
+      sf_fl  = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd5, 64'h3800_0000_0000_0000);
+      check_val("fcvt.s.d rm5 subn", {32'hFFFF_FFFF, sf_r32}, sf_fl[4:0]);
+    end
+
+    // ---- Directed: invalid rm=5 for FCVT.S.D normal  [covers line 561 default] ----
+    // 1/3 D→S with rm=5 (inexact, default→RNE-like)
+    begin : blk_fcvt_rm5_ds_norm
+      sf_reset();
+      sf_r32 = sf_f64_to_f32(64'h3FD5_5555_5555_5555, 8'd0);
+      sf_fl  = sf_exceptions();
+      apply_and_wait(FP_FCVT_S_D, 1'b0, 3'd5, 64'h3FD5_5555_5555_5555);
+      check_val("fcvt.s.d rm5 norm", {32'hFFFF_FFFF, sf_r32}, sf_fl[4:0]);
+    end
+
     if (errors != 0) $fatal(1, "tb_fpu_fcvt: %0d error(s) out of %0d", errors, total);
     $display("tb_fpu_fcvt PASS (%0d checks)", total);
     $finish;

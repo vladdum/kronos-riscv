@@ -439,6 +439,281 @@ module tb_fpu_fma;
       end
     end
 
+    // ---- Directed: F32 overflow RM variants  [covers F32 paths 1211-1212, 1217, 1220-1221, 1227-1228, 1231, 1236-1237] ----
+    // FLT_MAX × 2.0f + 0 in RTZ → FLT_MAX (F32 path)
+    begin : blk_fma_ovf_f32_rtz
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_mulAdd(32'h7F7F_FFFF, 32'h4000_0000, 32'h0, 8'd1);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b0, 3'd1,
+             {32'hFFFF_FFFF, 32'h7F7F_FFFF}, {32'hFFFF_FFFF, 32'h4000_0000},
+             64'hFFFF_FFFF_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fma.s ovf RTZ+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN positive → FLT_MAX
+    begin : blk_fma_ovf_f32_rdn_pos
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_mulAdd(32'h7F7F_FFFF, 32'h4000_0000, 32'h0, 8'd2);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b0, 3'd2,
+             {32'hFFFF_FFFF, 32'h7F7F_FFFF}, {32'hFFFF_FFFF, 32'h4000_0000},
+             64'hFFFF_FFFF_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fma.s ovf RDN+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN negative → -Inf
+    begin : blk_fma_ovf_f32_rdn_neg
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_mulAdd(32'hFF7F_FFFF, 32'h4000_0000, 32'h0, 8'd2);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b0, 3'd2,
+             {32'hFFFF_FFFF, 32'hFF7F_FFFF}, {32'hFFFF_FFFF, 32'h4000_0000},
+             64'hFFFF_FFFF_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fma.s ovf RDN-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RUP positive → +Inf
+    begin : blk_fma_ovf_f32_rup_pos
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_mulAdd(32'h7F7F_FFFF, 32'h4000_0000, 32'h0, 8'd3);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b0, 3'd3,
+             {32'hFFFF_FFFF, 32'h7F7F_FFFF}, {32'hFFFF_FFFF, 32'h4000_0000},
+             64'hFFFF_FFFF_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fma.s ovf RUP+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RUP negative → -FLT_MAX
+    begin : blk_fma_ovf_f32_rup_neg
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_mulAdd(32'hFF7F_FFFF, 32'h4000_0000, 32'h0, 8'd3);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b0, 3'd3,
+             {32'hFFFF_FFFF, 32'hFF7F_FFFF}, {32'hFFFF_FFFF, 32'h4000_0000},
+             64'hFFFF_FFFF_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fma.s ovf RUP-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RMM → +Inf
+    begin : blk_fma_ovf_f32_rmm
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_mulAdd(32'h7F7F_FFFF, 32'h4000_0000, 32'h0, 8'd4);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b0, 3'd4,
+             {32'hFFFF_FFFF, 32'h7F7F_FFFF}, {32'hFFFF_FFFF, 32'h4000_0000},
+             64'hFFFF_FFFF_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fma.s ovf RMM: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: F64 overflow RM variants  [covers lines 1205-1239] ----
+    // RTZ positive: DBL_MAX × 2.0 + 0 → DBL_MAX
+    begin : blk_fma_ovf_rtz
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0, 8'd1);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd1,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d ovf RTZ+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN positive → DBL_MAX
+    begin : blk_fma_ovf_rdn_pos
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0, 8'd2);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd2,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d ovf RDN+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RDN negative → -Inf
+    begin : blk_fma_ovf_rdn_neg
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'hFFEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0, 8'd2);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd2,
+             64'hFFEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d ovf RDN-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RUP positive → +Inf
+    begin : blk_fma_ovf_rup_pos
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0, 8'd3);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd3,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d ovf RUP+: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RUP negative → -DBL_MAX
+    begin : blk_fma_ovf_rup_neg
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'hFFEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0, 8'd3);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd3,
+             64'hFFEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d ovf RUP-: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+    // RMM positive → +Inf
+    begin : blk_fma_ovf_rmm
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0, 8'd4);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd4,
+             64'h7FEF_FFFF_FFFF_FFFF, 64'h4000_0000_0000_0000, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d ovf RMM: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: min-subnormal × min-subnormal → underflow  [covers lines 949-952] ----
+    // 5e-324 × 5e-324 = 0 with UF+NX
+    begin : blk_fma_tiny_subn
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h1, 64'h1, 64'h0, 8'd0);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd0, 64'h1, 64'h1, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d tiny subn: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: max-subnormal × (1+1ulp) → smallest normal  [covers lines 1138-1149] ----
+    begin : blk_fma_subn_to_norm
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h000F_FFFF_FFFF_FFFF, 64'h3FF0_0000_0000_0001, 64'h0, 8'd0);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd0,
+             64'h000F_FFFF_FFFF_FFFF, 64'h3FF0_0000_0000_0001, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d subn->norm: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: FMSUB(1+ulp, 1+2ulp, 1+3ulp) = 2^-103 (exact)  [covers lines 966-968] ----
+    // shift_right_amt=2 in main rounding block (not tiny, not >= SUM_W)
+    begin : blk_fma_shift2_main
+      apply5(FP_FMSUB, 1'b1, 3'd0,
+             64'h3FF0_0000_0000_0001,
+             64'h3FF0_0000_0000_0002,
+             64'h3FF0_0000_0000_0003);
+      total++;
+      // (1+ulp)*(1+2ulp) - (1+3ulp) = 2*ulp^2 = 2^-103, exact
+      if (result !== 64'h3980_0000_0000_0000 || fflags !== 5'b0) begin
+        $error("fma.d shift2: dut=%h/%b expected 3980.../0", result, fflags); errors++;
+      end
+    end
+
+    // ---- Directed: FMADD(2×min_subn_d, min_subn_d, 0) → normal_shift=2 in tininess  [covers lines 1167-1169] ----
+    begin : blk_fma_tiny_shift2
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h2, 64'h1, 64'h0, 8'd0);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd0, 64'h2, 64'h1, 64'h0);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d tiny shift2: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: F32 min-subnormal × min-subnormal → underflow  [covers line 1196] ----
+    // Exercises F32 carry_n path in tininess-after-rounding block
+    begin : blk_fma_f32_tiny_subn
+      int unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f32_mulAdd(32'h0000_0001, 32'h0000_0001, 32'h0, 8'd0);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b0, 3'd0,
+             {32'hFFFF_FFFF, 32'h0000_0001},
+             {32'hFFFF_FFFF, 32'h0000_0001},
+             64'hFFFF_FFFF_0000_0000);
+      total++;
+      if (result !== {32'hFFFF_FFFF, sf_r} || fflags !== sf_f[4:0]) begin
+        $error("fma.s tiny subn: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: invalid rm=5 FMA  [covers line 1128 default] ----
+    // 1.5 * 1.0 + 2^-53 with rm=5 (default→round_up=0 / RTZ-like)
+    begin : blk_fma_rm5_inexact
+      longint unsigned sf_r; byte unsigned sf_f;
+      sf_reset();
+      sf_r = sf_f64_mulAdd(64'h3FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000,
+                           64'h3CA0_0000_0000_0000, 8'd1);
+      sf_f = sf_exceptions();
+      apply5(FP_FMADD, 1'b1, 3'd5,
+             64'h3FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000,
+             64'h3CA0_0000_0000_0000);
+      total++;
+      if (result !== sf_r || fflags !== sf_f[4:0]) begin
+        $error("fma.d rm5 inexact: dut=%h/%b sf=%h/%b", result, fflags, sf_r, sf_f); errors++;
+      end
+    end
+
+    // ---- Directed: tiny FMA with RTZ/RDN/RUP/RMM and invalid rm=5
+    //               [covers lines 1192-1196] ----
+    // 5e-324 * 5e-324 + 0: tiny and inexact, use RM modes 1-5
+    begin : blk_fma_tiny_rm
+      for (int rm_i = 1; rm_i <= 5; rm_i++) begin
+        automatic longint unsigned sf_r;
+        automatic byte unsigned sf_f;
+        sf_reset();
+        sf_r = sf_f64_mulAdd(64'h1, 64'h1, 64'h0,
+                             (rm_i < 5) ? 8'(rm_i) : 8'd0);
+        sf_f = sf_exceptions();
+        apply5(FP_FMADD, 1'b1, 3'(rm_i), 64'h1, 64'h1, 64'h0);
+        total++;
+        if (result !== sf_r || fflags !== sf_f[4:0]) begin
+          $error("fma.d tiny rm%0d: dut=%h/%b sf=%h/%b",
+                 rm_i, result, fflags, sf_r, sf_f); errors++;
+        end
+      end
+    end
+
     if (errors) begin
       $fatal(1, "tb_fpu_fma: %0d/%0d errors", errors, total);
     end

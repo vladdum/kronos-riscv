@@ -18,9 +18,16 @@ def main():
 
     total = 0
     hit   = 0
+    skip  = False
 
     with open(info_file) as f:
         for line in f:
+            if line.startswith('SF:'):
+                path = line[3:].strip()
+                skip = path.startswith('../tb/')
+                continue
+            if skip:
+                continue
             m = re.match(r'^DA:(\d+),(\d+)', line)
             if m:
                 total += 1
