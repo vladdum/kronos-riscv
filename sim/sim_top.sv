@@ -48,7 +48,25 @@ module sim_top
   input  logic        data_aw_ready_i,
   input  logic        data_w_ready_i,
   // Data port — slave inputs (B channel)
-  input  logic        data_b_valid_i
+  input  logic        data_b_valid_i,
+
+  // Retire-trace outputs (simulation observability — stage 5 only; tied
+  // to zero by stages 3/4 which do not emit retire traces).
+  output logic        retire_valid_o,
+  output logic [63:0] retire_pc_o,
+  output logic [31:0] retire_instr_o,
+  output logic        retire_rd_wen_o,
+  output logic [4:0]  retire_rd_o,
+  output logic [63:0] retire_rd_wdata_o,
+  output logic        retire_fp_wen_o,
+  output logic [4:0]  retire_fp_rd_o,
+  output logic [63:0] retire_fp_wdata_o,
+  output logic        retire_mem_wen_o,
+  output logic [63:0] retire_mem_addr_o,
+  output logic [63:0] retire_mem_wdata_o,
+  output logic        retire_csr_wen_o,
+  output logic [11:0] retire_csr_addr_o,
+  output logic [63:0] retire_csr_wdata_o
 );
 
   kronos_axi_req_t  instr_req, data_req;
@@ -103,15 +121,30 @@ module sim_top
   // DUT
   // -------------------------------------------------------------------------
   kronos_top u_top (
-    .clk_i           (clk_i),
-    .rst_ni          (rst_ni),
-    .instr_axi_req_o (instr_req),
-    .instr_axi_rsp_i (instr_rsp),
-    .data_axi_req_o  (data_req),
-    .data_axi_rsp_i  (data_rsp),
-    .irq_timer_i     (irq_timer_i),
-    .irq_fast_i      (irq_fast_i),
-    .boot_addr_i     (boot_addr_i)
+    .clk_i              (clk_i),
+    .rst_ni             (rst_ni),
+    .instr_axi_req_o    (instr_req),
+    .instr_axi_rsp_i    (instr_rsp),
+    .data_axi_req_o     (data_req),
+    .data_axi_rsp_i     (data_rsp),
+    .irq_timer_i        (irq_timer_i),
+    .irq_fast_i         (irq_fast_i),
+    .boot_addr_i        (boot_addr_i),
+    .retire_valid_o     (retire_valid_o),
+    .retire_pc_o        (retire_pc_o),
+    .retire_instr_o     (retire_instr_o),
+    .retire_rd_wen_o    (retire_rd_wen_o),
+    .retire_rd_o        (retire_rd_o),
+    .retire_rd_wdata_o  (retire_rd_wdata_o),
+    .retire_fp_wen_o    (retire_fp_wen_o),
+    .retire_fp_rd_o     (retire_fp_rd_o),
+    .retire_fp_wdata_o  (retire_fp_wdata_o),
+    .retire_mem_wen_o   (retire_mem_wen_o),
+    .retire_mem_addr_o  (retire_mem_addr_o),
+    .retire_mem_wdata_o (retire_mem_wdata_o),
+    .retire_csr_wen_o   (retire_csr_wen_o),
+    .retire_csr_addr_o  (retire_csr_addr_o),
+    .retire_csr_wdata_o (retire_csr_wdata_o)
   );
 
 endmodule

@@ -97,7 +97,7 @@ module kronos_csr #(
       12'h001: rdata_o = {59'b0, fcsr_q[4:0]};           // FFLAGS
       12'h002: rdata_o = {61'b0, fcsr_q[7:5]};           // FRM
       12'h003: rdata_o = {56'b0, fcsr_q};                 // FCSR
-      12'h300: rdata_o = mstatus;
+      12'h300: rdata_o = {(mstatus[14:13] == 2'b11), mstatus[62:0]}; // bit63=SD, derived from FS
       12'h301: rdata_o = misa;
       12'h304: rdata_o = mie;
       12'h305: rdata_o = mtvec;
@@ -166,7 +166,7 @@ module kronos_csr #(
           12'h001: fcsr_q[4:0] <= csr_new_val[4:0];
           12'h002: fcsr_q[7:5] <= csr_new_val[2:0];
           12'h003: fcsr_q      <= csr_new_val[7:0];
-          12'h300: mstatus  <= csr_new_val;
+          12'h300: mstatus  <= csr_new_val & 64'h7FFF_FFFF_FFFF_FFFF; // bit63 SD is read-only
           12'h304: mie      <= csr_new_val;
           12'h305: mtvec    <= csr_new_val;
           12'h340: mscratch <= csr_new_val;

@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [s1s2, s3s4, fp-unit, fp-top]
+        group: [s1s2, s3s4, fp-unit, fp-top, s5-int]
     name: sim-${{ matrix.group }}
 
     steps:
@@ -99,4 +99,53 @@ jobs:
         with:
           name: compliance-${{ matrix.stage }}-logs
           path: riscv-arch-test/work/*/logs
+          if-no-files-found: ignore
+
+  sim-diff:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [s5]
+    timeout-minutes: 30
+    name: sim-diff-${{ matrix.stage }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Verilator
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Install sail-riscv reference model
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+
+      - name: Install Python test deps
+        run: pip install pytest
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Unit-test trace_diff
+        run: pytest tools/tests/test_trace_diff.py -v
+
+      - name: Run sim-diff-all for ${{ matrix.stage }}
+        run: make -C sim sim-diff-all PULP_AXI_ROOT=/tmp/pulp_axi
+
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-diff-${{ matrix.stage }}-traces
+          path: sim/obj_dir/trace/
           if-no-files-found: ignore
