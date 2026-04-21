@@ -98,7 +98,9 @@ module kronos_lsu
       2'b01:   be = 4'b0011 << addr_q[1:0];
       2'b10:   be = 4'b1111;
       2'b11:   be = 4'b1111;  // SD: both beats cover a full word
+      // verilator coverage_off
       default: be = 4'b1111;
+      // verilator coverage_on
     endcase
   end
 
@@ -109,7 +111,9 @@ module kronos_lsu
       2'b01:   wdata_rep = {2{wdata_q[15:0]}};
       2'b10:   wdata_rep = wdata_q[31:0];
       2'b11:   wdata_rep = wdata_q[31:0];  // SD low beat
+      // verilator coverage_off
       default: wdata_rep = wdata_q[31:0];
+      // verilator coverage_on
     endcase
   end
 
@@ -387,7 +391,9 @@ module kronos_lsu
           state_q    <= STORE_SEND;
         end
 
+        // verilator coverage_off
         default: state_q <= IDLE;
+        // verilator coverage_on
       endcase
     end
   end

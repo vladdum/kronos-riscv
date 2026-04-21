@@ -9,7 +9,7 @@ CFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostdlib -static -T../stage0/link.ld
 
 TESTS  := test_fdiv_basic test_fsqrt_basic test_fdiv_rounding test_fsqrt_rounding \
           test_fdiv_exceptions test_fsqrt_exceptions test_fdiv_subnormal \
-          test_fsqrt_subnormal test_fdiv_nan_box test_fdiv_stall
+          test_fsqrt_subnormal test_fdiv_nan_box test_fdiv_stall test_fdiv_irq
 
 BUILD_DIR := build
 

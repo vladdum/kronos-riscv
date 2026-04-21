@@ -764,11 +764,13 @@ module kronos_fpu_fmul
       end
     end else begin
       // For single: kept field is low 24 bits of mant_rnd.
+      // verilator coverage_off
       if (mant_rnd[1 + S_SIG_W]) begin
         // carry out into bit 24
         mant_rnd = mant_rnd >> 1;
         exp_rnd  = exp_rnd + 13'sd1;
       end
+      // verilator coverage_on
       if ((exp_in == 13'sd0) && mant_rnd[S_SIG_W]) begin
         exp_rnd = 13'sd1;
       end

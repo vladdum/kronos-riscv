@@ -65,6 +65,50 @@ module tb_muldiv_s5;
     do_op(MULDIV_REM,  64'd100,                  64'd7,           1, 64'd2,                   "REMW");
     do_op(MULDIV_DIV,  64'd42,                   64'd0,           1, 64'hFFFF_FFFF_FFFF_FFFF, "DIVW_zero");
 
+    // MULHSU and MULHU  [covers lines 270-271]
+    do_op(MULDIV_MULHSU, 64'h8000_0000_0000_0000, 64'h2, 0,
+          64'hFFFF_FFFF_FFFF_FFFF, "MULHSU64");
+    do_op(MULDIV_MULHU,  64'hFFFF_FFFF_FFFF_FFFF, 64'h2, 0,
+          64'h0000_0000_0000_0001, "MULHU64");
+
+    // Division where LSB of quotient = 1 (final step sets quotient bit 1)  [covers lines 299-300]
+    do_op(MULDIV_DIV, 64'd105, 64'd7, 0, 64'd15, "DIV64_odd_q");
+
+    // REMW / REMUW divide-by-zero → dividend sign-extended  [covers line 217-219]
+    do_op(MULDIV_REM,  64'hFFFF_FFFF_DEAD_BEEF, 64'd0, 1,
+          64'hFFFF_FFFF_DEAD_BEEF, "REMW_zero");
+    do_op(MULDIV_REMU, 64'hFFFF_FFFF_CAFE_BABE, 64'd0, 1,
+          64'hFFFF_FFFF_CAFE_BABE, "REMUW_zero");
+
+    // Signed overflow: INT64_MIN / -1  [covers lines 224-227]
+    do_op(MULDIV_DIV, 64'h8000_0000_0000_0000, 64'hFFFF_FFFF_FFFF_FFFF, 0,
+          64'h8000_0000_0000_0000, "DIV64_overflow");
+    // Signed overflow: INT32_MIN / -1 (word)  [also covers ov_div path for word_op]
+    do_op(MULDIV_DIV, 64'hFFFF_FFFF_8000_0000, 64'hFFFF_FFFF_FFFF_FFFF, 1,
+          64'hFFFF_FFFF_8000_0000, "DIVW_overflow");
+
+    // Signed overflow: INT64_MIN % -1 = 0  [covers lines 228-231]
+    do_op(MULDIV_REM, 64'h8000_0000_0000_0000, 64'hFFFF_FFFF_FFFF_FFFF, 0,
+          64'd0, "REM64_overflow");
+    // Signed overflow: INT32_MIN % -1 = 0 (word)
+    do_op(MULDIV_REM, 64'hFFFF_FFFF_8000_0000, 64'hFFFF_FFFF_FFFF_FFFF, 1,
+          64'd0, "REMW_overflow");
+
+    // REMU64 divide-by-zero → dividend  [covers line 219 else branch]
+    do_op(MULDIV_REMU, 64'hDEAD_BEEF_CAFE_BABE, 64'd0, 0,
+          64'hDEAD_BEEF_CAFE_BABE, "REMU64_zero");
+
+    // ---- Directed: invalid muldiv_op_e → IDLE default arm  [covers line 248] ----
+    // Drive req with an invalid op for one cycle; state stays IDLE, valid stays low.
+    @(posedge clk);
+    op = muldiv_op_e'(4'd15); a = 64'hDEAD; b = 64'hBEEF; word_op = 0; req = 1;
+    @(posedge clk);
+    req = 0;
+    @(posedge clk);
+    if (!idle) begin
+      $display("FAIL muldiv invalid op: not idle after invalid op"); errors++;
+    end
+
     if (errors == 0) $display("tb_muldiv_s5: ALL PASSED");
     else $display("tb_muldiv_s5: %0d FAILED", errors);
     $finish;

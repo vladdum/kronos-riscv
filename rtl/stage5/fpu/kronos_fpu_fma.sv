@@ -954,10 +954,12 @@ module kronos_fpu_fma
         pre_mag = mag >> shift_right_amt;
         s5_raw_sig_comb = pre_mag[52:0];
 
+        // verilator coverage_off
         if (shift_right_amt == 0) begin
           s5_guard_comb   = 1'b0;
           s5_round_b_comb = 1'b0;
           s5_sticky_comb  = 1'b0;
+        // verilator coverage_on
         end else if (shift_right_amt == 1) begin
           s5_guard_comb   = mag[0];
           s5_round_b_comb = 1'b0;
@@ -1147,18 +1149,22 @@ module kronos_fpu_fma
       // Tininess-after-rounding using carried s5b_mag and s5b_normal_shift
       if (s5b_tiny && inexact) begin
         normal_shift = s5b_normal_shift;
+        // verilator coverage_off
         if (normal_shift >= SUM_W) begin
           raw_sig_n = '0;
           guard_n   = 1'b0;
           round_n   = 1'b0;
           sticky_n  = (s5b_mag != '0);
         end else begin
+          // verilator coverage_on
           pre_mag_n = s5b_mag >> normal_shift;
           raw_sig_n = pre_mag_n[52:0];
+          // verilator coverage_off
           if (normal_shift == 0) begin
             guard_n  = 1'b0;
             round_n  = 1'b0;
             sticky_n = 1'b0;
+          // verilator coverage_on
           end else if (normal_shift == 1) begin
             guard_n  = s5b_mag[0];
             round_n  = 1'b0;

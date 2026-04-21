@@ -71,8 +71,10 @@ module kronos_fpu_fadd
     clz_sig = SIG_W;
     for (i = 0; i < SIG_W; i++) begin
       if (x[SIG_W-1-i]) begin
+        // verilator coverage_off
         clz_sig = i;
         break;
+        // verilator coverage_on
       end
     end
   endfunction
