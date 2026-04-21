@@ -104,6 +104,22 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    // -------------------------------------------------------------------
+    // Retire trace (Sail diff harness). Gated by SIM_TRACE=<path>.
+    // One line per retired instruction in the normalized format:
+    //   <pc>:<instr> [x<n>=<hex>] [f<n>=<hex>] [mem[<addr>]=<hex>]
+    //     [mem_rd[<addr>]=<hex>] [csr[<addr>]=<hex>]
+    // -------------------------------------------------------------------
+    FILE* trace_fp = nullptr;
+    const char* trace_path = getenv("SIM_TRACE");
+    if (trace_path) {
+        trace_fp = fopen(trace_path, "w");
+        if (!trace_fp) {
+            fprintf(stderr, "[sim] ERROR: cannot open SIM_TRACE=%s\n", trace_path);
+            return 1;
+        }
+    }
+
     // Initialise all inputs
     top->clk_i           = 0;
     top->rst_ni          = 0;
@@ -132,6 +148,7 @@ int main(int argc, char** argv) {
     const char* max_env = getenv("SIM_MAX_CYCLES");
     if (max_env) MAX_CYCLES = atoi(max_env);
     int halted = 0;
+    int halt_drain = 0;  // cycles left to drain after halt (lets mem_stall clear)
     uint32_t halt_x10 = 0;
     // irq_countdown: cycles remaining for irq_timer_i to stay asserted.
     // Held for INSTR_LAT*4 + DATA_LAT + 4 cycles so the pipeline can take the
@@ -149,7 +166,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    for (int cycle = 0; cycle < MAX_CYCLES && !halted; cycle++) {
+    for (int cycle = 0; cycle < MAX_CYCLES; cycle++) {
 
         // ---- Drive IRQ ----
         top->irq_timer_i = (irq_countdown > 0) ? 1 : 0;
@@ -291,10 +308,12 @@ int main(int argc, char** argv) {
                         putchar((wdat >> (i * 8)) & 0xFF);
                 fflush(stdout);
             } else if ((waddr & 0xC0000000u) == 0x40000000u) {
-                // Halt
+                // Halt — drain DATA_LAT+1 more cycles so mem_stall can clear and
+                // any instruction stalled in mem_wb_q behind the store can retire.
                 halt_x10 = wdat;
                 printf("[sim] halt at cycle %d, x10 = %u\n", cycle, wdat);
                 halted = 1;
+                halt_drain = DATA_LAT + 1;
             } else {
                 uint32_t wi  = (waddr >> 2) & 0x7FFFF;
                 uint32_t cur = mem[wi];
@@ -320,7 +339,48 @@ int main(int argc, char** argv) {
             data_w.b_pending = false;
         }
 
-        if (halted) break;
+        // ---- Retire trace (sampled before rising edge) -------------------------
+        // retire_valid_o = mem_wb_q.valid & ~combined_stall is combinatorial.
+        // Sampling here (after the pre-edge eval, before the rising edge) gives
+        // the correct value: combined_stall reflects whether this cycle's WB
+        // instruction retires.  Sampling after the rising edge is too late —
+        // mem_wb_q has already advanced and combined_stall may have toggled.
+        //
+        // When halted, we drain halt_drain more cycles so the B response can
+        // arrive and state_q can transition to STORE_DONE on the rising edge,
+        // clearing mem_stall so the instruction stalled in mem_wb_q can retire.
+        if (trace_fp && top->retire_valid_o) {
+            // PC + instruction
+            fprintf(trace_fp, "%016llx:%08x",
+                    (unsigned long long)top->retire_pc_o,
+                    (unsigned)top->retire_instr_o);
+            if (top->retire_rd_wen_o && top->retire_rd_o != 0) {
+                fprintf(trace_fp, " x%u=%016llx",
+                        (unsigned)top->retire_rd_o,
+                        (unsigned long long)top->retire_rd_wdata_o);
+            }
+            if (top->retire_fp_wen_o) {
+                fprintf(trace_fp, " f%u=%016llx",
+                        (unsigned)top->retire_fp_rd_o,
+                        (unsigned long long)top->retire_fp_wdata_o);
+            }
+            if (top->retire_mem_wen_o) {
+                fprintf(trace_fp, " mem[%016llx]=%016llx",
+                        (unsigned long long)top->retire_mem_addr_o,
+                        (unsigned long long)top->retire_mem_wdata_o);
+            }
+            if (top->retire_csr_wen_o) {
+                fprintf(trace_fp, " csr[%03x]=%016llx",
+                        (unsigned)top->retire_csr_addr_o,
+                        (unsigned long long)top->retire_csr_wdata_o);
+            }
+            fputc('\n', trace_fp);
+        }
+
+        if (halted) {
+            if (halt_drain <= 0) break;
+            --halt_drain;
+        }
 
         // ---- Rising edge ----
         top->clk_i = 1;
@@ -348,6 +408,7 @@ int main(int argc, char** argv) {
 #if VM_TRACE
     if (vcd) { vcd->close(); delete vcd; }
 #endif
+    if (trace_fp) fclose(trace_fp);
     top->final();
     delete top;
     return (halted && halt_x10 == 0) ? 0 : 1;

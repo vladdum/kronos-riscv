@@ -43,15 +43,30 @@ module tb_core_fp_forwarding;
   kronos_axi_resp_t instr_rsp, data_rsp;
 
   kronos_top u_top (
-    .clk_i           (clk),
-    .rst_ni          (rst_n),
-    .instr_axi_req_o (instr_req),
-    .instr_axi_rsp_i (instr_rsp),
-    .data_axi_req_o  (data_req),
-    .data_axi_rsp_i  (data_rsp),
-    .irq_timer_i     (1'b0),
-    .irq_fast_i      (15'd0),
-    .boot_addr_i     (32'h0)
+    .clk_i                (clk),
+    .rst_ni               (rst_n),
+    .instr_axi_req_o      (instr_req),
+    .instr_axi_rsp_i      (instr_rsp),
+    .data_axi_req_o       (data_req),
+    .data_axi_rsp_i       (data_rsp),
+    .irq_timer_i          (1'b0),
+    .irq_fast_i           (15'd0),
+    .boot_addr_i          (32'h0),
+    .retire_valid_o       (),
+    .retire_pc_o          (),
+    .retire_instr_o       (),
+    .retire_rd_wen_o      (),
+    .retire_rd_o          (),
+    .retire_rd_wdata_o    (),
+    .retire_fp_wen_o      (),
+    .retire_fp_rd_o       (),
+    .retire_fp_wdata_o    (),
+    .retire_mem_wen_o     (),
+    .retire_mem_addr_o    (),
+    .retire_mem_wdata_o   (),
+    .retire_csr_wen_o     (),
+    .retire_csr_addr_o    (),
+    .retire_csr_wdata_o   ()
   );
 
   // -----------------------------------------------------------------------

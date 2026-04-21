@@ -189,6 +189,9 @@ package kronos_pkg;
     logic        is_16b;
     logic        pred_taken;
     logic [31:0] pred_target;
+    // Retire-trace: original 32-bit instruction word (already expanded from
+    // the C-extension alignment unit, so this is the fully-expanded form).
+    logic [31:0] instr;
   } id_ex_reg_t;
 
   typedef struct packed {
@@ -204,6 +207,10 @@ package kronos_pkg;
     logic           is_16b;      // needed so WB computes correct pc4 link address
     logic           pred_taken;  // propagated for MEM-stage bpred target check
     logic [31:0]    pred_target; // propagated for MEM-stage bpred target check
+    // Retire-trace: original 32-bit instruction word and the rs1 value fed
+    // into kronos_csr (snapshot of the CSR write source operand).
+    logic [31:0]    instr;
+    logic [63:0]    csr_wdata;
   } ex_mem_reg_t;
 
   typedef struct packed {
@@ -213,6 +220,14 @@ package kronos_pkg;
     logic [63:0]    csr_rdata;
     logic [31:0]    pc4;
     logic           valid;
+    // Retire-trace fields (populated for differential tracing against a
+    // reference model).  Not consumed by the pipeline itself; kept in the
+    // same flop so the values line up with the cycle mem_wb_q advances.
+    logic [31:0]    pc;
+    logic [31:0]    instr;
+    logic [63:0]    mem_addr;    // ex_mem_q.alu_result at MEM (store addr)
+    logic [63:0]    mem_wdata;   // ex_mem_q.rs2_data at MEM (store data)
+    logic [63:0]    csr_wdata;   // rs1 data presented to kronos_csr at EX
   } mem_wb_reg_t;
 
   // -------------------------------------------------------------------------

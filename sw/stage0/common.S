@@ -5,6 +5,11 @@
 .global _start
 _start:
   la   sp, _stack_top
+  # Enable the FP unit: set mstatus.FS = Dirty (0x6000) so FP instructions
+  # are legal on both Kronos (which initialises FS=Dirty at reset) and the
+  # Sail reference model (which initialises FS=Off).
+  li   t0, 0x6000
+  csrrs zero, mstatus, t0
   call main
   # Halt: write failure count (a0 = x10) to 0x40000000 (sim_main.cpp halts on this)
 _halt:

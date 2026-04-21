@@ -126,6 +126,8 @@ kronos-riscv/
 
 See [`docs/architecture.md`](docs/architecture.md) for the full architecture reference covering all completed stages (0–5b).
 
+See [`docs/testplan.md`](docs/testplan.md) for the catalog of every verification test and how to run it.
+
 ## Building
 
 Prerequisites: Verilator, FuseSoC, `riscv64-unknown-elf-gcc`.

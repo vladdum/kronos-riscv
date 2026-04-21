@@ -25,7 +25,28 @@ module kronos_top
 
   input  logic             irq_timer_i,
   input  logic [14:0]      irq_fast_i,
-  input  logic [31:0]      boot_addr_i
+  input  logic [31:0]      boot_addr_i,
+
+  // ----------------------------------------------------------------------
+  // Debug/trace outputs (simulation-only; unconnected in synthesis targets).
+  // Expose committed instruction state for Sail differential tracing.
+  // Driven from mem_wb_q in the cycle it advances past WB.
+  // ----------------------------------------------------------------------
+  output logic        retire_valid_o,
+  output logic [63:0] retire_pc_o,
+  output logic [31:0] retire_instr_o,
+  output logic        retire_rd_wen_o,
+  output logic [4:0]  retire_rd_o,
+  output logic [63:0] retire_rd_wdata_o,
+  output logic        retire_fp_wen_o,
+  output logic [4:0]  retire_fp_rd_o,
+  output logic [63:0] retire_fp_wdata_o,
+  output logic        retire_mem_wen_o,
+  output logic [63:0] retire_mem_addr_o,
+  output logic [63:0] retire_mem_wdata_o,
+  output logic        retire_csr_wen_o,
+  output logic [11:0] retire_csr_addr_o,
+  output logic [63:0] retire_csr_wdata_o
 );
 
   // -------------------------------------------------------------------------
@@ -708,6 +729,7 @@ module kronos_top
       id_ex_q.pred_target <= if_id_q.pred_target;
       id_ex_q.fwd_rs1_sel <= fwd_rs1_sel;
       id_ex_q.fwd_rs2_sel <= fwd_rs2_sel;
+      id_ex_q.instr       <= if_id_q.instr;
     end
   end
 
@@ -840,6 +862,12 @@ module kronos_top
       ex_mem_q.is_16b      <= id_ex_q.is_16b;
       ex_mem_q.pred_taken  <= id_ex_q.pred_taken;
       ex_mem_q.pred_target <= id_ex_q.pred_target;
+      ex_mem_q.instr       <= id_ex_q.instr;
+      // Capture the CSR write source value presented to kronos_csr.  Matches
+      // rs1_data_i on u_csr (for zimm variants the CSR unit already reads
+      // dec.rs1 as the 5-bit immediate, so the integer rs1 is the right
+      // snapshot for trace purposes).
+      ex_mem_q.csr_wdata   <= fwd_rs1_data;
     end
   end
 
@@ -905,6 +933,12 @@ module kronos_top
       mem_wb_q.csr_rdata  <= ex_mem_q.csr_rdata;
       mem_wb_q.pc4        <= ex_mem_q.pc + (ex_mem_q.is_16b ? 32'd2 : 32'd4);
       mem_wb_q.valid      <= ex_mem_q.valid;
+      // Retire-trace field snapshots.
+      mem_wb_q.pc         <= ex_mem_q.pc;
+      mem_wb_q.instr      <= ex_mem_q.instr;
+      mem_wb_q.mem_addr   <= ex_mem_q.alu_result;
+      mem_wb_q.mem_wdata  <= ex_mem_q.rs2_data;
+      mem_wb_q.csr_wdata  <= ex_mem_q.csr_wdata;
     end
   end
 
@@ -931,5 +965,53 @@ module kronos_top
     // the MEM/WB boundary above), so wb_result_64 is correct without an
     // explicit override here.
   end
+
+  // =========================================================================
+  // Retire-trace driver (simulation-only observability).
+  //
+  // Fires in the cycle that mem_wb_q advances past WB — i.e. when the
+  // committed state of the instruction is visible on the WB mux and the
+  // pipeline is not stalled.  The cycle aligns with the existing
+  // instret_retire_i pulse (EX→MEM), but observed one stage later so that
+  // the post-MEM results (LSU data, FP result) are present.
+  //
+  // Note on CSR write-enable: decoded_instr_t has no separate is_csr_write
+  // bit — retire_csr_wen_o is asserted for any committed CSR instruction
+  // (is_csr), matching what the CSR unit actually executes.  Trace consumers
+  // should filter by csr_funct3 if they need to distinguish read-only CSR
+  // accesses from read-modify-write ones.
+  // =========================================================================
+  logic retire_advance;
+  assign retire_advance = mem_wb_q.valid & ~combined_stall;
+
+  assign retire_valid_o      = retire_advance;
+  assign retire_pc_o         = {32'b0, mem_wb_q.pc};
+  assign retire_instr_o      = mem_wb_q.instr;
+  assign retire_rd_wen_o     = retire_advance & mem_wb_q.dec.rd_wen & ~mem_wb_q.dec.rd_fp;
+  assign retire_rd_o         = mem_wb_q.dec.rd;
+  assign retire_rd_wdata_o   = wb_result_64;
+  // FP writes: FP arithmetic (is_fp & rd_fp & ~fp_load) or FP load (fp_load)
+  assign retire_fp_wen_o     = retire_advance &
+                               ((mem_wb_q.dec.is_fp & mem_wb_q.dec.rd_fp & ~mem_wb_q.dec.fp_load) |
+                                mem_wb_q.dec.fp_load);
+  assign retire_fp_rd_o      = mem_wb_q.dec.rd;
+  // FP arithmetic result is in alu_result; FP load NaN-boxes lower 32b (FLW) or uses full 64b (FLD)
+  assign retire_fp_wdata_o   = mem_wb_q.dec.fp_load
+                               ? (mem_wb_q.dec.mem_funct3[0]  // funct3[0]=1 → FLD (011), =0 → FLW (010)
+                                  ? mem_wb_q.lsu_rdata
+                                  : {32'hFFFF_FFFF, mem_wb_q.lsu_rdata[31:0]})
+                               : mem_wb_q.alu_result;
+
+  assign retire_mem_wen_o    = retire_advance & mem_wb_q.dec.is_store;
+  assign retire_mem_addr_o   = mem_wb_q.mem_addr;
+  // Mask store data to the bytes actually written (matching Sail's trace format)
+  assign retire_mem_wdata_o  = mem_wb_q.mem_wdata &
+                               (mem_wb_q.dec.mem_funct3[1:0] == 2'b11 ? 64'hFFFF_FFFF_FFFF_FFFF :
+                                mem_wb_q.dec.mem_funct3[1:0] == 2'b10 ? 64'h0000_0000_FFFF_FFFF :
+                                mem_wb_q.dec.mem_funct3[1:0] == 2'b01 ? 64'h0000_0000_0000_FFFF :
+                                                                         64'h0000_0000_0000_00FF);
+  assign retire_csr_wen_o    = retire_advance & mem_wb_q.dec.is_csr;
+  assign retire_csr_addr_o   = mem_wb_q.dec.csr_addr;
+  assign retire_csr_wdata_o  = mem_wb_q.csr_wdata;
 
 endmodule

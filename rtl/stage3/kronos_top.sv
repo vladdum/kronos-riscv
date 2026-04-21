@@ -24,7 +24,25 @@ module kronos_top
 
   input  logic             irq_timer_i,
   input  logic [14:0]      irq_fast_i,
-  input  logic [31:0]      boot_addr_i
+  input  logic [31:0]      boot_addr_i,
+
+  // Retire-trace outputs (stage 5 only; tied to zero here for port
+  // compatibility with the shared sim_top wrapper).
+  output logic        retire_valid_o,
+  output logic [63:0] retire_pc_o,
+  output logic [31:0] retire_instr_o,
+  output logic        retire_rd_wen_o,
+  output logic [4:0]  retire_rd_o,
+  output logic [63:0] retire_rd_wdata_o,
+  output logic        retire_fp_wen_o,
+  output logic [4:0]  retire_fp_rd_o,
+  output logic [63:0] retire_fp_wdata_o,
+  output logic        retire_mem_wen_o,
+  output logic [63:0] retire_mem_addr_o,
+  output logic [63:0] retire_mem_wdata_o,
+  output logic        retire_csr_wen_o,
+  output logic [11:0] retire_csr_addr_o,
+  output logic [63:0] retire_csr_wdata_o
 );
 
   // -------------------------------------------------------------------------
@@ -567,5 +585,23 @@ module kronos_top
   end
 
   assign wb_result = wb_result_64[31:0];
+
+  // Retire-trace outputs: tied off in stage 3 (trace collection is a
+  // stage-5 feature).  Keeps the port list compatible with sim_top.sv.
+  assign retire_valid_o     = 1'b0;
+  assign retire_pc_o        = '0;
+  assign retire_instr_o     = '0;
+  assign retire_rd_wen_o    = 1'b0;
+  assign retire_rd_o        = '0;
+  assign retire_rd_wdata_o  = '0;
+  assign retire_fp_wen_o    = 1'b0;
+  assign retire_fp_rd_o     = '0;
+  assign retire_fp_wdata_o  = '0;
+  assign retire_mem_wen_o   = 1'b0;
+  assign retire_mem_addr_o  = '0;
+  assign retire_mem_wdata_o = '0;
+  assign retire_csr_wen_o   = 1'b0;
+  assign retire_csr_addr_o  = '0;
+  assign retire_csr_wdata_o = '0;
 
 endmodule

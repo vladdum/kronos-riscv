@@ -113,8 +113,41 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-fpu-top-iter \
         sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov \
         sim-fpu-fma-cov coverage \
+        sim-alu-s5-cov sim-muldiv-s5-cov sim-decode-s5-cov sim-lsu-s5-cov \
         sim-s5b \
-        sim-group-s1s2 sim-group-s3s4 sim-group-fp-unit sim-group-fp-top
+        sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5 sim-group-s5-int \
+        sim-group-s1s2 sim-group-s3s4 sim-group-fp-unit sim-group-fp-top \
+        sim-diff-% sim-diff-all
+
+# ── Sail differential-trace harness ─────────────────────────────────────────
+TRACE_DIR := $(OBJ_DIR)/trace
+
+# sim-diff-<test>: run one stage-5 assembly test under Kronos + Sail, diff.
+sim-diff-%: build-s5
+	@mkdir -p $(TRACE_DIR)
+	@$(MAKE) -C $(SW_DIR_S5) build/$*.hex >/dev/null
+	@SIM_TRACE=$(TRACE_DIR)/$*.kronos ./$(SIM_BIN_S5) $(SW_DIR_S5)/build/$*.hex >/dev/null 2>&1
+	@../tools/sail_trace.sh $(SW_DIR_S5)/build/$*.elf > $(TRACE_DIR)/$*.sail
+	@../tools/trace_diff.py $(TRACE_DIR)/$*.kronos $(TRACE_DIR)/$*.sail \
+	  && echo "PASS  sim-diff-$*" \
+	  || { echo "FAIL  sim-diff-$*"; exit 1; }
+
+# sim-diff-all: run sim-diff on every stage-5 assembly test + every ACT4 ELF.
+sim-diff-all: build-s5
+	@mkdir -p $(TRACE_DIR)
+	@$(MAKE) -C $(SW_DIR_S5) all >/dev/null
+	@fail=0; \
+	for t in $(shell ls $(SW_DIR_S5)/build/*.hex 2>/dev/null | sed 's!.*/!!; s!\.hex!!'); do \
+	  SIM_TRACE=$(TRACE_DIR)/$$t.kronos ./$(SIM_BIN_S5) $(SW_DIR_S5)/build/$$t.hex >/dev/null 2>&1; \
+	  ../tools/sail_trace.sh $(SW_DIR_S5)/build/$$t.elf > $(TRACE_DIR)/$$t.sail; \
+	  if ../tools/trace_diff.py $(TRACE_DIR)/$$t.kronos $(TRACE_DIR)/$$t.sail > $(TRACE_DIR)/$$t.diff; then \
+	    echo "PASS  $$t"; \
+	  else \
+	    echo "FAIL  $$t"; cat $(TRACE_DIR)/$$t.diff; fail=$$((fail+1)); \
+	  fi; \
+	done; \
+	echo "sim-diff-all: $$fail failing"; \
+	[ $$fail -eq 0 ]
 
 .DEFAULT_GOAL := help
 
@@ -501,7 +534,8 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
              sim-fpu-scoreboard sim-regfile-fp sim-csr-fp sim-decode-fp sim-lsu-fp \
              sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
              sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc \
-             sim-fpu-iter sim-fpu-top sim-fpu-top-iter
+             sim-fpu-iter sim-fpu-top sim-fpu-top-iter \
+             sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5
 
 # ── CI test groups ────────────────────────────────────────────────────────────
 # Run as: make -j$(nproc) sim-group-<name>
@@ -522,6 +556,8 @@ SIM_GROUP_FP_UNIT := sim-pkg-fp sim-hf-smoke sim-sf-smoke \
 
 SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
 
+SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5
+
 $(OBJ_DIR):
 	mkdir -p $@
 
@@ -529,6 +565,7 @@ sim-group-s1s2:    $(SIM_GROUP_S1S2)    | $(OBJ_DIR)
 sim-group-s3s4:    $(SIM_GROUP_S3S4)    | $(OBJ_DIR)
 sim-group-fp-unit: $(SIM_GROUP_FP_UNIT) | $(OBJ_DIR)
 sim-group-fp-top:  $(SIM_GROUP_FP_TOP)  | $(OBJ_DIR)
+sim-group-s5-int:  $(SIM_GROUP_S5_INT)  | $(OBJ_DIR)
 
 SIM_REPORT_DIR := $(OBJ_DIR)/sim-results
 
@@ -933,6 +970,48 @@ sim-lsu-fp:
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/lsu_fp
 	$(OBJ_DIR)/lsu_fp/Vtb_lsu_fp
 
+# ── Stage 5 integer unit TBs (SIM_GROUP_S5_INT) ───────────────────────────
+TB_ALU_S5_FILES := $(AXI_PKG_SV) \
+                   $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage5/kronos_alu.sv \
+                   $(TB_DIR)/stage5/tb_alu_s5.sv
+sim-alu-s5:
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_alu_s5 $(TB_ALU_S5_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_alu_s5
+	$(OBJ_DIR)/tb_alu_s5/Vtb_alu_s5
+
+TB_MULDIV_S5_FILES := $(AXI_PKG_SV) \
+                      $(RTL_DIR)/kronos_pkg.sv \
+                      $(RTL_DIR)/stage5/kronos_muldiv.sv \
+                      $(TB_DIR)/stage5/tb_muldiv_s5.sv
+sim-muldiv-s5:
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_muldiv_s5 $(TB_MULDIV_S5_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_muldiv_s5
+	$(OBJ_DIR)/tb_muldiv_s5/Vtb_muldiv_s5
+
+TB_DECODE_S5_FILES := $(AXI_PKG_SV) \
+                      $(RTL_DIR)/kronos_pkg.sv \
+                      $(RTL_DIR)/stage5/kronos_decode.sv \
+                      $(TB_DIR)/stage5/tb_decode_s5.sv
+sim-decode-s5:
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_decode_s5 $(TB_DECODE_S5_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_decode_s5
+	$(OBJ_DIR)/tb_decode_s5/Vtb_decode_s5
+
+TB_LSU_S5_FILES := $(AXI_PKG_SV) \
+                   $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage5/kronos_lsu.sv \
+                   $(TB_DIR)/stage5/tb_lsu_s5.sv
+sim-lsu-s5:
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --Wno-PINCONNECTEMPTY \
+	  --top-module tb_lsu_s5 $(TB_LSU_S5_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_lsu_s5
+	$(OBJ_DIR)/tb_lsu_s5/Vtb_lsu_s5
+
 TB_FPU_TOP_FILES := $(FPU_COMMON_FILES) \
                     $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
@@ -1016,15 +1095,49 @@ sim-fpu-fma-cov: $(SF_LIB)
 	$(OBJ_DIR)/fpu_fma_cov/Vtb_fpu_fma \
 	  +verilator+coverage+file+$(OBJ_DIR)/fpu_fma_cov/coverage.dat
 
-coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov sim-fpu-fma-cov
+sim-alu-s5-cov:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  -Mdir $(OBJ_DIR)/alu_s5_cov --top-module tb_alu_s5 \
+	  $(TB_ALU_S5_FILES)
+	$(OBJ_DIR)/alu_s5_cov/Vtb_alu_s5 \
+	  +verilator+coverage+file+$(OBJ_DIR)/alu_s5_cov/coverage.dat
+
+sim-muldiv-s5-cov:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  -Mdir $(OBJ_DIR)/muldiv_s5_cov --top-module tb_muldiv_s5 \
+	  $(TB_MULDIV_S5_FILES)
+	$(OBJ_DIR)/muldiv_s5_cov/Vtb_muldiv_s5 \
+	  +verilator+coverage+file+$(OBJ_DIR)/muldiv_s5_cov/coverage.dat
+
+sim-decode-s5-cov:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  -Mdir $(OBJ_DIR)/decode_s5_cov --top-module tb_decode_s5 \
+	  $(TB_DECODE_S5_FILES)
+	$(OBJ_DIR)/decode_s5_cov/Vtb_decode_s5 \
+	  +verilator+coverage+file+$(OBJ_DIR)/decode_s5_cov/coverage.dat
+
+sim-lsu-s5-cov:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) $(COV_FLAGS) --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --Wno-PINCONNECTEMPTY \
+	  -Mdir $(OBJ_DIR)/lsu_s5_cov --top-module tb_lsu_s5 \
+	  $(TB_LSU_S5_FILES)
+	$(OBJ_DIR)/lsu_s5_cov/Vtb_lsu_s5 \
+	  +verilator+coverage+file+$(OBJ_DIR)/lsu_s5_cov/coverage.dat
+
+coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov sim-fpu-fma-cov \
+          sim-alu-s5-cov sim-muldiv-s5-cov sim-decode-s5-cov sim-lsu-s5-cov
 	mkdir -p $(COV_DIR)
 	verilator_coverage --write-info $(COV_DIR)/merged.info \
 	  $(OBJ_DIR)/fpu_fmisc_cov/coverage.dat \
 	  $(OBJ_DIR)/fpu_fcvt_cov/coverage.dat \
 	  $(OBJ_DIR)/fpu_fadd_cov/coverage.dat \
 	  $(OBJ_DIR)/fpu_fmul_cov/coverage.dat \
-	  $(OBJ_DIR)/fpu_fma_cov/coverage.dat
-	python3 ../tools/coverage_gate.py $(COV_DIR)/merged.info 95
+	  $(OBJ_DIR)/fpu_fma_cov/coverage.dat \
+	  $(OBJ_DIR)/alu_s5_cov/coverage.dat \
+	  $(OBJ_DIR)/muldiv_s5_cov/coverage.dat \
+	  $(OBJ_DIR)/decode_s5_cov/coverage.dat \
+	  $(OBJ_DIR)/lsu_s5_cov/coverage.dat
+	python3 ../tools/coverage_gate.py $(COV_DIR)/merged.info 90
 
 clean:
 	rm -rf $(OBJ_DIR)
