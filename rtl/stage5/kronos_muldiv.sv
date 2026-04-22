@@ -4,13 +4,15 @@
 
 // kronos_muldiv.sv — multi-cycle 64-bit multiply/divide unit (RV64M).
 //
-// MUL/MULH/MULHSU/MULHU: 4-cycle latency (MUL_IN, MUL_OUT, DONE).
+// MUL/MULH/MULHSU/MULHU: 5-cycle latency (MUL_IN, MUL_MID, MUL_OUT, DONE).
 //   IDLE: latch sign-extended 65-bit operands into mul_a65_q / mul_b65_q.
-//   MUL_IN: register the 65×65 product into mul_product_q.
+//   MUL_IN: split mul_b65_q into a 33-bit signed high half [64:32] and a
+//           32-bit unsigned low half [31:0], compute two 65×33 partial
+//           products pp_hi_q / pp_lo_q.  Each fits in a short DSP48E2
+//           cascade rather than the 3-DSP cascade a single 65×65 requires.
+//   MUL_MID: sum pp_hi_q << 32 + pp_lo_q into mul_product_q.
 //   MUL_OUT: select high/low half, apply word_op sign extension → result_q.
 //   DONE: expose result.
-//   Breaking the multiply into two registered stages keeps each half under
-//   budget at 148 MHz: operand-extend path ~2–3 ns, DSP-cascade path ~5.5 ns.
 //
 // DIV/DIVU/REM/REMU: IDLE -> COMPUTE x N -> DONE, where
 //   N = 64 for full 64-bit ops and N = 32 when word_op_i is asserted.
@@ -54,9 +56,10 @@ module kronos_muldiv
   typedef enum logic [2:0] {
     IDLE    = 3'd0,
     MUL_IN  = 3'd1,  // register sign-extended operands
-    MUL_OUT = 3'd2,  // register DSP product
-    COMPUTE = 3'd3,  // iterative division step
-    DONE    = 3'd4
+    MUL_MID = 3'd2,  // register 65x33 partial products
+    MUL_OUT = 3'd3,  // register 130-bit full product
+    COMPUTE = 3'd4,  // iterative division step
+    DONE    = 3'd5
   } muldiv_state_e;
 
   muldiv_state_e state_q;
@@ -80,9 +83,15 @@ module kronos_muldiv
   logic [64:0] mul_a65;
   logic [64:0] mul_b65;
 
-  // Registered pipeline stages
+  // Registered pipeline stages.
+  // Partial-product width: 65 (signed a) × 33 (signed b-half) = 98 bits signed.
+  // The 65×65 signed multiply is decomposed into pp_hi = a × b[64:32]_signed
+  // and pp_lo = a × {1'b0, b[31:0]} (the low half treated as positive), then
+  // summed as (pp_hi << 32) + pp_lo in MUL_MID.
   logic [64:0]          mul_a65_q;
   logic [64:0]          mul_b65_q;
+  logic signed [97:0]   pp_lo_q;
+  logic signed [97:0]   pp_hi_q;
   logic signed [129:0]  mul_product_q;
   muldiv_op_e           op_q;
 
@@ -129,7 +138,8 @@ module kronos_muldiv
   // -------------------------------------------------------------------------
   // Output wiring
   // -------------------------------------------------------------------------
-  assign busy_o   = (state_q == MUL_IN) | (state_q == MUL_OUT) | (state_q == COMPUTE);
+  assign busy_o   = (state_q == MUL_IN) | (state_q == MUL_MID) |
+                    (state_q == MUL_OUT) | (state_q == COMPUTE);
   assign valid_o  = (state_q == DONE);
   assign idle_o   = (state_q == IDLE);
   assign result_o = result_q;
@@ -143,6 +153,8 @@ module kronos_muldiv
       result_q      <= {64{1'b0}};
       mul_a65_q     <= {65{1'b0}};
       mul_b65_q     <= {65{1'b0}};
+      pp_lo_q       <= 98'sd0;
+      pp_hi_q       <= 98'sd0;
       mul_product_q <= {130{1'b0}};
       op_q          <= MULDIV_MUL;
       dividend_q    <= {64{1'b0}};
@@ -253,17 +265,30 @@ module kronos_muldiv
         end
 
         // ---------------------------------------------------------------
-        // Pipeline stage 2: register the 65×65 product.
-        // Path B: registered 65-bit operands → DSP48E2 cascade → product register.
-        // ~5.5–6.0 ns, within budget.
+        // Pipeline stage 2: compute two 65×33 partial products.
+        // Splitting the 65×65 multiply into (a × b[64:32]_signed) and
+        // (a × {1'b0, b[31:0]}) lets each partial fit in a short DSP48E2
+        // cascade, keeping the logic depth per cycle under budget.
         MUL_IN: begin
-          mul_product_q <= $signed(mul_a65_q) * $signed(mul_b65_q);
-          state_q       <= MUL_OUT;
+          pp_lo_q <= $signed(mul_a65_q) * $signed({1'b0, mul_b65_q[31:0]});
+          pp_hi_q <= $signed(mul_a65_q) * $signed(mul_b65_q[64:32]);
+          state_q <= MUL_MID;
         end
 
         // ---------------------------------------------------------------
-        // Pipeline stage 3: select result half and sign-extend to 64 bits.
-        // Path C: product register → mux → result_q. ~1.5 ns.
+        // Pipeline stage 3: sum the partials into the full 130-bit product.
+        // {pp_hi_q, 32'd0} is pp_hi_q << 32 with sign preserved because the
+        // MSB of pp_hi_q lands in bit 129 of mul_product_q, the sign bit of
+        // the 130-bit signed result.
+        MUL_MID: begin
+          mul_product_q <= 130'($signed({pp_hi_q, 32'd0})
+                                + $signed({{33{pp_lo_q[97]}}, pp_lo_q}));
+          state_q <= MUL_OUT;
+        end
+
+        // ---------------------------------------------------------------
+        // Pipeline stage 4: select result half and sign-extend to 64 bits.
+        // Path: product register → mux → result_q. ~1.5 ns.
         MUL_OUT: begin
           logic [63:0] sel;
           unique case (op_q)

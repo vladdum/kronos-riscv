@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // kronos_hazard.sv — pipeline stall and flush control unit
-// Priority (highest first): MEM stall > load-use / JALR-fwd / FRM-hazard > EX/MEM redirect > normal.
+// Priority (highest first): MEM/FPU/fetch stall > load-use / JALR-fwd / FRM-hazard
+//                           > EX/MEM redirect > muldiv stall > normal.
+// Redirect out-ranks muldiv_stall so a wrong-path MUL can't block a flush.
 // Flush overrides enable: when both asserted, the register is cleared.
 module kronos_hazard
   import kronos_pkg::*;
@@ -37,8 +39,13 @@ module kronos_hazard
   input  logic       ex_redirect_i,
   // MEM redirect (branch target mismatch detected one cycle later)
   input  logic       mem_redirect_i,
-  // MEM stall (LSU waiting for OBI rvalid)
+  // MEM/FPU/fetch stall bundle (LSU bus wait, FPU scoreboard, IF not valid).
+  // These freeze the pipeline with absolute priority — they cannot be dropped
+  // by a redirect (e.g. an in-flight AXI transaction must complete).
   input  logic       mem_stall_i,
+  // muldiv stall — separate from mem_stall_i so redirect can flush a
+  // wrong-path MUL instead of being held by priority-1 pipeline freeze.
+  input  logic       muldiv_stall_i,
   // Pipeline register enables
   output logic       pc_en_o,
   output logic       if_id_en_o,
@@ -91,7 +98,7 @@ module kronos_hazard
     id_ex_flush_o = 1'b0;
 
     if (mem_stall_i) begin
-      // Priority 1: OBI stall — hold all stages
+      // Priority 1: MEM/FPU/fetch stall — hold all stages
       pc_en_o     = 1'b0;
       if_id_en_o  = 1'b0;
       id_ex_en_o  = 1'b0;
@@ -104,9 +111,19 @@ module kronos_hazard
       id_ex_en_o    = 1'b0;
       id_ex_flush_o = 1'b1;   // flush overrides en → bubble in ID/EX
     end else if (ex_redirect_i | mem_redirect_i) begin
-      // Priority 3: EX/MEM redirect — squash IF and ID
+      // Priority 3: EX/MEM redirect — squash IF and ID.  Placed above
+      // muldiv_stall so a wrong-path MUL (id_ex_q.valid=1, muldiv_valid=0)
+      // is flushed immediately instead of deadlocking the pipeline while the
+      // muldiv FSM waits for a muldiv_req that was gated by the redirect.
       if_id_flush_o = 1'b1;
       id_ex_flush_o = 1'b1;
+    end else if (muldiv_stall_i) begin
+      // Priority 4: muldiv FSM busy — hold all stages while it completes.
+      pc_en_o     = 1'b0;
+      if_id_en_o  = 1'b0;
+      id_ex_en_o  = 1'b0;
+      ex_mem_en_o = 1'b0;
+      mem_wb_en_o = 1'b0;
     end
   end
 

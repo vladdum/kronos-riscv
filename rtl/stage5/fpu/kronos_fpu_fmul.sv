@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// 8-stage pipelined IEEE 754 floating-point multiplier (single and double).
+// 9-stage pipelined IEEE 754 floating-point multiplier (single and double).
 //
 // Pipeline:
 //   S1:  NaN-unbox single, decompose operands, classify specials, precompute
@@ -11,11 +11,14 @@
 //        DSP48 cascade.
 //   S1c: Re-latch multiplicands into s1c_*_q. Pipeline register #2 into the
 //        DSP48 cascade. Together with S1b, gives Vivado three flops between
-//        the multiplicand source and the DSP cascade output, letting retiming
-//        (global_retiming on) place them in the DSP48 internal AREG/MREG/PREG
-//        pipeline. This closes the 53×53 DSP-chain critical path at 220 MHz.
-//   S2:  Multiply significands (wide multiply registered at stage boundary for
-//        DSP inference).
+//        the multiplicand source and the start of the partial-product DSP
+//        cascade, so retiming can place them in the DSP48 AREG/MREG pipeline.
+//   S2a: Two partial products — split sigb into a 27-bit low half and a 26-bit
+//        high half and compute 53×27 / 53×26 in parallel. Each partial fits in
+//        a short DSP48E2 cascade (≤ 2 tiles), breaking the 53×53 cascade that
+//        would otherwise span 3 cascaded DSP48E2 slices combinationally.
+//   S2:  Sum the two registered partial products (pp_hi << 27 + pp_lo) into
+//        the 106-bit product. Registered at stage boundary.
 //   S3:  LZC only — compute 7-bit leading-zero count and normalized exponent
 //        from the 106-bit product. Carry full product forward.
 //   S3b: Normalize barrel shift — use registered LZC to shift product and
@@ -56,6 +59,14 @@ module kronos_fpu_fmul
   localparam int unsigned SIG_W     = 53;             // mantissa incl. hidden bit
   localparam int unsigned PROD_W    = 2 * SIG_W;      // 106
   localparam int unsigned EXP_EXT_W = 13;             // signed, covers both fmts
+
+  // Partial-product split for the S2a stage. sigb is split into a 27-bit
+  // low half [26:0] and a 26-bit high half [52:27]; each partial product
+  // fits in a short DSP48E2 cascade.
+  localparam int unsigned HALF_LO_W = 27;
+  localparam int unsigned HALF_HI_W = SIG_W - HALF_LO_W;    // 26
+  localparam int unsigned PP_LO_W   = SIG_W + HALF_LO_W;    // 80
+  localparam int unsigned PP_HI_W   = SIG_W + HALF_HI_W;    // 79
 
   // -------------------------------------------------------------------------
   // Classification helpers
@@ -335,12 +346,75 @@ module kronos_fpu_fmul
   end
 
   // -------------------------------------------------------------------------
-  // S2 combinational: multiply
+  // S2a combinational: two partial products (53×27 and 53×26)
+  // -------------------------------------------------------------------------
+  logic [PP_LO_W-1:0] s2a_pp_lo_c;
+  logic [PP_HI_W-1:0] s2a_pp_hi_c;
+
+  always_comb begin
+    s2a_pp_lo_c = s1c_siga_q * s1c_sigb_q[HALF_LO_W-1:0];
+    s2a_pp_hi_c = s1c_siga_q * s1c_sigb_q[SIG_W-1:HALF_LO_W];
+  end
+
+  // -------------------------------------------------------------------------
+  // S2a registers: register the two partial products plus forwarded metadata.
+  // This breaks the 53×53 DSP cascade into two shorter cascades, each fed by
+  // the s1c re-latches and followed by an output register that retiming can
+  // place in the DSP48E2 PREG.
+  // -------------------------------------------------------------------------
+  logic        s2a_valid_q;
+  logic        s2a_fmt_d_q;
+  logic [2:0]  s2a_rm_q;
+  fpu_tag_t    s2a_tag_q;
+  logic        s2a_sign_q;
+  logic signed [EXP_EXT_W-1:0] s2a_exp_sum_q;
+  logic [PP_LO_W-1:0] s2a_pp_lo_q;
+  logic [PP_HI_W-1:0] s2a_pp_hi_q;
+  logic        s2a_any_snan_q, s2a_any_nan_q, s2a_inf_times_zero_q;
+  logic        s2a_res_is_inf_q, s2a_res_is_zero_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s2a_regs
+    if (!rst_ni) begin
+      s2a_valid_q          <= 1'b0;
+      s2a_fmt_d_q          <= 1'b0;
+      s2a_rm_q             <= 3'd0;
+      s2a_tag_q            <= '0;
+      s2a_sign_q           <= 1'b0;
+      s2a_exp_sum_q        <= 13'h0;
+      s2a_pp_lo_q          <= {PP_LO_W{1'b0}};
+      s2a_pp_hi_q          <= {PP_HI_W{1'b0}};
+      s2a_any_snan_q       <= 1'b0;
+      s2a_any_nan_q        <= 1'b0;
+      s2a_inf_times_zero_q <= 1'b0;
+      s2a_res_is_inf_q     <= 1'b0;
+      s2a_res_is_zero_q    <= 1'b0;
+    end else begin
+      s2a_valid_q          <= flush_i ? 1'b0 : s1c_valid_q;
+      s2a_fmt_d_q          <= s1c_fmt_d_q;
+      s2a_rm_q             <= s1c_rm_q;
+      s2a_tag_q            <= s1c_tag_q;
+      s2a_sign_q           <= s1c_sign_q;
+      s2a_exp_sum_q        <= s1c_exp_sum_q;
+      s2a_pp_lo_q          <= s2a_pp_lo_c;
+      s2a_pp_hi_q          <= s2a_pp_hi_c;
+      s2a_any_snan_q       <= s1c_any_snan_q;
+      s2a_any_nan_q        <= s1c_any_nan_q;
+      s2a_inf_times_zero_q <= s1c_inf_times_zero_q;
+      s2a_res_is_inf_q     <= s1c_res_is_inf_q;
+      s2a_res_is_zero_q    <= s1c_res_is_zero_q;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // S2 combinational: sum the two partial products into the full 106-bit
+  // product. pp_hi << 27 + pp_lo. Result fits in PROD_W (106) bits since
+  // siga × sigb < 2^106 for any 53-bit operands.
   // -------------------------------------------------------------------------
   logic [PROD_W-1:0] s2_prod_c;
 
   always_comb begin
-    s2_prod_c = s1c_siga_q * s1c_sigb_q;
+    s2_prod_c = {s2a_pp_hi_q, {HALF_LO_W{1'b0}}}
+              + {{(PROD_W - PP_LO_W){1'b0}}, s2a_pp_lo_q};
   end
 
   // -------------------------------------------------------------------------
@@ -371,18 +445,18 @@ module kronos_fpu_fmul
       s2_res_is_inf_q     <= 1'b0;
       s2_res_is_zero_q    <= 1'b0;
     end else begin
-      s2_valid_q          <= flush_i ? 1'b0 : s1c_valid_q;
-      s2_fmt_d_q          <= s1c_fmt_d_q;
-      s2_rm_q             <= s1c_rm_q;
-      s2_tag_q            <= s1c_tag_q;
-      s2_sign_q           <= s1c_sign_q;
-      s2_exp_sum_q        <= s1c_exp_sum_q;
+      s2_valid_q          <= flush_i ? 1'b0 : s2a_valid_q;
+      s2_fmt_d_q          <= s2a_fmt_d_q;
+      s2_rm_q             <= s2a_rm_q;
+      s2_tag_q            <= s2a_tag_q;
+      s2_sign_q           <= s2a_sign_q;
+      s2_exp_sum_q        <= s2a_exp_sum_q;
       s2_prod_q           <= s2_prod_c;
-      s2_any_snan_q       <= s1c_any_snan_q;
-      s2_any_nan_q        <= s1c_any_nan_q;
-      s2_inf_times_zero_q <= s1c_inf_times_zero_q;
-      s2_res_is_inf_q     <= s1c_res_is_inf_q;
-      s2_res_is_zero_q    <= s1c_res_is_zero_q;
+      s2_any_snan_q       <= s2a_any_snan_q;
+      s2_any_nan_q        <= s2a_any_nan_q;
+      s2_inf_times_zero_q <= s2a_inf_times_zero_q;
+      s2_res_is_inf_q     <= s2a_res_is_inf_q;
+      s2_res_is_zero_q    <= s2a_res_is_zero_q;
     end
   end
 

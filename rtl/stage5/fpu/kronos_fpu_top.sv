@@ -9,8 +9,9 @@
 // Latency table (clock cycles from dispatch to out_valid):
 //   FMISC  1  (FSGNJ*, FMIN, FMAX, FCLASS, FEQ, FLT, FLE, FMV.*)
 //   FCVT   3  (FCVT.*.* integer↔FP conversions)
-//   FADD   6  (FADD, FSUB — extra S3b stage for timing closure at 148 MHz)
-//   FMUL   8  (FMUL — s1b+s1c pipeline stages added for DSP timing closure)
+//   FADD   7  (FADD, FSUB — s2b add/sub stage separates the 56-bit adder
+//              from the S3 CLZ + normalize + sticky cone)
+//   FMUL   9  (FMUL — s1b+s1c re-latch + s2a partial-product pipelining stage)
 //   FMA    9  (FMADD, FMSUB, FNMADD, FNMSUB — s2b re-latch + s3b barrel-shift stage)
 //   ITER   variable (FDIV, FSQRT) — late-reservation via scoreboard
 //
@@ -72,11 +73,11 @@ module kronos_fpu_top
       end
       FP_FADD, FP_FSUB: begin
         sel_fadd         = 1'b1;
-        dispatch_latency = 4'd6;
+        dispatch_latency = 4'd7;
       end
       FP_FMUL: begin
         sel_fmul         = 1'b1;
-        dispatch_latency = 4'd8;
+        dispatch_latency = 4'd9;
       end
       FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB: begin
         sel_fma          = 1'b1;
