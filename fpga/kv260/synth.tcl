@@ -44,7 +44,6 @@ set PROJ_DIR [file normalize [file join $REPO_ROOT build/vivado_kv260_${SYNTH_FR
 if {$PULP_AXI_ROOT eq ""} {
   set candidates [list \
     [file join $REPO_ROOT vendor/pulp-platform/axi] \
-    /home/popes/opensoc/hw/ip/pulp_axi \
     /tmp/pulp_axi \
     ~/.cache/fusesoc/cores/pulp-platform/axi \
   ]

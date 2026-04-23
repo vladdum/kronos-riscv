@@ -113,10 +113,16 @@ kronos-riscv/
 │   ├── sim_main.cpp           # AXI4 C++ simulation driver (stages 3–5)
 │   ├── sim_main_obi.cpp       # OBI C++ simulation driver (stages 0–2)
 │   └── run_arch_test_s{1..5}.sh   # ACT4 per-test runner (SIM_MAX_CYCLES + timeout)
+├── fpga/
+│   └── kv260/                 # Vivado synthesis flow for KV260
+│       ├── synth.tcl          # Synthesis + P&R script
+│       ├── synth.cfg          # Frequency / options overrides
+│       └── synth_directives.xdc  # Timing constraints
 ├── riscv-arch-test/           # git submodule (official ACT4 compliance suite)
 ├── .github/workflows/sim.yml  # sim-all + compliance-s{1..5} matrix CI
 ├── tools/
 │   └── coverage_gate.py       # LCOV line-coverage gate (≥95% threshold)
+├── Makefile                   # Top-level: lint, build, regression, compliance, synth
 ├── kronos_riscv.core          # FuseSoC core descriptor (active: stage5)
 ├── LICENSE
 └── CLAUDE.md                  # Claude Code project instructions
@@ -132,45 +138,48 @@ See [`docs/testplan.md`](docs/testplan.md) for the catalog of every verification
 
 Prerequisites: Verilator, FuseSoC, `riscv64-unknown-elf-gcc`.
 
+The top-level `Makefile` covers the common workflow. All targets accept
+`STAGE=<0-5>` (default 5) and `JOBS=<N>` (default: nproc).
+
 ```bash
-# Lint (stage 5, default)
-fusesoc --cores-root=. run --target=lint opensoc:ip:kronos_riscv
+make help          # list all targets and options
 
-# Lint earlier stages
-fusesoc --cores-root=. run --target=lint-s4 opensoc:ip:kronos_riscv
-fusesoc --cores-root=. run --target=lint-s3 opensoc:ip:kronos_riscv
-fusesoc --cores-root=. run --target=lint-s2 opensoc:ip:kronos_riscv
-fusesoc --cores-root=. run --target=lint-s0 opensoc:ip:kronos_riscv
+make lint          # Verilator lint (STAGE=5 by default)
+make lint STAGE=3  # lint an earlier stage
 
-# Build simulators
-cd sim && make build-s5   # stage 5 (RV64IMAFD, AXI4) — active
-cd sim && make build-s4   # stage 4 (RV64IMAC, AXI4)
-cd sim && make build-s3   # stage 3 (RV32IMC, AXI4)
-cd sim && make build-s2   # stage 2 (RV32IM)
-cd sim && make build-s1   # stage 1 (RV32I)
+make build         # build Verilator simulator (STAGE=5 by default)
+make build STAGE=4
 
+make regression    # full unit-testbench suite across all stages
+
+make compliance          # ACT4 compliance suite (STAGE=5 by default)
+make compliance STAGE=1  # run for a specific stage (stages 1–5 only)
+
+make coverage      # line coverage gate (≥95% threshold, stage 5)
+
+make synth                      # Vivado synthesis + P&R at 200 MHz (KV260)
+make synth SYNTH_FREQ_MHZ=180   # sweep a different frequency
+```
+
+### Unit testbenches
+
+Per-module testbenches are run directly from `sim/`:
+
+```bash
 # Stage 5 FPU unit testbenches
-cd sim && make sim-fpu-fmisc   # FSGNJ/FMIN/FMAX/FCLASS/CMP/FMV
-cd sim && make sim-fpu-fcvt    # FCVT (int↔FP, S↔D)
-cd sim && make sim-fpu-fadd    # FADD/FSUB (5-stage)
-cd sim && make sim-fpu-fmul    # FMUL (4-stage)
-cd sim && make sim-fpu-fma     # FMA (5-stage)
+cd sim && make sim-fpu-fmisc       # FSGNJ/FMIN/FMAX/FCLASS/CMP/FMV
+cd sim && make sim-fpu-fcvt        # FCVT (int↔FP, S↔D)
+cd sim && make sim-fpu-fadd        # FADD/FSUB (5-stage)
+cd sim && make sim-fpu-fmul        # FMUL (4-stage)
+cd sim && make sim-fpu-fma         # FMA (5-stage)
 cd sim && make sim-fpu-fdiv-core   # FDIV radix-2 SRT core
 cd sim && make sim-fpu-fsqrt-core  # FSQRT radix-2 SRT core
-cd sim && make sim-fpu-iter    # FDIV/FSQRT wrapper (SoftFloat-verified)
-cd sim && make sim-fpu-top-iter # iter integration in FPU top
+cd sim && make sim-fpu-iter        # FDIV/FSQRT wrapper (SoftFloat-verified)
+cd sim && make sim-fpu-top-iter    # iter integration in FPU top
 
 # Stage 5 integration testbenches
 cd sim && make sim-core-fp-basic       # basic FMV + FADD end-to-end
 cd sim && make sim-core-fp-forwarding  # FMUL→FADD with forwarding
-
-# Stage 5 full regression + coverage gate (≥95% line coverage)
-cd sim && make sim-s5
-cd sim && make sim-s5b    # Stage 5b FDIV/FSQRT assembly tests
-cd sim && make coverage
-
-# Stage 4 regression
-cd sim && make sim-s4
 
 # Stage 4 unit testbenches
 cd sim && make sim-alu-s4      # 64-bit ALU
@@ -194,12 +203,11 @@ cd sim && make sim-lsu-s1    # LSU OBI FSM
 
 ## FPGA Implementation (KV260)
 
-Requires Vivado 2024.x or later and a KV260 board support package. The flow
-targets `kronos_kv260_top` (a thin timing harness wrapping `kronos_top` with
-a Zynq PS clock) on XCK26-SFVC784-2LV-c silicon.
+Requires Vivado 2025.x and a KV260 board support package. The flow targets
+`kronos_kv260_top` (a thin timing harness wrapping `kronos_top` with a Zynq
+PS clock) on XCK26-SFVC784-2LV-c silicon.
 
-Post-route Fmax measured on this stage (Vivado 2025.2,
-xck26-sfvc784-2LV):
+Post-route Fmax measured on this stage (Vivado 2025.2, xck26-sfvc784-2LV):
 
 | Target clock | WNS (ns) | Status |
 |--------------|----------|--------|
@@ -211,13 +219,8 @@ FPU multipliers; closing it requires a Karatsuba-style decomposition tracked
 in issue #37.
 
 ```bash
-# Full synthesis + place & route at 200 MHz (default)
-vivado -mode batch -source fpga/kv260/synth.tcl \
-       -tclargs PULP_AXI_ROOT=/path/to/pulp/axi
-
-# Sweep a different frequency
-vivado -mode batch -source fpga/kv260/synth.tcl \
-       -tclargs SYNTH_FREQ_MHZ=180 PULP_AXI_ROOT=/path/to/pulp/axi
+make synth                     # synthesis + P&R at 200 MHz (default)
+make synth SYNTH_FREQ_MHZ=180  # sweep a different frequency
 ```
 
 Reports land in `build/vivado_kv260_<freq>/`:
