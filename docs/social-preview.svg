@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="14" cy="14" r="0.85" fill="#0d1928"/>
+    </pattern>
+    <marker id="arr" viewBox="0 0 10 7" markerWidth="10" markerHeight="7"
+            refX="9" refY="3.5" orient="auto">
+      <polygon points="0,0 10,3.5 0,7" fill="#00f0be"/>
+    </marker>
+    <filter id="tglow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="boxglow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="gleft" cx="0" cy="0.5" r="0.6" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#00f0be" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#00f0be" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="#070c16"/>
+  <rect width="1280" height="640" fill="url(#dots)"/>
+  <rect width="1280" height="640" fill="url(#gleft)"/>
+
+  <!-- Panel divider -->
+  <line x1="558" y1="0" x2="558" y2="570" stroke="#0d1928" stroke-width="1.5"/>
+
+  <!-- ══════════════════════════════════════════
+       LEFT PANEL
+       ══════════════════════════════════════════ -->
+
+  <!-- Comment tag -->
+  <text x="72" y="175"
+        font-family="'Courier New','Lucida Console',monospace"
+        font-size="13" letter-spacing="3" fill="#00f0be" opacity="0.4">// RISC-V CPU CORE</text>
+
+  <!-- "kronos" hero text -->
+  <text x="63" y="290"
+        font-family="'Courier New','Lucida Console',monospace"
+        font-size="120" font-weight="700" letter-spacing="-5"
+        fill="#00f0be" filter="url(#tglow)">kronos</text>
+
+  <!-- "—riscv" -->
+  <text x="68" y="372"
+        font-family="'Courier New','Lucida Console',monospace"
+        font-size="80" font-weight="700"
+        fill="#c4d6ea">—riscv</text>
+
+  <!-- Horizontal rule -->
+  <line x1="68" y1="404" x2="492" y2="404" stroke="#00f0be" stroke-width="0.75" opacity="0.18"/>
+
+  <!-- ISA / language line -->
+  <text x="68" y="430"
+        font-family="'Courier New',monospace"
+        font-size="14" letter-spacing="2" fill="#2d4a65">RV64IMAFDС · SYSTEMVERILOG</text>
+
+  <!-- Badges -->
+  <!-- ACT4 (teal border) -->
+  <rect x="68" y="452" width="148" height="30" rx="3"
+        fill="#050e1a" stroke="#00f0be" stroke-width="1"/>
+  <text x="142" y="472"
+        font-family="'Courier New',monospace"
+        font-size="12" fill="#00f0be" text-anchor="middle">ACT4  588 / 588</text>
+
+  <!-- 200 MHz -->
+  <rect x="228" y="452" width="144" height="30" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1"/>
+  <text x="300" y="472"
+        font-family="'Courier New',monospace"
+        font-size="12" fill="#5a7a98" text-anchor="middle">200 MHz · KV260</text>
+
+  <!-- Apache 2.0 -->
+  <rect x="384" y="452" width="106" height="30" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1"/>
+  <text x="437" y="472"
+        font-family="'Courier New',monospace"
+        font-size="12" fill="#5a7a98" text-anchor="middle">Apache 2.0</text>
+
+  <!-- Description -->
+  <text x="68" y="522"
+        font-family="'Courier New',monospace"
+        font-size="13" fill="#2d4a65">Staged progression: single-cycle to</text>
+  <text x="68" y="544"
+        font-family="'Courier New',monospace"
+        font-size="13" fill="#2d4a65">BOOM-style out-of-order (stage 6).</text>
+
+  <!-- ══════════════════════════════════════════
+       RIGHT PANEL
+       ══════════════════════════════════════════ -->
+
+  <!-- Section label -->
+  <text x="919" y="106"
+        font-family="'Courier New',monospace"
+        font-size="11" letter-spacing="5" fill="#00f0be" text-anchor="middle" opacity="0.35">PIPELINE</text>
+
+  <!-- 5-stage pipeline
+       Box: 88×46, gap: 24px
+       Total: 5×88 + 4×24 = 536px
+       Right-panel center: (558+1280)/2 = 919. Start: 919-268 = 651 -->
+
+  <!-- IF (active — teal stroke + glow) -->
+  <rect x="651" y="128" width="88" height="46" rx="3"
+        fill="#050e1a" stroke="#00f0be" stroke-width="1.5" filter="url(#boxglow)"/>
+  <text x="695" y="158"
+        font-family="'Courier New',monospace"
+        font-size="20" font-weight="700" fill="#00f0be" text-anchor="middle">IF</text>
+
+  <line x1="739" y1="151" x2="762" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ID -->
+  <rect x="763" y="128" width="88" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="807" y="158"
+        font-family="'Courier New',monospace"
+        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">ID</text>
+
+  <line x1="851" y1="151" x2="874" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- EX -->
+  <rect x="875" y="128" width="88" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="919" y="158"
+        font-family="'Courier New',monospace"
+        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">EX</text>
+
+  <line x1="963" y1="151" x2="986" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- MEM -->
+  <rect x="987" y="128" width="88" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="1031" y="158"
+        font-family="'Courier New',monospace"
+        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">MEM</text>
+
+  <line x1="1075" y1="151" x2="1098" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- WB -->
+  <rect x="1099" y="128" width="88" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="1143" y="158"
+        font-family="'Courier New',monospace"
+        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">WB</text>
+
+  <!-- Stage name sublabels -->
+  <text x="695"  y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Fetch</text>
+  <text x="807"  y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Decode</text>
+  <text x="919"  y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Execute</text>
+  <text x="1031" y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Memory</text>
+  <text x="1143" y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Writeback</text>
+
+  <!-- FPU dashed connection from EX bottom (center x=919, bottom y=174) -->
+  <line x1="919" y1="174" x2="919" y2="242"
+        stroke="#162540" stroke-width="1.5" stroke-dasharray="5,3"/>
+
+  <!-- FPU block (centered at x=919, w=320) -->
+  <rect x="759" y="242" width="320" height="48" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1" stroke-dasharray="7,4"/>
+  <text x="919" y="261"
+        font-family="'Courier New',monospace"
+        font-size="11" letter-spacing="2" fill="#00f0be" text-anchor="middle" opacity="0.65">FPU</text>
+  <text x="919" y="280"
+        font-family="'Courier New',monospace"
+        font-size="11" fill="#243d58" text-anchor="middle">FADD · FMUL · FMA · FDIV · FSQRT</text>
+
+  <!-- Feature bullets -->
+  <text x="576" y="336" font-family="'Courier New',monospace" font-size="12" fill="#162540">▸</text>
+  <text x="596" y="336" font-family="'Courier New',monospace" font-size="12" fill="#2e4d6a">Full forwarding · bimodal branch predictor + BTB</text>
+
+  <text x="576" y="358" font-family="'Courier New',monospace" font-size="12" fill="#162540">▸</text>
+  <text x="596" y="358" font-family="'Courier New',monospace" font-size="12" fill="#2e4d6a">AXI4 native · LR/SC · AMO · NaN-boxing · FCSR</text>
+
+  <text x="576" y="380" font-family="'Courier New',monospace" font-size="12" fill="#162540">▸</text>
+  <text x="596" y="380" font-family="'Courier New',monospace" font-size="12" fill="#2e4d6a">CI: Verilator · GCC 15 · riscv-arch-test · Sail</text>
+
+  <line x1="576" y1="406" x2="1240" y2="406" stroke="#0d1928" stroke-width="1"/>
+
+  <!-- ACT4 compliance badges (5 stages) -->
+  <!-- s1: x=576, w=120 -->
+  <rect x="576" y="422" width="120" height="34" rx="2" fill="#050e1a" stroke="#162540" stroke-width="1"/>
+  <text x="580" y="435" font-family="'Courier New',monospace" font-size="10" fill="#00f0be">s1</text>
+  <text x="580" y="450" font-family="'Courier New',monospace" font-size="10" fill="#243d58">RV32I · 46/46</text>
+
+  <!-- s2: x=704, w=126 -->
+  <rect x="704" y="422" width="126" height="34" rx="2" fill="#050e1a" stroke="#162540" stroke-width="1"/>
+  <text x="708" y="435" font-family="'Courier New',monospace" font-size="10" fill="#00f0be">s2</text>
+  <text x="708" y="450" font-family="'Courier New',monospace" font-size="10" fill="#243d58">RV32IM · 54/54</text>
+
+  <!-- s3: x=838, w=130 -->
+  <rect x="838" y="422" width="130" height="34" rx="2" fill="#050e1a" stroke="#162540" stroke-width="1"/>
+  <text x="842" y="435" font-family="'Courier New',monospace" font-size="10" fill="#00f0be">s3</text>
+  <text x="842" y="450" font-family="'Courier New',monospace" font-size="10" fill="#243d58">RV32IMC · 81/81</text>
+
+  <!-- s4: x=976, w=138 -->
+  <rect x="976" y="422" width="138" height="34" rx="2" fill="#050e1a" stroke="#162540" stroke-width="1"/>
+  <text x="980" y="435" font-family="'Courier New',monospace" font-size="10" fill="#00f0be">s4</text>
+  <text x="980" y="450" font-family="'Courier New',monospace" font-size="10" fill="#243d58">RV64IMAC · 104/104</text>
+
+  <!-- s5: x=1122, w=148 -->
+  <rect x="1122" y="422" width="148" height="34" rx="2" fill="#050e1a" stroke="#162540" stroke-width="1"/>
+  <text x="1126" y="435" font-family="'Courier New',monospace" font-size="10" fill="#00f0be">s5</text>
+  <text x="1126" y="450" font-family="'Courier New',monospace" font-size="10" fill="#243d58">RV64IMAFDC · 303/303</text>
+
+  <line x1="576" y1="474" x2="1240" y2="474" stroke="#0d1928" stroke-width="1"/>
+
+  <!-- Stage progress (s0–s6) — 7 blocks × 86px, gap 8px, spanning 576–1226 -->
+  <rect x="576"  y="488" width="86" height="24" rx="2" fill="#0a1c30" stroke="#00f0be" stroke-width="1" opacity="0.55"/>
+  <text x="619"  y="504" font-family="'Courier New',monospace" font-size="11" fill="#00f0be" text-anchor="middle" opacity="0.8">s0</text>
+
+  <rect x="670"  y="488" width="86" height="24" rx="2" fill="#0a1c30" stroke="#00f0be" stroke-width="1" opacity="0.55"/>
+  <text x="713"  y="504" font-family="'Courier New',monospace" font-size="11" fill="#00f0be" text-anchor="middle" opacity="0.8">s1</text>
+
+  <rect x="764"  y="488" width="86" height="24" rx="2" fill="#0a1c30" stroke="#00f0be" stroke-width="1" opacity="0.55"/>
+  <text x="807"  y="504" font-family="'Courier New',monospace" font-size="11" fill="#00f0be" text-anchor="middle" opacity="0.8">s2</text>
+
+  <rect x="858"  y="488" width="86" height="24" rx="2" fill="#0a1c30" stroke="#00f0be" stroke-width="1" opacity="0.55"/>
+  <text x="901"  y="504" font-family="'Courier New',monospace" font-size="11" fill="#00f0be" text-anchor="middle" opacity="0.8">s3</text>
+
+  <rect x="952"  y="488" width="86" height="24" rx="2" fill="#0a1c30" stroke="#00f0be" stroke-width="1" opacity="0.55"/>
+  <text x="995"  y="504" font-family="'Courier New',monospace" font-size="11" fill="#00f0be" text-anchor="middle" opacity="0.8">s4</text>
+
+  <rect x="1046" y="488" width="86" height="24" rx="2" fill="#0a1c30" stroke="#00f0be" stroke-width="1" opacity="0.55"/>
+  <text x="1089" y="504" font-family="'Courier New',monospace" font-size="11" fill="#00f0be" text-anchor="middle" opacity="0.8">s5</text>
+
+  <!-- s6 planned / OOO (dashed) -->
+  <rect x="1140" y="488" width="86" height="24" rx="2" fill="#050e1a" stroke="#162540" stroke-width="1" stroke-dasharray="5,3"/>
+  <text x="1183" y="504" font-family="'Courier New',monospace" font-size="11" fill="#1b2f45" text-anchor="middle">s6 OOO</text>
+
+  <!-- ══════════════════════════════════════════
+       BOTTOM BAR (full width)
+       ══════════════════════════════════════════ -->
+  <rect x="0" y="570" width="1280" height="70" fill="#050912"/>
+  <line x1="0" y1="570" x2="1280" y2="570" stroke="#0d1928" stroke-width="1"/>
+
+  <text x="72" y="612"
+        font-family="'Courier New',monospace"
+        font-size="13" fill="#1b2f45">vladdum / kronos-riscv</text>
+
+  <text x="1208" y="612"
+        font-family="'Courier New',monospace"
+        font-size="13" fill="#1b2f45" text-anchor="end">github.com / vladdum / kronos-riscv</text>
+</svg>

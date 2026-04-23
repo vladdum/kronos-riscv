@@ -18,6 +18,7 @@ clockInfo.txt
 cong/
 iter_*_Congested*.txt
 docs/superpowers/
+docs/social-preview.png
 __pycache__/
 riscv-arch-test/*
 !riscv-arch-test/config/
