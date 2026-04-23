@@ -123,6 +123,26 @@ module kronos_fpu_fadd
     logic                both_zero;
   } s2_t;
 
+  // S2b: after the 56-bit add/subtract, before LZC + normalize. Inserted to
+  // split the long add/sub -> LZC -> barrel-shift -> sticky cone that was
+  // the critical path at 200 MHz on KV260.
+  typedef struct packed {
+    logic                valid;
+    logic                fmt_d;
+    logic [2:0]          rm;
+    fpu_tag_t            tag;
+    logic                is_special;
+    logic [63:0]         special_res;
+    logic [4:0]          special_flg;
+    logic                res_sign;
+    logic                op_sub;
+    logic signed [EXP_W-1:0] res_exp;   // exponent possibly bumped by add carry
+    // Post-add/sub significand. For ADD: already shifted right by the
+    // carry-out if one occurred (exp bumped). For SUB: the full |big-small|.
+    logic [SIG_W-1:0]    sum_sig;
+    logic                small_sticky; // final sticky contribution forwarded to S3
+  } s2b_t;
+
   typedef struct packed {
     logic                valid;
     logic                fmt_d;
@@ -182,6 +202,7 @@ module kronos_fpu_fadd
   // ---------------------------------------------------------------------------
   s1_t  s1_q;
   s2_t  s2_q;
+  s2b_t s2b_q;
   s3_t  s3_q;
   s3b_t s3b_q;
   s4_t  s4_q;
@@ -468,98 +489,120 @@ module kronos_fpu_fadd
   end
 
   // ===========================================================================
-  // Stage 3: add / subtract, normalize
+  // Stage 2b: add / subtract only.  LZC and normalize moved to Stage 3 so the
+  // 56-bit carry chain no longer shares a clock period with the CLZ + barrel
+  // shift + sticky extraction.  Resolves the S2→S3 critical path.
+  // ===========================================================================
+  s2b_t s2b_d;
+
+  always_comb begin
+    s2b_d = '0;
+    s2b_d.valid       = s2_q.valid;
+    s2b_d.fmt_d       = s2_q.fmt_d;
+    s2b_d.rm          = s2_q.rm;
+    s2b_d.tag         = s2_q.tag;
+    s2b_d.is_special  = s2_q.is_special;
+    s2b_d.special_res = s2_q.special_res;
+    s2b_d.special_flg = s2_q.special_flg;
+    s2b_d.res_sign    = s2_q.res_sign;
+    s2b_d.op_sub      = s2_q.op_sub;
+    s2b_d.res_exp     = s2_q.res_exp;
+
+    begin : s2b_addsub_blk
+      logic [SIG_W:0] sum_ext;
+      logic           small_sticky;
+
+      small_sticky = s2_q.small_sticky_extra;
+
+      if (!s2_q.op_sub) begin
+        // Addition of magnitudes.
+        sum_ext = {1'b0, s2_q.big_sig} + {1'b0, s2_q.small_sig};
+        if (sum_ext[SIG_W]) begin
+          // Carry-out: shift right by 1, bump exponent, fold LSB into sticky.
+          s2b_d.sum_sig      = sum_ext[SIG_W:1];
+          s2b_d.res_exp      = s2_q.res_exp + 13'sd1;
+          s2b_d.small_sticky = small_sticky | sum_ext[0];
+        end else begin
+          s2b_d.sum_sig      = sum_ext[SIG_W-1:0];
+          s2b_d.small_sticky = small_sticky;
+        end
+      end else begin
+        // Subtraction: big - small - borrow-for-sticky.
+        sum_ext = {1'b0, s2_q.big_sig} - {1'b0, s2_q.small_sig}
+                  - {{(SIG_W){1'b0}}, small_sticky};
+        s2b_d.sum_sig      = sum_ext[SIG_W-1:0];
+        s2b_d.small_sticky = small_sticky;
+      end
+    end
+  end
+
+  // ===========================================================================
+  // Stage 3: LZC + normalize + G/R/S extraction (reads from s2b_q)
   // ===========================================================================
   s3_t s3_d;
 
   always_comb begin
     s3_d = '0;
-    s3_d.valid       = s2_q.valid;
-    s3_d.fmt_d       = s2_q.fmt_d;
-    s3_d.rm          = s2_q.rm;
-    s3_d.tag         = s2_q.tag;
-    s3_d.is_special  = s2_q.is_special;
-    s3_d.special_res = s2_q.special_res;
-    s3_d.special_flg = s2_q.special_flg;
-    s3_d.res_sign    = s2_q.res_sign;
-    s3_d.res_exp     = s2_q.res_exp;
+    s3_d.valid       = s2b_q.valid;
+    s3_d.fmt_d       = s2b_q.fmt_d;
+    s3_d.rm          = s2b_q.rm;
+    s3_d.tag         = s2b_q.tag;
+    s3_d.is_special  = s2b_q.is_special;
+    s3_d.special_res = s2b_q.special_res;
+    s3_d.special_flg = s2b_q.special_flg;
+    s3_d.res_sign    = s2b_q.res_sign;
+    s3_d.res_exp     = s2b_q.res_exp;
 
-    begin : addsub_blk
-      logic [SIG_W:0]          sum_ext;      // one extra bit for carry
-      logic [SIG_W-1:0]        sum_sig;
-      logic                    carry_out;
+    begin : s3_norm_blk
       int unsigned             lzc;
       logic [SIG_W-1:0]        norm_sig;
       logic signed [EXP_W-1:0] norm_exp;
       logic                    result_zero;
-      logic                    small_sticky;
 
-      sum_sig      = {SIG_W{1'b0}};
-      carry_out    = 1'b0;
-      lzc          = 0;
-      norm_sig     = {SIG_W{1'b0}};
-      norm_exp     = {EXP_W{1'b0}};
-      result_zero  = 1'b0;
-      small_sticky = s2_q.small_sticky_extra;
+      lzc         = 0;
+      norm_sig    = {SIG_W{1'b0}};
+      norm_exp    = {EXP_W{1'b0}};
+      result_zero = 1'b0;
 
-      if (!s2_q.op_sub) begin
-        // Addition of magnitudes.
-        sum_ext   = {1'b0, s2_q.big_sig} + {1'b0, s2_q.small_sig};
-        carry_out = sum_ext[SIG_W];
-        if (carry_out) begin
-          // Overflow: shift right by 1, increment exponent. LSB goes into
-          // sticky (since it was a post-alignment bit).
-          norm_sig = sum_ext[SIG_W:1];
-          norm_exp = s3_d.res_exp + 13'sd1;
-          small_sticky = small_sticky | sum_ext[0];
-        end else begin
-          norm_sig = sum_ext[SIG_W-1:0];
-          norm_exp = s3_d.res_exp;
-        end
+      if (!s2b_q.op_sub) begin
+        // Addition path: sum_sig already normalized in S2b.  Just extract
+        // G/R/S from the low 3 bits and merge with the carried sticky.
+        norm_sig     = s2b_q.sum_sig;
+        norm_exp     = s2b_q.res_exp;
         s3_d.res_sig = norm_sig;
-        s3_d.res_exp = norm_exp;
-        // Extract G/R/S from the low 3 bits of norm_sig (the reserved alignment
-        // bits) merged with incoming small_sticky.
         s3_d.guard   = norm_sig[2];
         s3_d.round_b = norm_sig[1];
-        s3_d.sticky  = norm_sig[0] | small_sticky;
-        // Clear the sub-ULP bits in the stored significand (they were G/R/S).
+        s3_d.sticky  = norm_sig[0] | s2b_q.small_sticky;
         s3_d.res_sig[2:0] = 3'd0;
-        result_zero = (norm_sig == {SIG_W{1'b0}});
+        result_zero  = (norm_sig == {SIG_W{1'b0}});
       end else begin
-        // Subtraction: big - small. Include the extra sticky in the subtract as
-        // a "borrow that would be used by sticky" — we handle it by subtracting
-        // at full precision and keeping the extra bit as the sticky.
-        sum_ext   = {1'b0, s2_q.big_sig} - {1'b0, s2_q.small_sig}
-                    - {{(SIG_W){1'b0}}, small_sticky};
-        sum_sig   = sum_ext[SIG_W-1:0];
-        // Leading-zero count for normalization.
-        lzc = clz_sig(sum_sig);
+        // Subtraction path: LZC on the raw |big-small|, then left-shift to
+        // normalize.
+        lzc = clz_sig(s2b_q.sum_sig);
         if (lzc == SIG_W) begin
           result_zero = 1'b1;
           norm_sig    = {SIG_W{1'b0}};
           norm_exp    = {EXP_W{1'b0}};
         end else begin
           result_zero = 1'b0;
-          norm_sig    = sum_sig << lzc;
-          norm_exp    = s3_d.res_exp - 13'($signed(lzc));
+          norm_sig    = s2b_q.sum_sig << lzc;
+          norm_exp    = s2b_q.res_exp - 13'($signed(lzc));
         end
         s3_d.res_sig = norm_sig;
         s3_d.res_exp = norm_exp;
         s3_d.guard   = norm_sig[2];
         s3_d.round_b = norm_sig[1];
-        // After a cancellation-shift the bits that fed sticky via small_sticky
-        // are no longer meaningful if lzc shifted them in — but for RNE-correct
-        // subtraction in the close-path, sticky=0 when lzc>0 because only one
-        // bit differs. Conservative: keep OR.
-        s3_d.sticky  = norm_sig[0] | (small_sticky & (lzc == 0));
+        // Close-path sticky: when lzc shifted out the alignment bits, sticky
+        // from the pre-subtract borrow is no longer meaningful.  Preserve the
+        // original conservative-OR semantics.
+        s3_d.sticky  = norm_sig[0] | (s2b_q.small_sticky & (lzc == 0));
         s3_d.res_sig[2:0] = 3'd0;
       end
 
       s3_d.result_zero = result_zero;
       if (result_zero) begin
         // Cancellation-to-zero sign rule (non-special path): RDN→-0 else +0.
-        s3_d.res_sign = (s2_q.rm == FP_RM_RDN);
+        s3_d.res_sign = (s2b_q.rm == FP_RM_RDN);
       end
     end
   end
@@ -815,18 +858,21 @@ module kronos_fpu_fadd
     if (!rst_ni) begin
       s1_q  <= '0;
       s2_q  <= '0;
+      s2b_q <= '0;
       s3_q  <= '0;
       s3b_q <= '0;
       s4_q  <= '0;
     end else begin
       s1_q  <= s1_d;
       s2_q  <= s2_d;
+      s2b_q <= s2b_d;
       s3_q  <= s3_d;
       s3b_q <= s3b_d;
       s4_q  <= s4_d;
       if (flush_i) begin
         s1_q.valid  <= 1'b0;
         s2_q.valid  <= 1'b0;
+        s2b_q.valid <= 1'b0;
         s3_q.valid  <= 1'b0;
         s3b_q.valid <= 1'b0;
         s4_q.valid  <= 1'b0;

@@ -39,6 +39,7 @@ module tb_hazard;
     .ex_redirect_i        (ex_redirect_i),
     .mem_redirect_i       ('0),
     .mem_stall_i          (mem_stall_i),
+    .muldiv_stall_i       ('0),
     .pc_en_o              (pc_en_o),
     .if_id_en_o           (if_id_en_o),
     .id_ex_en_o           (id_ex_en_o),

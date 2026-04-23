@@ -181,6 +181,7 @@ module kronos_top
     .ex_redirect_i        (ex_redirect),
     .mem_redirect_i       (1'b0),
     .mem_stall_i          (combined_stall),
+    .muldiv_stall_i       (1'b0),
     .pc_en_o              (pc_en),
     .if_id_en_o           (if_id_en),
     .id_ex_en_o           (id_ex_en),

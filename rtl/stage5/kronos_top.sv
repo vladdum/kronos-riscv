@@ -118,6 +118,7 @@ module kronos_top
   logic         fetch_flush;
   logic         instr_fetch_stall;
   logic         combined_stall;
+  logic         combined_stall_no_muldiv;
 
   // STAGE3: C extension — alignment unit signals
   logic [31:0] align_instr;
@@ -263,8 +264,10 @@ module kronos_top
   );
 
   // STAGE3: combined_stall — mem_stall | muldiv_stall | instr_fetch_stall | fpu_stall
-  assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid
-                             & ~ex_redirect & ~mem_redirect;
+  // muldiv_stall is exposed raw (no redirect gating) — kronos_hazard resolves
+  // the priority so a redirect flushes the wrong-path MUL without needing
+  // muldiv_stall to fan in from ex_redirect/mem_redirect.
+  assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
   assign instr_fetch_stall = ~align_instr_valid;
   // fpu_dispatching: the FPU dispatch will fire this cycle.  Stall immediately
   // so the following instruction stays in IF/ID and can receive the FP result
@@ -280,7 +283,11 @@ module kronos_top
   assign fp_tag_cur        = fpu_out_valid ? fpu_tag_out : fp_tag_q;
   // Release stall once the result is available; keep stalled until then.
   assign fpu_stall         = (fp_inflight_q | fpu_dispatching) & ~fp_result_avail;
-  assign combined_stall    = mem_stall | muldiv_stall | instr_fetch_stall | fpu_stall;
+  // Non-muldiv stall sources that hazard must observe with absolute priority
+  // (bus/FPU/fetch can't be abandoned mid-flight by a redirect).  muldiv_stall
+  // is fed to hazard separately so redirect flush can out-rank it.
+  assign combined_stall_no_muldiv = mem_stall | instr_fetch_stall | fpu_stall;
+  assign combined_stall    = combined_stall_no_muldiv | muldiv_stall;
 
   // FRM/FCSR RAW hazard: a CSR write to FRM/FCSR in EX will update fcsr_q at
   // the posedge, but decode reads frm combinatorially from fcsr_q. Stall 1
@@ -321,7 +328,8 @@ module kronos_top
     .if_id_fp_dyn_rm_i    (if_id_fp_dyn_rm),
     .ex_redirect_i        (ex_redirect),
     .mem_redirect_i       (mem_redirect),
-    .mem_stall_i          (combined_stall),
+    .mem_stall_i          (combined_stall_no_muldiv),
+    .muldiv_stall_i       (muldiv_stall),
     .pc_en_o          (pc_en),
     .if_id_en_o       (if_id_en),
     .id_ex_en_o       (id_ex_en),

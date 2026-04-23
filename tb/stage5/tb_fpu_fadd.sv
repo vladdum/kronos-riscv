@@ -41,8 +41,8 @@ module tb_fpu_fadd;
     b        = bin;
     @(negedge clk);
     in_valid = 0;
-    // Six pipeline stages (S1..S3b..S4..S5) → sample after 6 posedges.
-    repeat (6) @(posedge clk);
+    // Seven pipeline stages (S1..S2b..S3b..S4..S5) → sample after 7 posedges.
+    repeat (7) @(posedge clk);
     #1;
   endtask
 

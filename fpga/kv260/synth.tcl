@@ -170,6 +170,15 @@ if {$TOP eq "kronos_kv260_top"} {
 set MCP_XDC [file join $REPO_ROOT rtl/stage5/kronos_kv260.xdc]
 add_files -fileset constrs_1 -norecurse $MCP_XDC
 
+# Synthesis-only directives (MAX_FANOUT on high-fan-out pipeline-control nets).
+# Must be processed EARLY — before synth_design flattens the combinational cone
+# — and only during synthesis, never during implementation.
+set SYNTH_XDC [file join $REPO_ROOT fpga/kv260/synth_directives.xdc]
+add_files -fileset constrs_1 -norecurse $SYNTH_XDC
+set_property USED_IN_SYNTHESIS      true  [get_files $SYNTH_XDC]
+set_property USED_IN_IMPLEMENTATION false [get_files $SYNTH_XDC]
+set_property PROCESSING_ORDER       EARLY [get_files $SYNTH_XDC]
+
 # Clock constraint — generated from SYNTH_FREQ_MHZ so no manual XDC edit needed
 file mkdir $PROJ_DIR
 set CLK_XDC [file join $PROJ_DIR clk.xdc]
