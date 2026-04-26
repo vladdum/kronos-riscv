@@ -14,6 +14,8 @@ per-stage section.
 | ACT4 compliance     | `riscv-arch-test/` submodule               | Official RISC-V architectural compliance suite; Sail-signed signatures.   |
 | Sail diff           | `tools/trace_diff.py` + `make sim-diff-*`  | Retire-by-retire trace diff between Kronos and `sail_riscv_sim`.          |
 | Line-coverage gate  | `make coverage`                            | Merged Verilator line-coverage across gated modules; threshold enforced.  |
+| CRV harness         | `tools/crv/` + `tb/stage5/tb_crv_cov.sv` | Random program generator + Sail diff + functional coverage. |
+| CRV assists         | `sw/stage5/crv_assists/`              | Directed tests for residual covergroup bins random can't hit.|
 
 ## Stage 0 — Single-cycle RV32I (OBI)
 
@@ -167,6 +169,22 @@ per-stage section.
 
 ### ACT4 compliance
 - 303 tests (rv64imafdc). Run: `make sim-arch-test-s5`.
+
+### Constrained-random verification
+
+| Scenario             | Make target                     |
+|----------------------|----------------------------------|
+| `int_hazards`        | `make sim-crv-int_hazards`       |
+| `muldiv_interleave`  | `make sim-crv-muldiv_interleave` |
+| `mem_ordering`       | `make sim-crv-mem_ordering`      |
+| `fp_arith`           | `make sim-crv-fp_arith`          |
+| `fdiv_fsqrt`         | `make sim-crv-fdiv_fsqrt`        |
+| `branch_pred`        | `make sim-crv-branch_pred`       |
+| `traps`              | `make sim-crv-traps`             |
+| Smoke (PR path)      | `make sim-crv-smoke`             |
+| Coverage gate        | `make sim-crv-coverage`          |
+| Deep (nightly)       | `make sim-crv-deep`              |
+| Directed assists     | `make sim-crv-assists`           |
 
 ## Stage 5b — adds FDIV/FSQRT
 

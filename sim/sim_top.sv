@@ -66,7 +66,9 @@ module sim_top
   output logic [63:0] retire_mem_wdata_o,
   output logic        retire_csr_wen_o,
   output logic [11:0] retire_csr_addr_o,
-  output logic [63:0] retire_csr_wdata_o
+  output logic [63:0] retire_csr_wdata_o,
+  output logic        retire_trap_taken_o,
+  output logic [31:0] retire_trap_cause_o
 );
 
   kronos_axi_req_t  instr_req, data_req;
@@ -143,8 +145,10 @@ module sim_top
     .retire_mem_addr_o  (retire_mem_addr_o),
     .retire_mem_wdata_o (retire_mem_wdata_o),
     .retire_csr_wen_o   (retire_csr_wen_o),
-    .retire_csr_addr_o  (retire_csr_addr_o),
-    .retire_csr_wdata_o (retire_csr_wdata_o)
+    .retire_csr_addr_o    (retire_csr_addr_o),
+    .retire_csr_wdata_o   (retire_csr_wdata_o),
+    .retire_trap_taken_o  (retire_trap_taken_o),
+    .retire_trap_cause_o  (retire_trap_cause_o)
   );
 
 endmodule

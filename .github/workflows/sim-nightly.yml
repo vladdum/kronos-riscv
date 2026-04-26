@@ -1,0 +1,78 @@
+name: sim-nightly
+
+on:
+  schedule:
+    - cron: '0 4 * * *'    # 04:00 UTC daily
+  workflow_dispatch:        # also runnable manually from the Actions tab
+
+jobs:
+  crv-deep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Install Sail
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+          sudo tee /usr/local/bin/sail_riscv_sim_timeout > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          exec timeout 60 sail_riscv_sim "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/sail_riscv_sim_timeout
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run crv-deep
+        id: crv
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim sim-crv-deep PULP_AXI_ROOT=/tmp/pulp_axi \
+            CRV_SEED_BASE=$(date +%Y%m%d)000
+
+      - name: Upload CRV artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crv-deep-${{ github.run_id }}
+          path: sim/obj_dir/crv/
+          if-no-files-found: ignore
+
+      - name: Open tracking issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[CRV nightly] failure ${date} (run ${context.runId})`,
+              body: [
+                `Nightly CRV-deep regression failed.`,
+                ``,
+                `**Run:** https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                `**Artefacts:** \`crv-deep-${context.runId}\` attached to the run`,
+                ``,
+                `Reproduce locally:`,
+                '```',
+                `  cd ~/kronos-riscv`,
+                `  make -C sim sim-crv-<scenario> CRV_SEED=<failing_seed>`,
+                '```',
+                ``,
+                `Look at the artefact's \`<scenario>_<seed>/\` directory for the .S, traces, and diff.txt.`,
+              ].join('\n'),
+              labels: ['ci-failure', 'crv'],
+            });

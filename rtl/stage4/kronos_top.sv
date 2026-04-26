@@ -43,7 +43,9 @@ module kronos_top
   output logic [63:0] retire_mem_wdata_o,
   output logic        retire_csr_wen_o,
   output logic [11:0] retire_csr_addr_o,
-  output logic [63:0] retire_csr_wdata_o
+  output logic [63:0] retire_csr_wdata_o,
+  output logic        retire_trap_taken_o,
+  output logic [31:0] retire_trap_cause_o
 );
 
   // -------------------------------------------------------------------------
@@ -606,5 +608,7 @@ module kronos_top
   assign retire_csr_wen_o   = 1'b0;
   assign retire_csr_addr_o  = {12{1'b0}};
   assign retire_csr_wdata_o = {64{1'b0}};
+  assign retire_trap_taken_o = 1'b0;
+  assign retire_trap_cause_o = {32{1'b0}};
 
 endmodule
