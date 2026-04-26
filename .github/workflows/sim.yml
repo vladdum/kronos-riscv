@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [s1s2, s3s4, fp-unit, fp-top, s5-int]
+        group: [s1s2, s3s4, fp-unit, fp-top, s5-int, crv-smoke]
     name: sim-${{ matrix.group }}
 
     steps:
@@ -28,14 +28,35 @@ jobs:
       - name: Clone PULP AXI
         run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
 
+      - name: Install Sail (for crv-smoke only)
+        if: matrix.group == 'crv-smoke'
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+          sudo tee /usr/local/bin/sail_riscv_sim_timeout > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          exec timeout 60 sail_riscv_sim "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/sail_riscv_sim_timeout
+
       - name: Run sim-${{ matrix.group }}
         run: |
           mkdir -p sim/obj_dir
           make -C sim -j$(nproc) sim-group-${{ matrix.group }} PULP_AXI_ROOT=/tmp/pulp_axi
 
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pytest
+        run: pip install pytest pyyaml
+      - name: Run unit tests
+        run: PYTHONPATH=. pytest tools/crv/tests/ tools/tests/ -v
+
   sim-all:
     runs-on: ubuntu-latest
-    needs: sim-units
+    needs: [sim-units, pytest]
     if: always()
     steps:
       - run: |

@@ -1,0 +1,54 @@
+# tools/crv/coverage_excludes.txt — bins excluded from the 100% functional
+# coverage gate for stage5d CRV.
+#
+# Each line is either a comment (# ...) or a bin name matching a line in
+# obj_dir/crv_cov/merged.txt.  Blank lines are ignored.
+#
+# ── FENCE (MISC_MEM opcode 0b0001111) ───────────────────────────────────────
+# kronos_decode.sv has no case for the MISC_MEM opcode; FENCE and FENCE.I
+# are treated as illegal instructions and redirect to the trap handler.
+# op_fence can never be exercised without first adding FENCE decode support.
+cg_instr_class.op_fence
+
+# ── AMO (atomic memory operations) ─────────────────────────────────────────
+# Stage5 decodes LR/SC/AMO but uses a separate AMO execution path that does
+# not assert retire_mem_wen_o on the write-back half of the RMW operation.
+# All 12 AMO-related bins are therefore unreachable via the current coverage
+# predicates; fixing them requires extending the retire bus to also flag AMO.
+cg_instr_class.op_amo
+cg_amo.lr
+cg_amo.sc
+cg_amo.amoswap
+cg_amo.amoadd
+cg_amo.amoxor
+cg_amo.amoand
+cg_amo.amoor
+cg_amo.amomin
+cg_amo.amomax
+cg_amo.amominu
+cg_amo.amomaxu
+
+# ── SLT / SLTU result sign ──────────────────────────────────────────────────
+# SLT and SLTU write exactly 0 or 1 to rd.  The result is always a small
+# non-negative integer, so bit63 is always 0.  The _neg bins (result < 0 as
+# a signed 64-bit value) are structurally unreachable.
+cg_alu_sign.slt_neg
+cg_alu_sign.sltu_neg
+
+# ── Misaligned traps ────────────────────────────────────────────────────────
+# Stage5 does not implement misalignment trap handlers (the trap handler in
+# the assist programs only handles illegal=2, ecall=11, ebreak=3, irq=0x80000007).
+# Load/store misalignment faults (causes 4 and 6) are therefore never observed.
+cg_trap.ld_misalign
+cg_trap.st_misalign
+
+# ── Misaligned memory accesses ───────────────────────────────────────────────
+# Half-word, word, and double-word accesses at misaligned addresses would
+# trigger misalignment exceptions in stage5 (no hardware misalignment support).
+# These address patterns cannot be tested without a misalignment trap handler.
+cg_mem.half_odd
+cg_mem.word_off2
+cg_mem.word_odd
+cg_mem.double_off4
+cg_mem.double_off2
+cg_mem.double_odd

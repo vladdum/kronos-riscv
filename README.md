@@ -28,6 +28,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 5a    | F/D extensions (pipelined, no FDIV/FSQRT)       | RV64IMAFD        | AXI4    | Complete    |
 | 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4    | Complete    |
 | 5c    | Performance counters (Zicntr + partial Zihpm)   | RV64IMAFDC       | AXI4    | Complete    |
+| 5d    | CRV harness (random gen + Sail diff + 144-bin coverage) | RV64IMAFDC | AXI4    | Complete    |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
@@ -258,6 +259,18 @@ the per-stage Verilator binary. Per-test limits live in
 
 - `SIM_MAX_CYCLES=5_000_000` — ≈4× the slowest observed test, override via env
 - `timeout 60s` — wall-clock safety net under `run_tests.py`'s 5 min bound
+
+## Verification
+
+**Constrained-random verification:** A Python random-program generator
+(`tools/crv/`) emits seven scenario classes that stress
+microarchitectural corners (hazards, mul/div, memory ordering, FP,
+FDIV/FSQRT, branches, traps).  Each test runs on Kronos and Sail; the
+existing `tools/trace_diff.py` confirms architectural agreement.
+PR-blocking smoke (`make sim-crv-coverage`) gates 100% functional
+coverage across 82 bins (with 23 documented exclusions for
+known-limitation paths); nightly `crv-deep` runs 50 seeds per scenario.
+See `docs/superpowers/specs/2026-04-26-crv-harness-design.md`.
 
 ## Continuous integration
 

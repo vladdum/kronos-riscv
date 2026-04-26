@@ -46,7 +46,10 @@ module kronos_top
   output logic [63:0] retire_mem_wdata_o,
   output logic        retire_csr_wen_o,
   output logic [11:0] retire_csr_addr_o,
-  output logic [63:0] retire_csr_wdata_o
+  output logic [63:0] retire_csr_wdata_o,
+  // Trap-taken pulse: high for one cycle on trap entry (debug/coverage only).
+  output logic        retire_trap_taken_o,
+  output logic [31:0] retire_trap_cause_o
 );
 
   // -------------------------------------------------------------------------
@@ -1062,5 +1065,7 @@ module kronos_top
   assign retire_csr_wen_o    = retire_advance & mem_wb_q.dec.is_csr;
   assign retire_csr_addr_o   = mem_wb_q.dec.csr_addr;
   assign retire_csr_wdata_o  = mem_wb_q.csr_wdata;
+  assign retire_trap_taken_o = trap_taken_pulse;
+  assign retire_trap_cause_o = trap_cause;
 
 endmodule

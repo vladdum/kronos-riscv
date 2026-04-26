@@ -62,7 +62,9 @@ module tb_core_fp_basic;
     .retire_mem_wdata_o   (),
     .retire_csr_wen_o     (),
     .retire_csr_addr_o    (),
-    .retire_csr_wdata_o   ()
+    .retire_csr_wdata_o   (),
+    .retire_trap_taken_o  (),
+    .retire_trap_cause_o  ()
   );
 
   // -----------------------------------------------------------------------

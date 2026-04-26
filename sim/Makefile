@@ -118,7 +118,11 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-s5b \
         sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5 sim-group-s5-int \
         sim-group-s1s2 sim-group-s3s4 sim-group-fp-unit sim-group-fp-top \
-        sim-diff-% sim-diff-all
+        sim-group-crv-smoke \
+        sim-diff-% sim-diff-all \
+        sim-crv-% sim-crv-smoke sim-crv-deep \
+        sim-crv-cov-build sim-crv-coverage \
+        sim-crv-assists
 
 # ── Sail differential-trace harness ─────────────────────────────────────────
 TRACE_DIR := $(OBJ_DIR)/trace
@@ -149,6 +153,157 @@ sim-diff-all: build-s5
 	done; \
 	echo "sim-diff-all: $$fail failing"; \
 	[ $$fail -eq 0 ]
+
+# ---------------------------------------------------------------------------
+# Stage 5d — Constrained-random verification (CRV) targets.
+#
+# All targets generate a random RV64IMAFDC program for a given scenario
+# and seed, run it on Kronos and Sail, and diff the retire traces.
+#
+# Override: make sim-crv-int_hazards CRV_SEED=42 CRV_LENGTH=300
+# ---------------------------------------------------------------------------
+CRV_DIR        := $(OBJ_DIR)/crv
+CRV_SCENARIOS  := int_hazards muldiv_interleave mem_ordering fp_arith \
+                  fdiv_fsqrt branch_pred traps
+CRV_SEED       ?= 0
+CRV_LENGTH     ?= 200
+CRV_SEED_BASE  ?= 0
+
+CRV_KRONOS_BIN  = $(SIM_BIN_S5)
+CRV_LINK       := ../sw/stage0/link.ld
+CRV_COMMON_S   := ../sw/stage0/common.S
+CRV_SAIL_SH    := ../tools/sail_trace.sh
+CRV_DIFF_PY    := ../tools/trace_diff.py
+CRV_RUNNER     := PYTHONPATH=.. python3 -m tools.crv.runner
+
+sim-crv-%: build-s5
+	@mkdir -p $(CRV_DIR)
+	@$(CRV_RUNNER) \
+	  --scenario $* \
+	  --seed $(CRV_SEED) --length $(CRV_LENGTH) \
+	  --build-dir $(CRV_DIR) \
+	  --kronos-bin $(CRV_KRONOS_BIN) \
+	  --link-script $(CRV_LINK) \
+	  --common-s $(CRV_COMMON_S) \
+	  --sail-trace-script $(CRV_SAIL_SH) \
+	  --diff-script $(CRV_DIFF_PY) \
+	  && echo "PASS  sim-crv-$*  (seed=$(CRV_SEED) length=$(CRV_LENGTH))" \
+	  || { echo "FAIL  sim-crv-$*  (seed=$(CRV_SEED))"; exit 1; }
+
+sim-crv-smoke: build-s5
+	@mkdir -p $(CRV_DIR)
+	@fail=0; \
+	 for sc in $(CRV_SCENARIOS); do \
+	   $(CRV_RUNNER) --scenario $$sc --seed 0 --length $(CRV_LENGTH) \
+	     --build-dir $(CRV_DIR) --kronos-bin $(CRV_KRONOS_BIN) \
+	     --link-script $(CRV_LINK) --common-s $(CRV_COMMON_S) \
+	     --sail-trace-script $(CRV_SAIL_SH) --diff-script $(CRV_DIFF_PY) \
+	     && echo "PASS  sim-crv-$$sc-smoke" \
+	     || { echo "FAIL  sim-crv-$$sc-smoke"; fail=1; }; \
+	 done; exit $$fail
+
+sim-crv-deep: build-s5
+	@mkdir -p $(CRV_DIR)
+	@fail=0; \
+	 for i in $$(seq 0 49); do \
+	   for sc in $(CRV_SCENARIOS); do \
+	     seed=$$(($(CRV_SEED_BASE) + $$i)); \
+	     $(CRV_RUNNER) --scenario $$sc --seed $$seed --length $(CRV_LENGTH) \
+	       --build-dir $(CRV_DIR) --kronos-bin $(CRV_KRONOS_BIN) \
+	       --link-script $(CRV_LINK) --common-s $(CRV_COMMON_S) \
+	       --sail-trace-script $(CRV_SAIL_SH) --diff-script $(CRV_DIFF_PY) \
+	       || { echo "FAIL  sim-crv-$$sc seed=$$seed"; fail=1; }; \
+	   done; \
+	 done; \
+	 [ "$$fail" = "0" ] && echo "PASS  sim-crv-deep ($(CRV_SCENARIOS) × 50 seeds)"; \
+	 exit $$fail
+
+# ---------------------------------------------------------------------------
+# Functional-coverage build for the CRV smoke programs.
+# Produces obj_dir/crv_cov/Vtb_crv_cov + per-scenario coverage.txt files.
+#
+# Verilator 5.046 does not support native covergroup syntax (COVERIGN); the
+# TB uses manual bit arrays and dumps a text coverage file via +covout=.
+# ---------------------------------------------------------------------------
+TB_CRV_COV_FILES = $(SV_FILES_S5) $(TB_DIR)/stage5/tb_crv_cov.sv
+
+CRV_COV_DIR := $(OBJ_DIR)/crv_cov
+CRV_COV_BIN := $(CRV_COV_DIR)/Vtb_crv_cov
+CRV_COV_MERGE := python3 ../tools/crv_cov_merge.py
+
+sim-crv-cov-build: $(TB_CRV_COV_FILES)
+	mkdir -p $(CRV_COV_DIR)
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) \
+	  --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	  --top-module tb_crv_cov \
+	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \
+	  -Mdir $(CRV_COV_DIR) \
+	  $(TB_CRV_COV_FILES) \
+	  -o Vtb_crv_cov
+
+# Run the coverage TB once per scenario; merge results afterward.
+# Requires sim-crv-smoke to have produced obj_dir/crv/<sc>_0/prog.vmem.
+CRV_COV_EXCLUDES := ../tools/crv/coverage_excludes.txt
+
+sim-crv-coverage: sim-crv-cov-build sim-crv-smoke sim-crv-assists
+	@mkdir -p $(CRV_COV_DIR)
+	@for sc in $(CRV_SCENARIOS); do \
+	  vmem=$(CRV_DIR)/$$sc"_0/prog.vmem"; \
+	  if [ ! -f "$$vmem" ]; then \
+	    echo "[crv-cov] WARNING: $$vmem not found, skipping $$sc"; \
+	    continue; \
+	  fi; \
+	  echo "[crv-cov] running $$sc"; \
+	  $(CRV_COV_BIN) +vmem=$$vmem \
+	    +covout=$(CRV_COV_DIR)/coverage_$$sc.txt || true; \
+	done
+	@$(CRV_COV_MERGE) $(CRV_COV_DIR)/coverage_*.txt \
+	  --out $(CRV_COV_DIR)/merged.txt
+	@echo "[crv-cov] merged.txt written; running coverage gate"
+	@$(CRV_COV_GATE) --functional $(CRV_COV_DIR)/merged.txt \
+	  --exclude-bins $(CRV_COV_EXCLUDES)
+
+# ---------------------------------------------------------------------------
+# Directed-assist tests for functional coverage.
+#
+# sim-crv-assists:
+#   1. Build every assist_*.S under sw/stage5/crv_assists/.
+#   2. Run each through Vsim_top (the AXI4 stage5 simulator) and assert x10=0.
+#   3. Run each through Vtb_crv_cov so the assist bins are recorded in per-assist
+#      coverage files under obj_dir/crv_cov/.
+#
+# sim-crv-coverage (updated) also depends on sim-crv-assists so the coverage
+# gate sees all bins from both CRV scenarios and directed assists.
+# ---------------------------------------------------------------------------
+ASSISTS_DIR  := ../sw/stage5/crv_assists
+ASSISTS_BUILD := $(ASSISTS_DIR)/build
+CRV_COV_GATE := python3 ../tools/coverage_gate.py
+
+sim-crv-assists: build-s5 sim-crv-cov-build
+	@echo "[crv-assists] building assist programs"
+	@$(MAKE) -C $(ASSISTS_DIR) --no-print-directory
+	@echo "[crv-assists] running assists through Vsim_top (x10 check)"
+	@fail=0; \
+	 for hex in $(ASSISTS_BUILD)/assist_*.hex; do \
+	   name=$$(basename $$hex .hex); \
+	   out=$$(SIM_MAX_CYCLES=50000 $(SIM_BIN_S5) $$hex 2>&1); \
+	   if echo "$$out" | grep -q "x10 = 0"; then \
+	     echo "PASS  $$name"; \
+	   else \
+	     echo "FAIL  $$name ($$out)"; fail=1; \
+	   fi; \
+	 done; \
+	 [ "$$fail" = "0" ] || exit 1
+	@echo "[crv-assists] running assists through Vtb_crv_cov (coverage)"
+	@mkdir -p $(CRV_COV_DIR)
+	@for vmem in $(ASSISTS_BUILD)/assist_*.vmem; do \
+	  name=$$(basename $$vmem .vmem); \
+	  $(CRV_COV_BIN) +vmem=$$vmem \
+	    +covout=$(CRV_COV_DIR)/coverage_$${name}.txt || true; \
+	 done
+	@echo "[crv-assists] done"
+
+sim-group-crv-smoke: sim-crv-coverage sim-crv-assists
 
 .DEFAULT_GOAL := help
 

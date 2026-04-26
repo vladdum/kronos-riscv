@@ -390,3 +390,66 @@ semantic; no forwarding path is provided.
 
 See `docs/superpowers/specs/2026-04-26-perf-counters-design.md` for
 the full design spec.
+
+---
+
+### Constrained-random verification (Stage 5d)
+
+The CRV harness lives at `tools/crv/`.  A Python generator emits random
+RV64IMAFDC programs across seven scenarios:
+
+| Scenario             | Stresses                                              |
+|----------------------|-------------------------------------------------------|
+| `int_hazards`        | EX/MEM/WB forwarding, load-use, WB→ID bypass          |
+| `muldiv_interleave`  | Multi-cycle stall protocol, muldiv forwarding         |
+| `mem_ordering`       | LSU AXI4 protocol; plain LD/ST sequences (AMOs and LR/SC deferred — see notes) |
+| `fp_arith`           | FPU dispatch, scoreboard, sticky FFLAGS               |
+| `fdiv_fsqrt`         | Iterative FPU late-grant, back-pressure               |
+| `branch_pred`        | Bpred + alignment buffer                              |
+| `traps`              | CSR trap entry/exit, pipeline flush                   |
+
+Each test compiles via the existing toolchain to a `.hex`, runs on
+Kronos and Sail, and is diffed by `tools/trace_diff.py`.  A
+SystemVerilog covergroup TB (`tb/stage5/tb_crv_cov.sv`) wraps the core
+via the existing `retire_*` outputs and defines 82 bins covering
+instruction class, ALU op × sign, branch type, memory size × alignment,
+AMO type, FP rounding mode, and trap cause.  Coverage is computed via
+manual bit-array tracking (Verilator 5.046's native covergroup support
+is incomplete) and merged through `tools/crv_cov_merge.py`.  Bins random
+can't reach have directed assist tests under `sw/stage5/crv_assists/`.
+
+PR path runs `sim-crv-coverage` (smoke + assists, 100% gate after
+exclusions).  Nightly runs `sim-crv-deep` (50 seeds × 7 scenarios,
+opens an issue on failure).
+
+Trap entry is surfaced to the coverage predicates via the dedicated
+`retire_trap_taken_o` and `retire_trap_cause_o` outputs added in Stage
+5d; the TB does not rely on `retire_csr_wen` to `mcause` for trap
+detection.
+
+**Known limitations** (tracked as exclusions in
+`tools/crv/coverage_excludes.txt`):
+
+- AMO retire-trace gap: `retire_mem_wen_o` does not assert for the
+  write-back half of an AMO RMW operation.  All 12 AMO-related bins
+  (`cg_instr_class.op_amo`, `cg_amo.*`) are excluded from the gate
+  until the retire bus is extended to flag AMO writes.
+- LR/SC (`cg_amo.lr`, `cg_amo.sc`): the Sail riscv reference model
+  is built with `RsrvNone`, which disables reservation; LR/SC pairs
+  cannot be randomly generated without diverging from Sail.
+- SLT/SLTU result sign (`cg_alu_sign.slt_neg`, `cg_alu_sign.sltu_neg`):
+  these instructions write exactly 0 or 1, so bit63 is always 0 and the
+  `_neg` bins are structurally unreachable.
+- Misalignment traps and unaligned accesses (`cg_trap.ld_misalign`,
+  `cg_trap.st_misalign`, `cg_mem.half_odd`, `cg_mem.word_off2`,
+  `cg_mem.word_odd`, `cg_mem.double_off4`, `cg_mem.double_off2`,
+  `cg_mem.double_odd`): Stage 5 has no hardware misalignment support;
+  misaligned accesses would trap, and the random-program trap handler
+  only handles ECALL/EBREAK/IRQ.  These bins require a dedicated
+  misalignment handler before they can be exercised.
+- FENCE (`cg_instr_class.op_fence`): `kronos_decode` has no MISC_MEM
+  case; FENCE and FENCE.I are treated as illegal instructions.  This
+  bin is unreachable until FENCE decode support is added.
+
+See `docs/superpowers/specs/2026-04-26-crv-harness-design.md` for the
+full design.
