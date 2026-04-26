@@ -39,7 +39,10 @@ module kronos_csr #(
   output logic [2:0]  frm_o,
   // Zicntr: instruction retirement pulse (mem_wb_q.valid & pipeline advance).
   // Asserted once per retired instruction.  Tie to 0 for stages without Zicntr.
-  input  logic        instret_retire_i
+  input  logic        instret_retire_i,
+  // Zihpm event bus.  Bit i high if event ID i fires this cycle.
+  // Indexed by mhpmeventX[7:0] (event IDs >= 16 increment no counter).
+  input  logic [15:0] event_bus_i
 );
 
   // -------------------------------------------------------------------------
@@ -60,6 +63,22 @@ module kronos_csr #(
   // counters at 0xC00/0xC02 so ACT4 Zicntr tests pass).
   logic [63:0] mcycle;    // 0xB00 / 0xC00 (U-mode alias)
   logic [63:0] minstret;  // 0xB02 / 0xC02 (U-mode alias)
+
+  // -------------------------------------------------------------------------
+  // Zihpm counter-control + event counters (Stage 5c)
+  // -------------------------------------------------------------------------
+  // mcountinhibit (0x320) — bit X gates increment of counter X:
+  //   bit 0  = mcycle, bit 1 = reserved (RAZ/WI), bit 2 = minstret,
+  //   bits 3..10 = mhpmcounter3..10.
+  logic [10:0] mcountinhibit;
+
+  // mhpmcounter3..10 — 8 programmable 64-bit event counters.
+  // Indexed as mhpmcounter[3]..mhpmcounter[10]; entries [0..2] are unused
+  // (their CSR slots are mcycle/reserved/minstret which live above).
+  logic [63:0] mhpmcounter [3:10];
+
+  // mhpmevent3..10 — paired event-select registers (only bits [7:0] used).
+  logic [7:0]  mhpmevent   [3:10];
 
   // -------------------------------------------------------------------------
   // Read-only / combinational CSRs
@@ -101,6 +120,15 @@ module kronos_csr #(
       12'h301: rdata_o = misa;
       12'h304: rdata_o = mie;
       12'h305: rdata_o = mtvec;
+      12'h320: rdata_o = {53'b0, mcountinhibit};         // mcountinhibit
+      12'h323: rdata_o = {56'b0, mhpmevent[3]};
+      12'h324: rdata_o = {56'b0, mhpmevent[4]};
+      12'h325: rdata_o = {56'b0, mhpmevent[5]};
+      12'h326: rdata_o = {56'b0, mhpmevent[6]};
+      12'h327: rdata_o = {56'b0, mhpmevent[7]};
+      12'h328: rdata_o = {56'b0, mhpmevent[8]};
+      12'h329: rdata_o = {56'b0, mhpmevent[9]};
+      12'h32A: rdata_o = {56'b0, mhpmevent[10]};
       12'h340: rdata_o = mscratch;
       12'h341: rdata_o = mepc;
       12'h342: rdata_o = mcause;
@@ -109,6 +137,15 @@ module kronos_csr #(
       12'hC00, 12'hB00: rdata_o = mcycle;                     // cycle / mcycle
       12'hC01:          rdata_o = mcycle;                     // time (mirror cycle)
       12'hC02, 12'hB02: rdata_o = minstret;                   // instret / minstret
+      // Zihpm counters: M-mode RW (0xB03..0xB0A) and U-mode RO aliases (0xC03..0xC0A)
+      12'hB03, 12'hC03: rdata_o = mhpmcounter[3];
+      12'hB04, 12'hC04: rdata_o = mhpmcounter[4];
+      12'hB05, 12'hC05: rdata_o = mhpmcounter[5];
+      12'hB06, 12'hC06: rdata_o = mhpmcounter[6];
+      12'hB07, 12'hC07: rdata_o = mhpmcounter[7];
+      12'hB08, 12'hC08: rdata_o = mhpmcounter[8];
+      12'hB09, 12'hC09: rdata_o = mhpmcounter[9];
+      12'hB0A, 12'hC0A: rdata_o = mhpmcounter[10];
       default: rdata_o = 64'hDEAD_C5A0_DEAD_C5A0; // unimplemented CSR
     endcase
   end
@@ -144,11 +181,30 @@ module kronos_csr #(
       fcsr_q   <= 8'h00;
       mcycle   <= {64{1'b0}};
       minstret <= {64{1'b0}};
+      mcountinhibit <= '0;
+      for (int i = 3; i <= 10; i++) begin
+        mhpmcounter[i] <= '0;
+        mhpmevent[i]   <= '0;
+      end
     end else begin
-      // Zicntr counters
-      mcycle   <= mcycle + 64'd1;
-      if (instret_retire_i) minstret <= minstret + 64'd1;
-      // Trap entry (highest priority)
+      // ---- Default: counters tick (gated by mcountinhibit) ----
+      // mcycle (gated by mcountinhibit[0]; SW write takes priority)
+      if (~mcountinhibit[0] & ~(req_i & (addr_i == 12'hB00))) mcycle <= mcycle + 64'd1;
+      // minstret (gated by mcountinhibit[2] and qualified by retire; SW write takes priority)
+      if (~mcountinhibit[2] & instret_retire_i & ~(req_i & (addr_i == 12'hB02)))
+        minstret <= minstret + 64'd1;
+      // mhpmcounterX: increment when event-mux selects the asserted bus line
+      // and counter is not inhibited.  Out-of-range event IDs (>= 16) result
+      // in no increment.  A same-cycle SW write to THIS counter takes priority;
+      // accesses to any other CSR address must not suppress the tick.
+      for (int i = 3; i <= 10; i++) begin
+        if (~mcountinhibit[i] & (mhpmevent[i] < 8'd16)
+                              & event_bus_i[mhpmevent[i][3:0]]
+                              & ~(req_i & (addr_i == 12'(12'hB00 + i))))
+          mhpmcounter[i] <= mhpmcounter[i] + 64'd1;
+      end
+
+      // Trap entry (highest priority for non-counter state)
       if (trap_i) begin
         mepc       <= {32'b0, trap_pc_i};
         mcause     <= {32'b0, trap_cause_i};
@@ -160,26 +216,44 @@ module kronos_csr #(
         mstatus[3] <= mstatus[7]; // MIE = MPIE
         mstatus[7] <= 1'b1;       // MPIE = 1
       end
-      // CSR write
+      // CSR write (overrides default counter tick on the same cycle)
       if (req_i) begin
         unique case (addr_i)
           12'h001: fcsr_q[4:0] <= csr_new_val[4:0];
           12'h002: fcsr_q[7:5] <= csr_new_val[2:0];
           12'h003: fcsr_q      <= csr_new_val[7:0];
-          12'h300: mstatus  <= csr_new_val & 64'h7FFF_FFFF_FFFF_FFFF; // bit63 SD is read-only
+          12'h300: mstatus  <= csr_new_val & 64'h7FFF_FFFF_FFFF_FFFF;
           12'h304: mie      <= csr_new_val;
           12'h305: mtvec    <= csr_new_val;
+          12'h320: mcountinhibit <= csr_new_val[10:0];
+          12'h323: mhpmevent[3]  <= csr_new_val[7:0];
+          12'h324: mhpmevent[4]  <= csr_new_val[7:0];
+          12'h325: mhpmevent[5]  <= csr_new_val[7:0];
+          12'h326: mhpmevent[6]  <= csr_new_val[7:0];
+          12'h327: mhpmevent[7]  <= csr_new_val[7:0];
+          12'h328: mhpmevent[8]  <= csr_new_val[7:0];
+          12'h329: mhpmevent[9]  <= csr_new_val[7:0];
+          12'h32A: mhpmevent[10] <= csr_new_val[7:0];
           12'h340: mscratch <= csr_new_val;
           12'h341: mepc     <= csr_new_val;
           12'h342: mcause   <= csr_new_val;
+          // Counter writes — SW-write-wins precedence over default increment
+          12'hB00: mcycle        <= csr_new_val;
+          12'hB02: minstret      <= csr_new_val;
+          12'hB03: mhpmcounter[3]  <= csr_new_val;
+          12'hB04: mhpmcounter[4]  <= csr_new_val;
+          12'hB05: mhpmcounter[5]  <= csr_new_val;
+          12'hB06: mhpmcounter[6]  <= csr_new_val;
+          12'hB07: mhpmcounter[7]  <= csr_new_val;
+          12'hB08: mhpmcounter[8]  <= csr_new_val;
+          12'hB09: mhpmcounter[9]  <= csr_new_val;
+          12'hB0A: mhpmcounter[10] <= csr_new_val;
           default: ; // read-only or unimplemented: ignore write
         endcase
       end
       // Sticky FFLAGS accumulation from FPU writeback (OR on top of CSR writes)
       if (fflags_we_i) fcsr_q[4:0] <= fcsr_q[4:0] | fflags_delta_i;
       // mstatus.FS becomes Dirty (11) on any FP register or fcsr write.
-      // Placed after the CSR-write case so HW-set wins over a same-cycle SW
-      // write that would otherwise leave FS at a non-Dirty value.
       if (fp_rd_we_i || fflags_we_i || fp_csr_sw_write) begin
         mstatus[14:13] <= 2'b11;
       end

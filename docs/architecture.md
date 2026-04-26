@@ -334,3 +334,59 @@ Cycles measured from the instruction entering EX to its result being available i
 | `0x0000000000000003` | EBREAK |
 | `0x000000000000000B` | ECALL from M-mode |
 | `0x8000000000000007` | Machine timer interrupt |
+
+---
+
+## 12. Performance counters (Zicntr + partial Zihpm)
+
+Stage 5c adds architectural performance counters so subsequent
+microarchitectural changes (caches, MMU, OOO) can be measured
+quantitatively.
+
+**CSR additions** (all 64-bit on RV64):
+
+| Address       | Name                | Access      | Notes                                                |
+|---------------|---------------------|-------------|------------------------------------------------------|
+| 0x320         | `mcountinhibit`     | M-mode RW   | Bit X gates increment of counter X (bit 0=mcycle, 2=minstret, 3..10=mhpmcounter3..10). |
+| 0xB00         | `mcycle`            | M-mode RW   | Was read-only; now spec-compliant.                   |
+| 0xB02         | `minstret`          | M-mode RW   | Was read-only; now spec-compliant.                   |
+| 0xB03–0xB0A   | `mhpmcounter3..10`  | M-mode RW   | 8 programmable 64-bit event counters.                |
+| 0xC03–0xC0A   | `hpmcounter3..10`   | U-mode RO   | Aliases of the M-mode counters.                      |
+| 0x323–0x32A   | `mhpmevent3..10`    | M-mode RW   | Event-select; only bits [7:0] are meaningful.        |
+
+**Event-ID table** (wired now; reserved IDs documented for later):
+
+| ID    | Event                                       |
+|-------|---------------------------------------------|
+| 0x00  | No event (counter held)                     |
+| 0x01  | Branch retired (conditional B-type)         |
+| 0x02  | Branch mispredicted                         |
+| 0x03  | Load retired                                |
+| 0x04  | Store retired                               |
+| 0x05  | AXI memory-stall cycle                      |
+| 0x06  | Muldiv busy cycle                           |
+| 0x07  | FPU busy cycle (any FPU unit busy)          |
+| 0x08  | Trap or interrupt taken                     |
+| 0x10–0x1F | reserved for future I$/D$/TLB miss, ROB full, IQ full, etc. |
+
+The event bus is assembled in `rtl/stage5/kronos_top.sv` from the
+existing pipeline signals (plus three small derivations:
+`bpred_mispredict_pulse`, `fpu_busy_any`, `trap_taken_pulse`) and fed
+into `kronos_csr` via the `event_bus_i [15:0]` input. Per-counter
+increment logic in `kronos_csr` selects the bus line indexed by the
+low 8 bits of `mhpmevent[i]` and is gated by `mcountinhibit[i]`. SW
+writes to a counter on the same cycle as a selected event leave the
+counter at the SW-written value (write wins).
+
+**Pipeline-visibility delay:** CSR reads execute in EX, while events
+fire in WB and the counter increment is registered. A `csrr` of a
+counter sees the value flopped at the *previous* posedge — events
+that retire in the same cycle as the read are not yet visible.
+Software that wants an exact post-event count should leave ~2
+instructions of slack between the event and the read (e.g. the asm
+test in `sw/stage5/test_perf_counters.S` inserts two `nop`s before
+its readback). This matches the standard RISC-V perf-counter
+semantic; no forwarding path is provided.
+
+See `docs/superpowers/specs/2026-04-26-perf-counters-design.md` for
+the full design spec.

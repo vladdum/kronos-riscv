@@ -39,6 +39,7 @@ module tb_csr_fp;
     .fflags_delta_i(fflags_delta), .fflags_we_i(fflags_we),
     .fp_rd_we_i(1'b0),
     .instret_retire_i(1'b0),
+    .event_bus_i('0),
     .frm_o(frm)
   );
 

@@ -1,0 +1,46 @@
+name: Setup Verilator
+description: Build and install Verilator 5.046 from source, with caching across CI runs.
+
+inputs:
+  version:
+    description: Verilator git tag to build
+    default: v5.046
+  cache-version:
+    description: Bump to invalidate the cache
+    default: v1
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Verilator
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: /opt/verilator
+        key: verilator-${{ inputs.version }}-${{ runner.os }}-${{ inputs.cache-version }}
+
+    - name: Install build dependencies
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          autoconf flex bison g++ help2man libfl-dev libfl2 zlib1g-dev git ca-certificates make
+
+    - name: Build Verilator from source
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        sudo rm -rf /opt/verilator
+        sudo git clone --depth=1 --branch ${{ inputs.version }} https://github.com/verilator/verilator /opt/verilator
+        cd /opt/verilator
+        sudo autoconf
+        sudo ./configure
+        sudo make -j$(nproc)
+
+    - name: Expose Verilator on PATH
+      shell: bash
+      run: |
+        echo "/opt/verilator/bin" >> "$GITHUB_PATH"
+        echo "VERILATOR_ROOT=/opt/verilator" >> "$GITHUB_ENV"
+        /opt/verilator/bin/verilator --version
