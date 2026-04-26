@@ -182,6 +182,12 @@ module kronos_top
   logic        fpu_stall;
   logic        fpu_dispatching;  // combinational: dispatch will fire this cycle
 
+  // ---- Stage 5c performance-counter event bus ----
+  logic        bpred_mispredict_pulse;
+  logic        fpu_busy_any;
+  logic        trap_taken_pulse;
+  logic [15:0] event_bus;
+
   // FPU result latch: captures fpu_result when fpu_out_valid fires so the
   // result survives instr_fetch_stall cycles that may hold combined_stall=1
   // even after fpu_stall drops to 0.
@@ -397,7 +403,8 @@ module kronos_top
     // Zicntr: pulse once per retired instruction.  Count at the EX→MEM
     // transition so the count is visible to a csrrc-instret two instructions
     // later (matches the SAIL reference-model semantics used by ACT4).
-    .instret_retire_i (ex_mem_en & id_ex_q.valid & ~combined_stall)
+    .instret_retire_i (ex_mem_en & id_ex_q.valid & ~combined_stall),
+    .event_bus_i      (event_bus)
   );
 
   // STAGE4: 64-bit LSU with AXI4 interface and A-extension stubs.
@@ -991,6 +998,40 @@ module kronos_top
   // =========================================================================
   logic retire_advance;
   assign retire_advance = mem_wb_q.valid & ~combined_stall;
+
+  // ---- Performance-counter event bus ----------------------------------------
+  // Single-cycle pulses for retire-tagged events; level signals for stall events.
+  // Bus indices match mhpmeventX[7:0] event IDs:
+  //   0x00 reserved-zero, 0x01 branch retired, 0x02 branch mispredict,
+  //   0x03 load retired,  0x04 store retired, 0x05 mem stall,
+  //   0x06 muldiv busy,    0x07 fpu busy,      0x08 trap taken.
+  // 0x09..0x0F currently tied to 0; 0x10..0x1F reserved for future caches/OOO.
+
+  // Mispredict pulse: combine the EX-stage branch mispredict and the MEM-stage
+  // JALR target-mispredict, gated by ~combined_stall so a stalled cycle is not
+  // counted twice.
+  assign bpred_mispredict_pulse =
+      (bpred_mispredict | bpred_mispredict_target) & ~combined_stall;
+
+  // FPU busy: the FPU top exposes its own OR-reduced busy line via fpu_busy.
+  assign fpu_busy_any = fpu_busy;
+
+  // Trap-taken pulse: re-derive the same expression we feed to u_csr.trap_i.
+  // (This is the canonical "trap entry will fire this cycle" condition.)
+  assign trap_taken_pulse = id_ex_q.valid & ~combined_stall &
+                            (id_ex_q.dec.illegal | id_ex_q.dec.is_ecall |
+                             id_ex_q.dec.is_ebreak | irq_pending);
+
+  assign event_bus[ 0]    = 1'b0;
+  assign event_bus[ 1]    = retire_advance & mem_wb_q.dec.is_branch;
+  assign event_bus[ 2]    = bpred_mispredict_pulse;
+  assign event_bus[ 3]    = retire_advance & mem_wb_q.dec.is_load;
+  assign event_bus[ 4]    = retire_advance & mem_wb_q.dec.is_store;
+  assign event_bus[ 5]    = mem_stall;
+  assign event_bus[ 6]    = muldiv_stall;
+  assign event_bus[ 7]    = fpu_busy_any;
+  assign event_bus[ 8]    = trap_taken_pulse;
+  assign event_bus[15:9]  = '0;
 
   assign retire_valid_o      = retire_advance;
   assign retire_pc_o         = {32'b0, mem_wb_q.pc};

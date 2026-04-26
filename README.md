@@ -27,6 +27,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 4     | RV64I + A extension                             | RV64IMAC         | AXI4    | Complete    |
 | 5a    | F/D extensions (pipelined, no FDIV/FSQRT)       | RV64IMAFD        | AXI4    | Complete    |
 | 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4    | Complete    |
+| 5c    | Performance counters (Zicntr + partial Zihpm)   | RV64IMAFDC       | AXI4    | Complete    |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same

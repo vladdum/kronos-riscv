@@ -107,13 +107,13 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         build-s5 run-s5-% run-s5b-% sim-s5 sim-core-fp-basic sim-core-fp-forwarding \
         gen-arch-tests-s1 sim-arch-test-s1 gen-arch-tests-s2 sim-arch-test-s2 gen-arch-tests-s3 sim-arch-test-s3 gen-arch-tests-s4 sim-arch-test-s4 gen-arch-tests-s5 sim-arch-test-s5 \
         sim-pkg-fp sim-regfile-fp sim-hf-smoke sim-sf-smoke \
-        sim-csr-fp sim-fpu-scoreboard \
+        sim-csr-fp sim-csr-perf-s5 sim-fpu-scoreboard \
         sim-decode-fp sim-fpu-fmisc sim-fpu-fcvt sim-fpu-fadd sim-fpu-fmul \
         sim-fpu-fma sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-iter-skeleton sim-fpu-top \
         sim-fpu-top-iter \
         sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov \
         sim-fpu-fma-cov coverage \
-        sim-alu-s5-cov sim-muldiv-s5-cov sim-decode-s5-cov sim-lsu-s5-cov \
+        sim-alu-s5-cov sim-muldiv-s5-cov sim-decode-s5-cov sim-lsu-s5-cov sim-csr-perf-s5-cov \
         sim-decode-fp-cov sim-lsu-fp-cov \
         sim-s5b \
         sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5 sim-group-s5-int \
@@ -536,7 +536,7 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
              sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
              sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc \
              sim-fpu-iter sim-fpu-top sim-fpu-top-iter \
-             sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5
+             sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5 sim-csr-perf-s5
 
 # ── CI test groups ────────────────────────────────────────────────────────────
 # Run as: make -j$(nproc) sim-group-<name>
@@ -557,7 +557,7 @@ SIM_GROUP_FP_UNIT := sim-pkg-fp sim-hf-smoke sim-sf-smoke \
 
 SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
 
-SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5
+SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-lsu-s5 sim-csr-perf-s5
 
 $(OBJ_DIR):
 	mkdir -p $@
@@ -846,6 +846,14 @@ sim-csr-fp:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/csr_fp \
 	  --top-module tb_csr_fp $(TB_CSR_FP_FILES)
 	$(OBJ_DIR)/csr_fp/Vtb_csr_fp
+
+TB_CSR_PERF_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                     $(RTL_DIR)/stage5/kronos_csr.sv \
+                     $(TB_DIR)/stage5/tb_csr_perf.sv
+sim-csr-perf-s5:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/csr_perf -Wno-UNUSED \
+	  --top-module tb_csr_perf $(TB_CSR_PERF_FILES)
+	$(OBJ_DIR)/csr_perf/Vtb_csr_perf
 
 TB_FPU_SB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
@@ -1144,9 +1152,23 @@ sim-lsu-s5-cov:
 	$(OBJ_DIR)/lsu_s5_cov/Vtb_lsu_s5 \
 	  +verilator+coverage+file+$(OBJ_DIR)/lsu_s5_cov/coverage.dat
 
+sim-csr-perf-s5-cov:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-UNUSED \
+	  $(COV_FLAGS) -Mdir $(OBJ_DIR)/csr_perf_cov \
+	  --top-module tb_csr_perf $(TB_CSR_PERF_FILES)
+	$(OBJ_DIR)/csr_perf_cov/Vtb_csr_perf \
+	  +verilator+coverage+file+$(OBJ_DIR)/csr_perf_cov/coverage.dat
+
+sim-csr-fp-cov:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-UNUSED \
+	  $(COV_FLAGS) -Mdir $(OBJ_DIR)/csr_fp_cov \
+	  --top-module tb_csr_fp $(TB_CSR_FP_FILES)
+	$(OBJ_DIR)/csr_fp_cov/Vtb_csr_fp \
+	  +verilator+coverage+file+$(OBJ_DIR)/csr_fp_cov/coverage.dat
+
 coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov sim-fpu-fma-cov \
-          sim-alu-s5-cov sim-muldiv-s5-cov sim-decode-s5-cov sim-lsu-s5-cov \
-          sim-decode-fp-cov sim-lsu-fp-cov
+          sim-alu-s5-cov sim-muldiv-s5-cov sim-decode-s5-cov sim-lsu-s5-cov sim-csr-perf-s5-cov \
+          sim-csr-fp-cov sim-decode-fp-cov sim-lsu-fp-cov
 	mkdir -p $(COV_DIR)
 	verilator_coverage --write-info $(COV_DIR)/merged.info \
 	  $(OBJ_DIR)/fpu_fmisc_cov/coverage.dat \
@@ -1158,6 +1180,8 @@ coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov s
 	  $(OBJ_DIR)/muldiv_s5_cov/coverage.dat \
 	  $(OBJ_DIR)/decode_s5_cov/coverage.dat \
 	  $(OBJ_DIR)/lsu_s5_cov/coverage.dat \
+	  $(OBJ_DIR)/csr_perf_cov/coverage.dat \
+	  $(OBJ_DIR)/csr_fp_cov/coverage.dat \
 	  $(OBJ_DIR)/decode_fp_cov/coverage.dat \
 	  $(OBJ_DIR)/lsu_fp_cov/coverage.dat
 	python3 ../tools/coverage_gate.py $(COV_DIR)/merged.info 100

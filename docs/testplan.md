@@ -142,6 +142,7 @@ per-stage section.
 | Softfloat smoke        | `tb/stage5/tb_softfloat_smoke.sv`    | Softfloat DPI smoke                    | `make sim-sf-smoke`          |
 | Core FP basic          | `tb/stage5/tb_core_fp_basic.sv`      | Top-level FP smoke                     | `make sim-core-fp-basic`     |
 | Core FP forwarding     | `tb/stage5/tb_core_fp_forwarding.sv` | FP writeback→consumer forwarding       | `make sim-core-fp-forwarding`|
+| CSR perf               | `tb/stage5/tb_csr_perf.sv`           | mcountinhibit / mhpmcounter / event-mux | `make sim-csr-perf-s5`      |
 
 ### Assembly programs (stage 5)
 | Test                      | File                                       | Exercises                              | Run                                  |
@@ -162,6 +163,7 @@ per-stage section.
 | `test_mret_rvc`           | `sw/stage5/test_mret_rvc.S`                | MRET into compressed instruction       | `make run-s5-test_mret_rvc`          |
 | `test_csr_warl`           | `sw/stage5/test_csr_warl.S`                | WARL/WLRL CSR field probing            | `make run-s5-test_csr_warl`          |
 | `test_illegal_insn`       | `sw/stage5/test_illegal_insn.S`            | Illegal instruction trap coverage      | `make run-s5-test_illegal_insn`      |
+| `test_perf_counters`      | `sw/stage5/test_perf_counters.S`           | Zicntr + Zihpm event counters          | `make run-s5-test_perf_counters`     |
 
 ### ACT4 compliance
 - 303 tests (rv64imafdc). Run: `make sim-arch-test-s5`.
