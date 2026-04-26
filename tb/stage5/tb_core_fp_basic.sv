@@ -71,7 +71,7 @@ module tb_core_fp_basic;
   // AXI slave — instruction port (read only)
   // -----------------------------------------------------------------------
   logic        instr_r_pend;
-  logic [31:0] instr_r_data_q;
+  logic [63:0] instr_r_data_q;
 
   always_comb begin
     instr_rsp          = '0;
@@ -89,12 +89,12 @@ module tb_core_fp_basic;
       if (instr_r_pend && instr_req.r_ready) begin
         // R handshake complete; accept new AR if arriving simultaneously
         if (instr_req.ar_valid) begin
-          instr_r_data_q <= mem[instr_req.ar.addr[7:2]];
+          instr_r_data_q <= {mem[instr_req.ar.addr[7:3]*2+1], mem[instr_req.ar.addr[7:3]*2]};
         end else begin
           instr_r_pend <= 1'b0;
         end
       end else if (!instr_r_pend && instr_req.ar_valid) begin
-        instr_r_data_q <= mem[instr_req.ar.addr[7:2]];
+        instr_r_data_q <= {mem[instr_req.ar.addr[7:3]*2+1], mem[instr_req.ar.addr[7:3]*2]};
         instr_r_pend   <= 1'b1;
       end
     end
@@ -104,12 +104,12 @@ module tb_core_fp_basic;
   // AXI slave — data port (read + write)
   // -----------------------------------------------------------------------
   logic        data_r_pend;
-  logic [31:0] data_r_data_q;
+  logic [63:0] data_r_data_q;
   logic        data_aw_done;
   logic        data_w_done;
-  logic [31:0] data_aw_addr_q;
-  logic [31:0] data_w_data_q;
-  logic [ 3:0] data_w_strb_q;
+  logic [63:0] data_aw_addr_q;
+  logic [63:0] data_w_data_q;
+  logic [ 7:0] data_w_strb_q;
   logic        data_b_pend;
   int          halted;
 
@@ -139,12 +139,12 @@ module tb_core_fp_basic;
       // Read AR
       if (data_r_pend && data_req.r_ready) begin
         if (data_req.ar_valid) begin
-          data_r_data_q <= mem[data_req.ar.addr[7:2]];
+          data_r_data_q <= {mem[data_req.ar.addr[7:3]*2+1], mem[data_req.ar.addr[7:3]*2]};
         end else begin
           data_r_pend <= 1'b0;
         end
       end else if (!data_r_pend && data_req.ar_valid) begin
-        data_r_data_q <= mem[data_req.ar.addr[7:2]];
+        data_r_data_q <= {mem[data_req.ar.addr[7:3]*2+1], mem[data_req.ar.addr[7:3]*2]};
         data_r_pend   <= 1'b1;
       end
 
@@ -163,17 +163,22 @@ module tb_core_fp_basic;
       // Commit write once both AW and W received
       if ((data_aw_done || data_req.aw_valid) &&
           (data_w_done  || data_req.w_valid)  && !data_b_pend) begin
-        automatic logic [31:0] waddr = data_aw_done ? data_aw_addr_q : data_req.aw.addr;
-        automatic logic [31:0] wdata = data_w_done  ? data_w_data_q  : data_req.w.data;
-        automatic logic [ 3:0] wstrb = data_w_done  ? data_w_strb_q  : data_req.w.strb;
-        if ((waddr & 32'hC000_0000) == 32'h4000_0000) begin
+        automatic logic [63:0] waddr = data_aw_done ? data_aw_addr_q : data_req.aw.addr;
+        automatic logic [63:0] wdata = data_w_done  ? data_w_data_q  : data_req.w.data;
+        automatic logic [ 7:0] wstrb = data_w_done  ? data_w_strb_q  : data_req.w.strb;
+        automatic int wi_lo = int'(waddr[7:3]) * 2;
+        automatic int wi_hi = wi_lo + 1;
+        if ((waddr & 64'hC000_0000) == 64'h4000_0000) begin
           halted <= halted + 1;
         end else begin
-          automatic int wi = int'(waddr[7:2]);
-          if (wstrb[0]) mem[wi][ 7: 0] <= wdata[ 7: 0];
-          if (wstrb[1]) mem[wi][15: 8] <= wdata[15: 8];
-          if (wstrb[2]) mem[wi][23:16] <= wdata[23:16];
-          if (wstrb[3]) mem[wi][31:24] <= wdata[31:24];
+          if (wstrb[0]) mem[wi_lo][ 7: 0] <= wdata[ 7: 0];
+          if (wstrb[1]) mem[wi_lo][15: 8] <= wdata[15: 8];
+          if (wstrb[2]) mem[wi_lo][23:16] <= wdata[23:16];
+          if (wstrb[3]) mem[wi_lo][31:24] <= wdata[31:24];
+          if (wstrb[4]) mem[wi_hi][ 7: 0] <= wdata[39:32];
+          if (wstrb[5]) mem[wi_hi][15: 8] <= wdata[47:40];
+          if (wstrb[6]) mem[wi_hi][23:16] <= wdata[55:48];
+          if (wstrb[7]) mem[wi_hi][31:24] <= wdata[63:56];
         end
         data_aw_done <= 1'b0;
         data_w_done  <= 1'b0;

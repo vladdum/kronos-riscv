@@ -41,8 +41,8 @@ module kronos_csr #(
   // Asserted once per retired instruction.  Tie to 0 for stages without Zicntr.
   input  logic        instret_retire_i,
   // Zihpm event bus.  Bit i high if event ID i fires this cycle.
-  // Indexed by mhpmeventX[7:0] (event IDs >= 16 increment no counter).
-  input  logic [15:0] event_bus_i
+  // Indexed by mhpmeventX[7:0] (event IDs >= 32 increment no counter).
+  input  logic [31:0] event_bus_i
 );
 
   // -------------------------------------------------------------------------
@@ -198,8 +198,8 @@ module kronos_csr #(
       // in no increment.  A same-cycle SW write to THIS counter takes priority;
       // accesses to any other CSR address must not suppress the tick.
       for (int i = 3; i <= 10; i++) begin
-        if (~mcountinhibit[i] & (mhpmevent[i] < 8'd16)
-                              & event_bus_i[mhpmevent[i][3:0]]
+        if (~mcountinhibit[i] & (mhpmevent[i] < 8'd32)
+                              & event_bus_i[mhpmevent[i][4:0]]
                               & ~(req_i & (addr_i == 12'(12'hB00 + i))))
           mhpmcounter[i] <= mhpmcounter[i] + 64'd1;
       end

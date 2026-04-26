@@ -114,14 +114,18 @@ module kronos_top
   // from the FWD_EXMEM combinational path.
   logic        ex_mem_csr_q;
 
-  // STAGE3: fetch FSM
-  typedef enum logic { FETCH_IDLE = 1'b0, FETCH_WAIT_R = 1'b1 } fetch_state_e;
-  fetch_state_e fetch_state_q;
-  logic         fetch_stale_q;
+  // STAGE3: fetch control (icache replaces old FSM)
   logic         fetch_flush;
   logic         instr_fetch_stall;
   logic         combined_stall;
   logic         combined_stall_no_muldiv;
+
+  // I-cache interface signals
+  logic        icache_data_valid;
+  logic [31:0] icache_data;
+  logic        icache_stall;
+  logic        icache_miss_pulse;
+  logic        fence_i_pulse;
 
   // STAGE3: C extension — alignment unit signals
   logic [31:0] align_instr;
@@ -185,11 +189,11 @@ module kronos_top
   logic        fpu_stall;
   logic        fpu_dispatching;  // combinational: dispatch will fire this cycle
 
-  // ---- Stage 5c performance-counter event bus ----
+  // ---- Stage 5c/e performance-counter event bus ----
   logic        bpred_mispredict_pulse;
   logic        fpu_busy_any;
   logic        trap_taken_pulse;
-  logic [15:0] event_bus;
+  logic [31:0] event_bus;
 
   // FPU result latch: captures fpu_result when fpu_out_valid fires so the
   // result survives instr_fetch_stall cycles that may hold combined_stall=1
@@ -277,7 +281,14 @@ module kronos_top
   // the priority so a redirect flushes the wrong-path MUL without needing
   // muldiv_stall to fan in from ex_redirect/mem_redirect.
   assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
-  assign instr_fetch_stall = ~align_instr_valid;
+  assign instr_fetch_stall = ~align_instr_valid | icache_stall;
+
+  // FENCE.I detection from raw instruction bits (decoder doesn't surface it —
+  // see commit 87aac14 for why we don't change the decoder).
+  // FENCE.I: opcode = 7'b0001111, funct3 = 3'b001.
+  assign fence_i_pulse = id_ex_q.valid & ~combined_stall &
+                         (id_ex_q.instr[6:0]   == 7'b0001111) &
+                         (id_ex_q.instr[14:12] == 3'b001);
   // fpu_dispatching: the FPU dispatch will fire this cycle.  Stall immediately
   // so the following instruction stays in IF/ID and can receive the FP result
   // via the ID forwarding mux when the stall releases.
@@ -535,12 +546,37 @@ module kronos_top
     end
   end
 
+  // I-cache instance: replaces the old 3-state fetch FSM.
+  // addr_i is 64-bit (PHYS_ADDR_W); pc_q is 32-bit — zero-extend.
+  // When align_need_upper=1 the alignment unit needs the NEXT sequential 32-bit
+  // word.  The current word containing pc_q is at {pc_q[31:2], 2'b00}; the next
+  // word is at {pc_q[31:2]+1, 2'b00}.  This correctly handles both the intra-
+  // block case (pc_q[2]=0, spanning instruction within the same 8-byte block)
+  // and the cross-block case (pc_q[2]=1).
+  logic [31:0] icache_fetch_addr;
+  assign icache_fetch_addr = align_need_upper
+                             ? {pc_q[31:2] + 30'd1, 2'b00}
+                             : pc_q;
+
+  kronos_icache u_icache (
+    .clk_i        (clk_i),
+    .rst_ni       (rst_ni),
+    .req_i        (align_needs_fetch),
+    .addr_i       ({32'b0, icache_fetch_addr}),
+    .flush_i      (fence_i_pulse),
+    .data_valid_o (icache_data_valid),
+    .data_o       (icache_data),
+    .stall_o      (icache_stall),
+    .axi_req_o    (instr_axi_req_o),
+    .axi_rsp_i    (instr_axi_rsp_i),
+    .miss_pulse_o (icache_miss_pulse)
+  );
+
   kronos_align u_align (
     .clk_i               (clk_i),
     .rst_ni              (rst_ni),
-    .rdata_i             (instr_axi_rsp_i.r.data),
-    .rvalid_i            ((fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid
-                        & ~fetch_stale_q),
+    .rdata_i             (icache_data),
+    .rvalid_i            (icache_data_valid),
     .stall_i             (align_instr_valid & ~if_id_en),
     .flush_i             (fetch_flush),
     .pc_offset_i         (mem_redirect ? ex_mem_q.pc_next[1]
@@ -586,42 +622,8 @@ module kronos_top
   end
 
   // =========================================================================
-  // IF stage — 2-state fetch FSM (identical to stage3)
+  // IF stage — icache handles all fetch transactions via u_icache above.
   // =========================================================================
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      fetch_state_q <= FETCH_IDLE;
-    end else begin
-      unique case (fetch_state_q)
-        FETCH_IDLE: begin
-          if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready)
-            fetch_state_q <= FETCH_WAIT_R;
-        end
-        FETCH_WAIT_R:
-          if (instr_axi_rsp_i.r_valid) fetch_state_q <= FETCH_IDLE;
-        default: fetch_state_q <= FETCH_IDLE;
-      endcase
-    end
-  end
-
-  always_comb begin
-    instr_axi_req_o            = '0;
-    unique case (fetch_state_q)
-      FETCH_IDLE: begin
-        instr_axi_req_o.ar_valid  = rst_ni & align_needs_fetch;
-        instr_axi_req_o.ar.addr   = align_need_upper
-          ? {pc_q[31:2] + 30'd1, 2'b00}
-          : {pc_q[31:2], 2'b00};
-        instr_axi_req_o.ar.size   = 3'b010;
-        instr_axi_req_o.ar.burst  = axi_pkg::BURST_INCR;
-      end
-      FETCH_WAIT_R: begin
-        instr_axi_req_o.r_ready   = 1'b1;
-      end
-      default: ;
-    endcase
-  end
-
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       if_id_q <= '0;
@@ -901,25 +903,6 @@ module kronos_top
   // Any flush that redirects the fetch stream.
   assign fetch_flush = if_id_flush | (pred_taken & pc_en & ~ex_redirect & ~mem_redirect);
 
-  // Stale-fetch tracking: mark an in-flight AR as stale when a redirect fires.
-  // Two cases:
-  //   (a) FETCH_IDLE + AR accepted + flush this cycle: the AR just accepted
-  //       carries old pc_q; redirect target is already latched by kronos_align.
-  //   (b) FETCH_WAIT_R + flush before r_valid: redirect fired mid-wait.
-  // In both cases the eventual r_valid must be drained without forwarding.
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      fetch_stale_q <= 1'b0;
-    end else begin
-      if ((fetch_state_q == FETCH_IDLE &&
-           instr_axi_req_o.ar_valid && instr_axi_rsp_i.ar_ready && fetch_flush) ||
-          (fetch_state_q == FETCH_WAIT_R && fetch_flush && !instr_axi_rsp_i.r_valid))
-        fetch_stale_q <= 1'b1;
-      else if (fetch_stale_q && instr_axi_rsp_i.r_valid)
-        fetch_stale_q <= 1'b0;
-    end
-  end
-
   // =========================================================================
   // MEM stage — mem_done_q / lsu_rdata_latch handle pipeline stall bridging
   // =========================================================================
@@ -1035,6 +1018,8 @@ module kronos_top
   assign event_bus[ 7]    = fpu_busy_any;
   assign event_bus[ 8]    = trap_taken_pulse;
   assign event_bus[15:9]  = '0;
+  assign event_bus[16]    = icache_miss_pulse;  // event ID 0x10 = I$ miss
+  assign event_bus[31:17] = '0;                 // reserved for future events
 
   assign retire_valid_o      = retire_advance;
   assign retire_pc_o         = {32'b0, mem_wb_q.pc};

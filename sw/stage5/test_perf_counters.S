@@ -25,7 +25,7 @@
 
 .equ EVT_BRANCH_RETIRE, 0x01
 .equ EVT_LOAD_RETIRE,   0x03
-.equ EVT_RESERVED_HI,   0x10        # out-of-range (>= 16)
+.equ EVT_RESERVED_HI,   0x1F        # reserved (no event wired)
 
 .section .text
 .global main
@@ -104,7 +104,7 @@ main:
 .Linh_ok:
     csrw    CSR_MCOUNTINHIBIT, zero # release
 
-    # ---- 6. Out-of-range event ID is inert ----
+    # ---- 6. Unwired event ID is inert ----
     li      t0, EVT_RESERVED_HI
     csrw    CSR_MHPMEVENT5, t0
     csrw    CSR_MHPMCOUNTER5, zero

@@ -16,34 +16,37 @@ module sim_top
 
   // Instr port — DUT outputs (AR channel)
   output logic        instr_ar_valid_o,
-  output logic [31:0] instr_ar_addr_o,
+  output logic [63:0] instr_ar_addr_o,
+  output logic [ 7:0] instr_ar_len_o,
+  output logic [ 1:0] instr_ar_burst_o,
   // Instr port — DUT outputs (R channel)
   output logic        instr_r_ready_o,
   // Instr port — slave inputs (AR channel)
   input  logic        instr_ar_ready_i,
   // Instr port — slave inputs (R channel)
   input  logic        instr_r_valid_i,
-  input  logic [31:0] instr_r_data_i,
+  input  logic [63:0] instr_r_data_i,
+  input  logic        instr_r_last_i,
 
   // Data port — DUT outputs (AR channel)
   output logic        data_ar_valid_o,
-  output logic [31:0] data_ar_addr_o,
+  output logic [63:0] data_ar_addr_o,
   // Data port — DUT outputs (R channel)
   output logic        data_r_ready_o,
   // Data port — DUT outputs (AW channel)
   output logic        data_aw_valid_o,
-  output logic [31:0] data_aw_addr_o,
+  output logic [63:0] data_aw_addr_o,
   // Data port — DUT outputs (W channel)
   output logic        data_w_valid_o,
-  output logic [31:0] data_w_data_o,
-  output logic [ 3:0] data_w_strb_o,
+  output logic [63:0] data_w_data_o,
+  output logic [ 7:0] data_w_strb_o,
   // Data port — DUT outputs (B channel)
   output logic        data_b_ready_o,
   // Data port — slave inputs (AR channel)
   input  logic        data_ar_ready_i,
   // Data port — slave inputs (R channel)
   input  logic        data_r_valid_i,
-  input  logic [31:0] data_r_data_i,
+  input  logic [63:0] data_r_data_i,
   // Data port — slave inputs (AW/W channels)
   input  logic        data_aw_ready_i,
   input  logic        data_w_ready_i,
@@ -79,6 +82,8 @@ module sim_top
   // -------------------------------------------------------------------------
   assign instr_ar_valid_o = instr_req.ar_valid;
   assign instr_ar_addr_o  = instr_req.ar.addr;
+  assign instr_ar_len_o   = instr_req.ar.len;
+  assign instr_ar_burst_o = instr_req.ar.burst;
   assign instr_r_ready_o  = instr_req.r_ready;
 
   // -------------------------------------------------------------------------
@@ -89,7 +94,7 @@ module sim_top
     instr_rsp.ar_ready = instr_ar_ready_i;
     instr_rsp.r_valid  = instr_r_valid_i;
     instr_rsp.r.data   = instr_r_data_i;
-    instr_rsp.r.last   = 1'b1;
+    instr_rsp.r.last   = instr_r_last_i;
   end
 
   // -------------------------------------------------------------------------

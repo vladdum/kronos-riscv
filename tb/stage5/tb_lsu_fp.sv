@@ -58,9 +58,9 @@ module tb_lsu_fp;
 
   always #5 clk = ~clk;
 
-  // Simple AXI memory model (256 words × 32 bits = 1 KB).
+  // Simple AXI memory model (256 words × 32 bits = 1 KB, accessed as 64-bit beats).
   logic [31:0] mem [256];
-  logic [31:0] ar_addr_q;
+  logic [63:0] ar_addr_q;
   logic        ar_pending;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -80,15 +80,21 @@ module tb_lsu_fp;
 
       if (ar_pending) begin
         axi_rsp.r_valid <= 1;
-        axi_rsp.r.data  <= mem[ar_addr_q[9:2]];
+        // 64-bit beat: two consecutive 32-bit words.
+        axi_rsp.r.data  <= {mem[ar_addr_q[9:3]*2+1], mem[ar_addr_q[9:3]*2]};
         axi_rsp.r.last  <= 1;
         ar_pending      <= 0;
       end
 
       if (axi_req.aw_valid && axi_req.w_valid) begin
+        // Lower 32-bit word (bytes 0-3)
         for (int i = 0; i < 4; i++)
           if (axi_req.w.strb[i])
-            mem[axi_req.aw.addr[9:2]][i*8 +: 8] <= axi_req.w.data[i*8 +: 8];
+            mem[axi_req.aw.addr[9:3]*2][i*8 +: 8] <= axi_req.w.data[i*8 +: 8];
+        // Upper 32-bit word (bytes 4-7)
+        for (int i = 0; i < 4; i++)
+          if (axi_req.w.strb[4+i])
+            mem[axi_req.aw.addr[9:3]*2+1][i*8 +: 8] <= axi_req.w.data[(4+i)*8 +: 8];
         axi_rsp.b_valid <= 1;
       end
     end

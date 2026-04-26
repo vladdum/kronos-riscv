@@ -51,12 +51,18 @@ static void load_hex(const char* path) {
 }
 
 // -------------------------------------------------------------------------
-// AXI4 single-outstanding read channel state
+// AXI4 read channel state — supports single-beat and multi-beat bursts.
+// beat counts from 0 to len (inclusive), giving len+1 beats total.
 // -------------------------------------------------------------------------
 struct AxiRead {
-    bool     pending  = false;
-    uint32_t data     = 0;    // pre-fetched at AR time
-    int      fire_at  = -1;   // cycle when r_valid should be driven
+    bool     pending   = false;
+    uint64_t base_addr = 0;   // AR address (first beat)
+    uint8_t  burst     = 0;   // 2'b01=INCR, 2'b10=WRAP
+    uint8_t  len       = 0;   // ar_len: number of beats minus one
+    uint8_t  beat      = 0;   // current beat index (0..len)
+    int      fire_at   = -1;  // cycle when r_valid should first be driven
+    // Legacy single-beat field kept for data port (no burst needed there yet).
+    uint64_t data      = 0;
 };
 
 // -------------------------------------------------------------------------
@@ -66,7 +72,7 @@ struct AxiWrite {
     bool     aw_done   = false;
     bool     w_done    = false;
     uint32_t addr      = 0;
-    uint32_t wdata     = 0;
+    uint64_t wdata     = 0;
     uint8_t  wstrb     = 0;
     int      fire_at   = -1;   // cycle when b_valid should be driven
     bool     b_pending = false;
@@ -129,12 +135,14 @@ int main(int argc, char** argv) {
     top->instr_ar_ready_i = 0;
     top->instr_r_valid_i  = 0;
     top->instr_r_data_i   = 0;
+    top->instr_r_last_i   = 0;
     top->data_ar_ready_i  = 0;
     top->data_r_valid_i   = 0;
     top->data_r_data_i    = 0;
     top->data_aw_ready_i  = 0;
     top->data_w_ready_i   = 0;
     top->data_b_valid_i   = 0;
+    // Note: data widths are now 64-bit; C++ types are updated accordingly.
 
     // Hold reset for 4 cycles
     for (int i = 0; i < 8; i++) { top->clk_i = !top->clk_i; top->eval(); }
@@ -182,16 +190,35 @@ int main(int argc, char** argv) {
         top->data_aw_ready_i = 1;
         top->data_w_ready_i  = 1;
 
-        // R response — instr
+        // R response — instr (multi-beat burst support: INCR and WRAP)
         if (instr_r.pending && cycle >= instr_r.fire_at) {
+            uint64_t addr = instr_r.base_addr;
+            if (instr_r.burst == 0x1) {
+                // INCR: linear advance by 8 bytes per beat.
+                addr += (uint64_t)instr_r.beat * 8;
+            } else if (instr_r.burst == 0x2) {
+                // WRAP: wrap within a power-of-two aligned line.
+                // line_size = (len+1) * 8 bytes.
+                uint64_t line_size = ((uint64_t)instr_r.len + 1) * 8;
+                uint64_t line_mask = line_size - 1;
+                uint64_t line_base = addr & ~line_mask;
+                uint64_t off       = ((addr & line_mask) + (uint64_t)instr_r.beat * 8) & line_mask;
+                addr = line_base | off;
+            }
+            // Fetch the 64-bit beat (two consecutive 32-bit words, little-endian).
+            uint32_t wa    = ((uint32_t)(addr >> 2)) & 0x7FFFF;
+            uint32_t wa_hi = (wa + 1) & 0x7FFFF;
+            uint64_t beat_data = (uint64_t)mem[wa] | ((uint64_t)mem[wa_hi] << 32);
             top->instr_r_valid_i = 1;
-            top->instr_r_data_i  = instr_r.data;
+            top->instr_r_data_i  = beat_data;
+            top->instr_r_last_i  = (instr_r.beat == instr_r.len) ? 1 : 0;
         } else {
             top->instr_r_valid_i = 0;
             top->instr_r_data_i  = 0;
+            top->instr_r_last_i  = 0;
         }
 
-        // R response — data
+        // R response — data (64-bit beat)
         if (data_r.pending && cycle >= data_r.fire_at) {
             top->data_r_valid_i = 1;
             top->data_r_data_i  = data_r.data;
@@ -241,19 +268,26 @@ int main(int argc, char** argv) {
         // Instr AR handshake
         if (top->instr_ar_valid_o && top->instr_ar_ready_i) {
             if (instr_r.pending) {
-                fprintf(stderr, "[AXI] FATAL: duplicate instr AR at cycle %d (addr=0x%08x)\n",
-                        cycle, (unsigned)top->instr_ar_addr_o);
+                fprintf(stderr, "[AXI] FATAL: duplicate instr AR at cycle %d (addr=0x%016llx)\n",
+                        cycle, (unsigned long long)top->instr_ar_addr_o);
                 return 1;
             }
-            uint32_t wa = (top->instr_ar_addr_o >> 2) & 0x7FFFF;
-            instr_r.pending = true;
-            instr_r.data    = mem[wa];
-            instr_r.fire_at = cycle + INSTR_LAT;
+            instr_r.pending   = true;
+            instr_r.base_addr = (uint64_t)top->instr_ar_addr_o;
+            instr_r.burst     = (uint8_t)top->instr_ar_burst_o;
+            instr_r.len       = (uint8_t)top->instr_ar_len_o;
+            instr_r.beat      = 0;
+            instr_r.fire_at   = cycle + INSTR_LAT;
         }
 
-        // Instr R handshake complete
+        // Instr R handshake: advance beat or complete burst
         if (top->instr_r_valid_i && top->instr_r_ready_o) {
-            instr_r.pending = false;
+            if (instr_r.beat == instr_r.len) {
+                instr_r.pending = false;
+                instr_r.beat    = 0;
+            } else {
+                instr_r.beat++;
+            }
         }
 
         // Data AR handshake
@@ -262,15 +296,18 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "[AXI] FATAL: duplicate data AR at cycle %d\n", cycle);
                 return 1;
             }
-            uint32_t wa = (top->data_ar_addr_o >> 2) & 0x7FFFF;
+            // 64-bit beat: two consecutive 32-bit words, little-endian.
+            uint32_t wa_lo = (top->data_ar_addr_o >> 2) & 0x7FFFF;
+            uint32_t wa_hi = (wa_lo + 1) & 0x7FFFF;
             data_r.pending = true;
-            data_r.data    = mem[wa];
+            data_r.data    = (uint64_t)mem[wa_lo] | ((uint64_t)mem[wa_hi] << 32);
             data_r.fire_at = cycle + DATA_LAT;
             if (debug) {
-                uint32_t addr = top->data_ar_addr_o;
+                uint64_t addr = top->data_ar_addr_o;
                 uint32_t pc = top->rootp->sim_top__DOT__u_top__DOT__pc_q;
-                fprintf(stderr, "[MEM] C%05d pc=%08x R  addr=%08x data=%08x\n",
-                        cycle, pc, addr, mem[wa]);
+                fprintf(stderr, "[MEM] C%05d pc=%08x R  addr=%016llx data=%016llx\n",
+                        cycle, pc, (unsigned long long)addr,
+                        (unsigned long long)data_r.data);
             }
         }
 
@@ -281,7 +318,7 @@ int main(int argc, char** argv) {
 
         // Data AW handshake
         if (top->data_aw_valid_o && top->data_aw_ready_i) {
-            data_w.addr    = top->data_aw_addr_o;
+            data_w.addr    = (uint32_t)top->data_aw_addr_o;
             data_w.aw_done = true;
         }
 
@@ -295,7 +332,7 @@ int main(int argc, char** argv) {
         // Both AW and W accepted: commit write and schedule B
         if (data_w.aw_done && data_w.w_done && !data_w.b_pending) {
             uint32_t waddr = data_w.addr;
-            uint32_t wdat  = data_w.wdata;
+            uint64_t wdat  = data_w.wdata;
             uint8_t  be    = data_w.wstrb;
 
             if (waddr == 0x80000000u) {
@@ -303,6 +340,7 @@ int main(int argc, char** argv) {
                 // so the pipeline is not mem-stalled when irq_timer_i asserts.
                 data_w.irq_write = true;
             } else if (waddr == 0x10000000u) {
+                // Console output: use lower 32-bit lane (byte strobes 0-3)
                 for (int i = 0; i < 4; i++)
                     if (be & (1u << i))
                         putchar((wdat >> (i * 8)) & 0xFF);
@@ -310,18 +348,28 @@ int main(int argc, char** argv) {
             } else if ((waddr & 0xC0000000u) == 0x40000000u) {
                 // Halt — drain DATA_LAT+1 more cycles so mem_stall can clear and
                 // any instruction stalled in mem_wb_q behind the store can retire.
-                halt_x10 = wdat;
-                printf("[sim] halt at cycle %d, x10 = %u\n", cycle, wdat);
+                // x10 is in the lower 32 bits of the 64-bit beat.
+                halt_x10 = (uint32_t)(wdat & 0xFFFFFFFFu);
+                printf("[sim] halt at cycle %d, x10 = %u\n", cycle, halt_x10);
                 halted = 1;
                 halt_drain = DATA_LAT + 1;
             } else {
-                uint32_t wi  = (waddr >> 2) & 0x7FFFF;
-                uint32_t cur = mem[wi];
-                if (be & 1) cur = (cur & ~0x000000FFu) | (wdat & 0x000000FFu);
-                if (be & 2) cur = (cur & ~0x0000FF00u) | (wdat & 0x0000FF00u);
-                if (be & 4) cur = (cur & ~0x00FF0000u) | (wdat & 0x00FF0000u);
-                if (be & 8) cur = (cur & ~0xFF000000u) | (wdat & 0xFF000000u);
-                mem[wi] = cur;
+                // Write lower 32-bit word (bytes 0-3)
+                uint32_t wi_lo = (waddr >> 2) & 0x7FFFF;
+                uint32_t cur_lo = mem[wi_lo];
+                if (be & 0x01) cur_lo = (cur_lo & ~0x000000FFu) | (uint32_t)((wdat >>  0) & 0xFFu);
+                if (be & 0x02) cur_lo = (cur_lo & ~0x0000FF00u) | (uint32_t)((wdat >>  8) & 0xFFu) <<  8;
+                if (be & 0x04) cur_lo = (cur_lo & ~0x00FF0000u) | (uint32_t)((wdat >> 16) & 0xFFu) << 16;
+                if (be & 0x08) cur_lo = (cur_lo & ~0xFF000000u) | (uint32_t)((wdat >> 24) & 0xFFu) << 24;
+                mem[wi_lo] = cur_lo;
+                // Write upper 32-bit word (bytes 4-7)
+                uint32_t wi_hi = (wi_lo + 1) & 0x7FFFF;
+                uint32_t cur_hi = mem[wi_hi];
+                if (be & 0x10) cur_hi = (cur_hi & ~0x000000FFu) | (uint32_t)((wdat >> 32) & 0xFFu);
+                if (be & 0x20) cur_hi = (cur_hi & ~0x0000FF00u) | (uint32_t)((wdat >> 40) & 0xFFu) <<  8;
+                if (be & 0x40) cur_hi = (cur_hi & ~0x00FF0000u) | (uint32_t)((wdat >> 48) & 0xFFu) << 16;
+                if (be & 0x80) cur_hi = (cur_hi & ~0xFF000000u) | (uint32_t)((wdat >> 56) & 0xFFu) << 24;
+                mem[wi_hi] = cur_hi;
             }
 
             data_w.aw_done   = false;

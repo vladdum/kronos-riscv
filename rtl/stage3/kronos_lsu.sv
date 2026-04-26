@@ -45,58 +45,60 @@ module kronos_lsu
   logic [31:0] addr_q;
   logic [31:0] wdata_q;
   logic [2:0]  funct3_q;
-  logic [31:0] rdata_q;
+  logic [63:0] rdata_q;   // full 64-bit beat from AXI R channel
   logic        aw_acked_q;
   logic        w_acked_q;
 
   // -------------------------------------------------------------------------
-  // Byte-enable and store-data replication
+  // Byte-enable and store-data replication (64-bit AXI beat, lane by addr[2])
   // -------------------------------------------------------------------------
-  logic [ 3:0] be;
-  logic [31:0] wdata_rep;
+  logic [ 7:0] be;
+  logic [63:0] wdata_rep;
 
   always_comb begin
-    be = 4'b1111;
+    be = 8'hFF;
     unique case (funct3_q[1:0])
-      2'b00:   be = 4'b0001 << addr_q[1:0];
-      2'b01:   be = 4'b0011 << addr_q[1:0];
-      2'b10:   be = 4'b1111;
-      default: be = 4'b1111;
+      2'b00: be = 8'h01 << {addr_q[2], addr_q[1:0]};
+      2'b01: be = 8'h03 << {addr_q[2], addr_q[1], 1'b0};
+      2'b10: be = addr_q[2] ? 8'hF0 : 8'h0F;
+      default: be = 8'hFF;
     endcase
   end
 
   always_comb begin
-    wdata_rep = wdata_q;
+    wdata_rep = {2{wdata_q}};
     unique case (funct3_q[1:0])
-      2'b00:   wdata_rep = {4{wdata_q[7:0]}};
-      2'b01:   wdata_rep = {2{wdata_q[15:0]}};
-      2'b10:   wdata_rep = wdata_q;
-      default: wdata_rep = wdata_q;
+      2'b00:   wdata_rep = {8{wdata_q[7:0]}};
+      2'b01:   wdata_rep = {4{wdata_q[15:0]}};
+      2'b10:   wdata_rep = {2{wdata_q}};
+      default: wdata_rep = {2{wdata_q}};
     endcase
   end
 
   // -------------------------------------------------------------------------
   // Load-data extraction and sign extension
   // -------------------------------------------------------------------------
+  logic [31:0] rdata_lane;
   logic [1:0]  byte_off;
   logic [31:0] rdata_shifted;
   logic [7:0]  raw_byte;
   logic [15:0] raw_half;
 
+  assign rdata_lane    = addr_q[2] ? rdata_q[63:32] : rdata_q[31:0];
   assign byte_off      = addr_q[1:0];
-  assign rdata_shifted = rdata_q >> ({3'b0, byte_off} * 4'd8);
+  assign rdata_shifted = rdata_lane >> ({3'b0, byte_off} * 4'd8);
   assign raw_byte      = rdata_shifted[7:0];
   assign raw_half      = rdata_shifted[15:0];
 
   always_comb begin
-    rdata_o = rdata_q;
+    rdata_o = rdata_lane;
     unique case (funct3_q)
       3'b000:  rdata_o = {{24{raw_byte[7]}},  raw_byte};
       3'b001:  rdata_o = {{16{raw_half[15]}}, raw_half};
-      3'b010:  rdata_o = rdata_q;
+      3'b010:  rdata_o = rdata_lane;
       3'b100:  rdata_o = {24'b0, raw_byte};
       3'b101:  rdata_o = {16'b0, raw_half};
-      default: rdata_o = rdata_q;
+      default: rdata_o = rdata_lane;
     endcase
   end
 
@@ -109,7 +111,7 @@ module kronos_lsu
       addr_q     <= {32{1'b0}};
       wdata_q    <= {32{1'b0}};
       funct3_q   <= {3{1'b0}};
-      rdata_q    <= {32{1'b0}};
+      rdata_q    <= {64{1'b0}};
       aw_acked_q <= 1'b0;
       w_acked_q  <= 1'b0;
     end else begin
@@ -170,15 +172,15 @@ module kronos_lsu
   end
 
   // -------------------------------------------------------------------------
-  // AXI4 request outputs
+  // AXI4 request outputs — single 64-bit beat per access
   // -------------------------------------------------------------------------
   always_comb begin
     axi_req_o = '0;
     unique case (state_q)
       LOAD_ADDR: begin
         axi_req_o.ar_valid = 1'b1;
-        axi_req_o.ar.addr  = {addr_q[31:2], 2'b00};
-        axi_req_o.ar.size  = 3'b010;
+        axi_req_o.ar.addr  = {32'b0, addr_q[31:3], 3'b000};
+        axi_req_o.ar.size  = 3'b011;  // 8 bytes
         axi_req_o.ar.burst = axi_pkg::BURST_INCR;
       end
       LOAD_DATA: begin
@@ -186,8 +188,8 @@ module kronos_lsu
       end
       STORE_SEND: begin
         axi_req_o.aw_valid = ~aw_acked_q;
-        axi_req_o.aw.addr  = {addr_q[31:2], 2'b00};
-        axi_req_o.aw.size  = 3'b010;
+        axi_req_o.aw.addr  = {32'b0, addr_q[31:3], 3'b000};
+        axi_req_o.aw.size  = 3'b011;  // 8 bytes
         axi_req_o.aw.burst = axi_pkg::BURST_INCR;
         axi_req_o.w_valid  = ~w_acked_q;
         axi_req_o.w.data   = wdata_rep;

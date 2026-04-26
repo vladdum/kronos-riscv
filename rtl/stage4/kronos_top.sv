@@ -93,7 +93,11 @@ module kronos_top
   logic        muldiv_stall;
 
   // STAGE3: fetch FSM
-  typedef enum logic { FETCH_IDLE = 1'b0, FETCH_WAIT_R = 1'b1 } fetch_state_e;
+  typedef enum logic [1:0] {
+    FETCH_IDLE        = 2'b00,
+    FETCH_WAIT_R      = 2'b01,
+    FETCH_SERVE_UPPER = 2'b10    // serve buffered upper 32-bit half, no new AXI fetch
+  } fetch_state_e;
   fetch_state_e fetch_state_q;
   logic         instr_fetch_stall;
   logic         combined_stall;
@@ -293,13 +297,55 @@ module kronos_top
   assign data_axi_req_o = data_req;
   assign data_rsp       = data_axi_rsp_i;
 
+  // Track pc[2] of the in-flight fetch to select the correct 32-bit lane.
+  // beat_upper_q: upper 32-bit half of the last 64-bit beat, buffered so that
+  // a spanning C-extension instruction can obtain the next word without an
+  // additional AXI transaction (FETCH_SERVE_UPPER state).
+  logic        fetch_pc2_q;
+  logic [31:0] beat_upper_q;
+  logic        beat_upper_valid_q;
+  logic        fetch_flush;
+  assign fetch_flush = if_id_flush | (pred_taken & pc_en & ~ex_redirect);
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      fetch_pc2_q        <= 1'b0;
+      beat_upper_q       <= 32'b0;
+      beat_upper_valid_q <= 1'b0;
+    end else begin
+      if (fetch_state_q == FETCH_IDLE && instr_axi_req_o.ar_valid &&
+          instr_axi_rsp_i.ar_ready)
+        fetch_pc2_q <= align_need_upper ? 1'b0 : pc_q[2];
+      if (fetch_state_q == FETCH_WAIT_R && instr_axi_rsp_i.r_valid && !fetch_pc2_q) begin
+        beat_upper_q       <= instr_axi_rsp_i.r.data[63:32];
+        beat_upper_valid_q <= 1'b1;
+      end
+      // Invalidate the buffer when a new AXI fetch is accepted.
+      if (fetch_state_q == FETCH_IDLE && instr_axi_req_o.ar_valid &&
+          instr_axi_rsp_i.ar_ready)
+        beat_upper_valid_q <= 1'b0;
+      // Clear the buffer once it has been consumed by FETCH_SERVE_UPPER.
+      if (fetch_state_q == FETCH_SERVE_UPPER) beat_upper_valid_q <= 1'b0;
+      if (fetch_flush) beat_upper_valid_q <= 1'b0;
+    end
+  end
+
+  // Mux: when in FETCH_SERVE_UPPER, deliver buffered upper half; otherwise
+  // pick the lane selected by fetch_pc2_q from the arriving AXI beat.
+  logic [31:0] align_rdata;
+  assign align_rdata = (fetch_state_q == FETCH_SERVE_UPPER)
+                       ? beat_upper_q
+                       : (fetch_pc2_q ? instr_axi_rsp_i.r.data[63:32]
+                                      : instr_axi_rsp_i.r.data[31:0]);
+
   kronos_align u_align (
     .clk_i               (clk_i),
     .rst_ni              (rst_ni),
-    .rdata_i             (instr_axi_rsp_i.r.data),
-    .rvalid_i            ((fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid),
+    .rdata_i             (align_rdata),
+    .rvalid_i            (((fetch_state_q == FETCH_WAIT_R) & instr_axi_rsp_i.r_valid)
+                         | (fetch_state_q == FETCH_SERVE_UPPER)),
     .stall_i             (align_instr_valid & ~if_id_en),
-    .flush_i             (if_id_flush | (pred_taken & pc_en & ~ex_redirect)),
+    .flush_i             (fetch_flush),
     .pc_offset_i         (ex_redirect ? ex_pc_next[1]
                         : pred_taken  ? pred_target[1]
                         :               pc_q[1]),
@@ -338,17 +384,26 @@ module kronos_top
   end
 
   // =========================================================================
-  // IF stage — 2-state fetch FSM (identical to stage3)
+  // IF stage — 3-state fetch FSM
+  // FETCH_SERVE_UPPER handles the case where the alignment unit needs the
+  // upper 32-bit word of the previously fetched 64-bit beat — no new AXI
+  // transaction required; just deliver beat_upper_q for one cycle.
   // =========================================================================
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) fetch_state_q <= FETCH_IDLE;
-    else begin
+    if (!rst_ni) begin
+      fetch_state_q <= FETCH_IDLE;
+    end else begin
       unique case (fetch_state_q)
-        FETCH_IDLE:
-          if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready)
+        FETCH_IDLE: begin
+          if (align_need_upper & beat_upper_valid_q & align_needs_fetch)
+            fetch_state_q <= FETCH_SERVE_UPPER;
+          else if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready)
             fetch_state_q <= FETCH_WAIT_R;
+        end
         FETCH_WAIT_R:
           if (instr_axi_rsp_i.r_valid) fetch_state_q <= FETCH_IDLE;
+        FETCH_SERVE_UPPER:
+          fetch_state_q <= FETCH_IDLE;
         default: fetch_state_q <= FETCH_IDLE;
       endcase
     end
@@ -358,11 +413,14 @@ module kronos_top
     instr_axi_req_o            = '0;
     unique case (fetch_state_q)
       FETCH_IDLE: begin
-        instr_axi_req_o.ar_valid  = rst_ni & align_needs_fetch;
+        // Suppress AR if the buffered upper half can satisfy the need_upper request.
+        instr_axi_req_o.ar_valid  = rst_ni & align_needs_fetch
+                                    & ~(align_need_upper & beat_upper_valid_q);
+        // 8-byte aligned fetch address.
         instr_axi_req_o.ar.addr   = align_need_upper
-          ? {pc_q[31:2] + 30'd1, 2'b00}
-          : {pc_q[31:2], 2'b00};
-        instr_axi_req_o.ar.size   = 3'b010;
+          ? {32'b0, pc_q[31:3] + 29'd1, 3'b000}
+          : {32'b0, pc_q[31:3], 3'b000};
+        instr_axi_req_o.ar.size   = 3'b011;  // 8 bytes
         instr_axi_req_o.ar.burst  = axi_pkg::BURST_INCR;
       end
       FETCH_WAIT_R: begin

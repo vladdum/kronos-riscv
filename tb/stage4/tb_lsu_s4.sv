@@ -50,6 +50,7 @@ module tb_lsu_s4;
   logic [31:0] ar_addr_q;
   logic        ar_pending;
 
+  // 64-bit beat: return two consecutive 32-bit words (little-endian).
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       axi_rsp    <= '0;
@@ -61,20 +62,27 @@ module tb_lsu_s4;
       axi_rsp.w_ready  <= 1;
 
       if (axi_req.ar_valid && axi_rsp.ar_ready) begin
-        ar_addr_q  <= axi_req.ar.addr;
+        ar_addr_q  <= axi_req.ar.addr[31:0];
         ar_pending <= 1;
       end
 
       if (ar_pending) begin
-        axi_rsp.r_valid <= 1;
-        axi_rsp.r.data  <= mem[ar_addr_q[9:2]];
-        axi_rsp.r.last  <= 1;
-        ar_pending      <= 0;
+        axi_rsp.r_valid    <= 1;
+        // 8-byte aligned address; return [lo_word, hi_word] as 64-bit beat
+        axi_rsp.r.data     <= {mem[(ar_addr_q[9:3] * 2) + 1], mem[ar_addr_q[9:3] * 2]};
+        axi_rsp.r.last     <= 1;
+        ar_pending         <= 0;
       end
 
       if (axi_req.aw_valid && axi_req.w_valid) begin
+        // Write lower 32-bit word (bytes 0-3)
         for (int i = 0; i < 4; i++)
-          if (axi_req.w.strb[i]) mem[axi_req.aw.addr[9:2]][i*8 +: 8] <= axi_req.w.data[i*8 +: 8];
+          if (axi_req.w.strb[i])
+            mem[axi_req.aw.addr[9:3] * 2][i*8 +: 8] <= axi_req.w.data[i*8 +: 8];
+        // Write upper 32-bit word (bytes 4-7)
+        for (int i = 0; i < 4; i++)
+          if (axi_req.w.strb[4+i])
+            mem[axi_req.aw.addr[9:3] * 2 + 1][i*8 +: 8] <= axi_req.w.data[(4+i)*8 +: 8];
         axi_rsp.b_valid <= 1;
       end
     end

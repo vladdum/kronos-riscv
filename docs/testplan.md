@@ -16,6 +16,7 @@ per-stage section.
 | Line-coverage gate  | `make coverage`                            | Merged Verilator line-coverage across gated modules; threshold enforced.  |
 | CRV harness         | `tools/crv/` + `tb/stage5/tb_crv_cov.sv` | Random program generator + Sail diff + functional coverage. |
 | CRV assists         | `sw/stage5/crv_assists/`              | Directed tests for residual covergroup bins random can't hit.|
+| I-cache TB          | `tb/stage5/tb_icache.sv`              | 4-way / PLRU / CWF / WRAP / FENCE.I unit tests. |
 
 ## Stage 0 — Single-cycle RV32I (OBI)
 
@@ -166,6 +167,7 @@ per-stage section.
 | `test_csr_warl`           | `sw/stage5/test_csr_warl.S`                | WARL/WLRL CSR field probing            | `make run-s5-test_csr_warl`          |
 | `test_illegal_insn`       | `sw/stage5/test_illegal_insn.S`            | Illegal instruction trap coverage      | `make run-s5-test_illegal_insn`      |
 | `test_perf_counters`      | `sw/stage5/test_perf_counters.S`           | Zicntr + Zihpm event counters          | `make run-s5-test_perf_counters`     |
+| `test_icache_hit_loop`    | `sw/stage5/test_icache_hit_loop.S`         | I$ miss count bounded on tight loop    | `make run-s5-test_icache_hit_loop`   |
 
 ### ACT4 compliance
 - 303 tests (rv64imafdc). Run: `make sim-arch-test-s5`.
@@ -185,6 +187,13 @@ per-stage section.
 | Coverage gate        | `make sim-crv-coverage`          |
 | Deep (nightly)       | `make sim-crv-deep`              |
 | Directed assists     | `make sim-crv-assists`           |
+
+### Instruction cache
+
+| Test                | Make target                             |
+|---------------------|------------------------------------------|
+| Unit TB             | `make sim-icache`                       |
+| Integration         | `make run-s5-test_icache_hit_loop`      |
 
 ## Stage 5b — adds FDIV/FSQRT
 

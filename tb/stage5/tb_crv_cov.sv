@@ -14,7 +14,7 @@
 // native covergroup syntax — COVERIGN). Bins are written to a text file at
 // $finish via +covout=<path> (default: coverage.txt).
 //
-// Bin layout (~82 named bins across 7 coverage groups):
+// Bin layout (~84 named bins across 8 coverage groups):
 //   cg_instr_class  21 bins  — instruction opcode class
 //   cg_alu_sign     16 bins  — ALU op × result sign (cross)
 //   cg_branch        6 bins  — branch type
@@ -22,6 +22,7 @@
 //   cg_amo          11 bins  — AMO operation type
 //   cg_fp_rm         6 bins  — FP rounding mode
 //   cg_trap          6 bins  — trap mcause
+//   cg_icache        2 bins  — I$ miss path exercise (Stage 5e)
 
 `timescale 1ns/1ps
 
@@ -44,9 +45,11 @@ module tb_crv_cov;
 
   logic [31:0] mem [MEM_WORDS];
 
-  // Word-address helper — clips to MEM_WORDS range.
-  function automatic logic [14:0] wa(input logic [31:0] addr);
-    return addr[16:2];
+  // Word-address helper — returns 32-bit word index of the low half of the
+  // 64-bit beat (even-aligned).  addr[16:3] selects the 64-bit beat; *2 gives
+  // the first 32-bit word of that beat.
+  function automatic logic [14:0] wa(input logic [63:0] addr);
+    return {addr[16:3], 1'b0};
   endfunction
 
   // -------------------------------------------------------------------------
@@ -119,33 +122,87 @@ module tb_crv_cov;
   assign rm     = retire_instr[14:12];  // FP rounding mode field = funct3
 
   // -------------------------------------------------------------------------
-  // AXI instruction port — zero-latency read
+  // AXI instruction port — multi-beat burst support (INCR and WRAP)
+  //
+  // The icache issues WRAP8 burst refills (ar.len=7, ar.burst=2'b10, 64-bit
+  // beats).  This model captures the AR handshake, then drives successive
+  // R beats advancing the address per AXI WRAP or INCR rules, asserting
+  // r.last on the final beat.
   // -------------------------------------------------------------------------
   logic        instr_r_pend;
-  logic [31:0] instr_r_data_q;
+  logic [63:0] instr_r_data_q;
+  logic        instr_r_last_q;
+  logic [63:0] instr_ar_addr_q;   // captured AR address
+  logic [ 7:0] instr_ar_len_q;    // captured AR len (beats-1)
+  logic [ 1:0] instr_ar_burst_q;  // captured AR burst type
+  logic [ 7:0] instr_beat_q;      // current beat index (0..len)
+
+  // Beat-address helper: returns byte address for beat b of a WRAP/INCR burst.
+  function automatic logic [63:0] burst_addr(
+    input logic [63:0] base,
+    input logic [ 7:0] burst_len,  // ar_len
+    input logic [ 1:0] burst_type, // 01=INCR 10=WRAP
+    input logic [ 7:0] beat
+  );
+    automatic logic [63:0] off;
+    automatic logic [63:0] line_mask;
+    off = {53'h0, beat, 3'h0};  // beat * 8 bytes (64-bit beats)
+    if (burst_type == 2'b10) begin
+      // WRAP: mask = ((len+1)*8 - 1), for len=7 → 0x3F
+      line_mask = (64'(burst_len) + 64'd1) * 64'd8 - 64'd1;
+      return (base & ~line_mask) | ((base + off) & line_mask);
+    end else begin
+      // INCR
+      return base + off;
+    end
+  endfunction
 
   always_comb begin
     instr_rsp          = '0;
-    instr_rsp.ar_ready = 1'b1;
+    instr_rsp.ar_ready = !instr_r_pend;
     instr_rsp.r_valid  = instr_r_pend;
     instr_rsp.r.data   = instr_r_data_q;
-    instr_rsp.r.last   = 1'b1;
+    instr_rsp.r.last   = instr_r_last_q;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      instr_r_pend   <= 1'b0;
-      instr_r_data_q <= '0;
+      instr_r_pend      <= 1'b0;
+      instr_r_data_q    <= '0;
+      instr_r_last_q    <= 1'b0;
+      instr_ar_addr_q   <= '0;
+      instr_ar_len_q    <= '0;
+      instr_ar_burst_q  <= '0;
+      instr_beat_q      <= '0;
     end else begin
-      if (instr_r_pend && instr_req.r_ready) begin
-        if (instr_req.ar_valid) begin
-          instr_r_data_q <= mem[wa(instr_req.ar.addr)];
-        end else begin
-          instr_r_pend <= 1'b0;
-        end
-      end else if (!instr_r_pend && instr_req.ar_valid) begin
-        instr_r_data_q <= mem[wa(instr_req.ar.addr)];
+      if (!instr_r_pend && instr_req.ar_valid) begin
+        // Capture AR and prepare first beat
+        automatic logic [63:0] beat0_addr;
+        instr_ar_addr_q  <= instr_req.ar.addr;
+        instr_ar_len_q   <= instr_req.ar.len;
+        instr_ar_burst_q <= instr_req.ar.burst;
+        instr_beat_q     <= 8'd0;
+        beat0_addr       = burst_addr(instr_req.ar.addr, instr_req.ar.len,
+                                      instr_req.ar.burst, 8'd0);
+        instr_r_data_q <= {mem[wa(beat0_addr)+1], mem[wa(beat0_addr)]};
+        instr_r_last_q <= (instr_req.ar.len == 8'd0);
         instr_r_pend   <= 1'b1;
+      end else if (instr_r_pend && instr_req.r_ready) begin
+        if (instr_beat_q == instr_ar_len_q) begin
+          // Last beat consumed — retire burst
+          instr_r_pend  <= 1'b0;
+          instr_beat_q  <= 8'd0;
+        end else begin
+          // Advance to next beat
+          automatic logic [ 7:0] next_beat;
+          automatic logic [63:0] next_addr;
+          next_beat      = instr_beat_q + 8'd1;
+          next_addr      = burst_addr(instr_ar_addr_q, instr_ar_len_q,
+                                      instr_ar_burst_q, next_beat);
+          instr_beat_q   <= next_beat;
+          instr_r_data_q <= {mem[wa(next_addr)+1], mem[wa(next_addr)]};
+          instr_r_last_q <= (next_beat == instr_ar_len_q);
+        end
       end
     end
   end
@@ -154,12 +211,12 @@ module tb_crv_cov;
   // AXI data port — zero-latency read/write
   // -------------------------------------------------------------------------
   logic        data_r_pend;
-  logic [31:0] data_r_data_q;
+  logic [63:0] data_r_data_q;
   logic        data_aw_done;
   logic        data_w_done;
-  logic [31:0] data_aw_addr_q;
-  logic [31:0] data_w_data_q;
-  logic [ 3:0] data_w_strb_q;
+  logic [63:0] data_aw_addr_q;
+  logic [63:0] data_w_data_q;
+  logic [ 7:0] data_w_strb_q;
   logic        data_b_pend;
   int          halted;
   int          irq_countdown;  // cycles remaining for irq_timer assertion
@@ -191,12 +248,12 @@ module tb_crv_cov;
       // Read
       if (data_r_pend && data_req.r_ready) begin
         if (data_req.ar_valid) begin
-          data_r_data_q <= mem[wa(data_req.ar.addr)];
+          data_r_data_q <= {mem[wa(data_req.ar.addr)+1], mem[wa(data_req.ar.addr)]};
         end else begin
           data_r_pend <= 1'b0;
         end
       end else if (!data_r_pend && data_req.ar_valid) begin
-        data_r_data_q <= mem[wa(data_req.ar.addr)];
+        data_r_data_q <= {mem[wa(data_req.ar.addr)+1], mem[wa(data_req.ar.addr)]};
         data_r_pend   <= 1'b1;
       end
 
@@ -215,24 +272,29 @@ module tb_crv_cov;
       // Commit write once both AW and W received
       if ((data_aw_done || data_req.aw_valid) &&
           (data_w_done  || data_req.w_valid)  && !data_b_pend) begin
-        automatic logic [31:0] waddr;
-        automatic logic [31:0] wdata;
-        automatic logic [ 3:0] wstrb;
-        waddr = data_aw_done ? data_aw_addr_q : data_req.aw.addr;
-        wdata = data_w_done  ? data_w_data_q  : data_req.w.data;
-        wstrb = data_w_done  ? data_w_strb_q  : data_req.w.strb;
-        if ((waddr & 32'hC000_0000) == 32'h4000_0000) begin
+        automatic logic [63:0] waddr;
+        automatic logic [63:0] wdata;
+        automatic logic [ 7:0] wstrb;
+        automatic int wi_lo, wi_hi;
+        waddr  = data_aw_done ? data_aw_addr_q : data_req.aw.addr;
+        wdata  = data_w_done  ? data_w_data_q  : data_req.w.data;
+        wstrb  = data_w_done  ? data_w_strb_q  : data_req.w.strb;
+        wi_lo  = int'({waddr[16:3], 1'b0});
+        wi_hi  = wi_lo + 1;
+        if ((waddr & 64'hC000_0000) == 64'h4000_0000) begin
           halted <= halted + 1;
-        end else if (waddr == 32'h8000_0000) begin
+        end else if (waddr == 64'h8000_0000) begin
           // IRQ trigger: assert irq_timer_i for 16 cycles (matches sim_main.cpp).
           irq_countdown <= 16;
         end else begin
-          automatic int wi;
-          wi = int'(waddr[16:2]);
-          if (wstrb[0]) mem[wi][ 7: 0] <= wdata[ 7: 0];
-          if (wstrb[1]) mem[wi][15: 8] <= wdata[15: 8];
-          if (wstrb[2]) mem[wi][23:16] <= wdata[23:16];
-          if (wstrb[3]) mem[wi][31:24] <= wdata[31:24];
+          if (wstrb[0]) mem[wi_lo][ 7: 0] <= wdata[ 7: 0];
+          if (wstrb[1]) mem[wi_lo][15: 8] <= wdata[15: 8];
+          if (wstrb[2]) mem[wi_lo][23:16] <= wdata[23:16];
+          if (wstrb[3]) mem[wi_lo][31:24] <= wdata[31:24];
+          if (wstrb[4]) mem[wi_hi][ 7: 0] <= wdata[39:32];
+          if (wstrb[5]) mem[wi_hi][15: 8] <= wdata[47:40];
+          if (wstrb[6]) mem[wi_hi][23:16] <= wdata[55:48];
+          if (wstrb[7]) mem[wi_hi][31:24] <= wdata[63:56];
         end
         data_aw_done <= 1'b0;
         data_w_done  <= 1'b0;
@@ -350,6 +412,15 @@ module tb_crv_cov;
   bit cov_trap_ld_misalign;
   bit cov_trap_st_misalign;
   bit cov_trap_irq_timer;
+
+  // -------------------------------------------------------------------------
+  // cg_icache (2 bins) — Stage 5e I-cache miss path exercise
+  // Tracks whether the I$ miss event (miss_pulse_o from kronos_icache,
+  // mapped to event_bus[16] via icache_miss_pulse in kronos_top) was ever
+  // asserted and whether at least one hit cycle was observed.
+  // -------------------------------------------------------------------------
+  bit cov_icache_miss_seen;    // at least one I$ miss occurred
+  bit cov_icache_no_miss_seen; // at least one cycle with no miss (normal fetch)
 
   // -------------------------------------------------------------------------
   // Sampling logic — combinational helpers
@@ -552,6 +623,14 @@ module tb_crv_cov;
     end
   end
 
+  // -- cg_icache -------------------------------------------------------------
+  // Hierarchical reference to the icache_miss_pulse signal in kronos_top.
+  // This is a registered 1-cycle pulse raised on every I$ miss.
+  always_ff @(posedge clk) begin
+    if (u_top.icache_miss_pulse) cov_icache_miss_seen    <= 1'b1;
+    else                         cov_icache_no_miss_seen <= 1'b1;
+  end
+
   // =========================================================================
   // Coverage dump at $finish
   // =========================================================================
@@ -652,6 +731,9 @@ module tb_crv_cov;
     $fwrite(fd, "cg_trap.ld_misalign         %0d\n", cov_trap_ld_misalign);
     $fwrite(fd, "cg_trap.st_misalign         %0d\n", cov_trap_st_misalign);
     $fwrite(fd, "cg_trap.irq_timer           %0d\n", cov_trap_irq_timer);
+    // cg_icache
+    $fwrite(fd, "cg_icache.miss_seen         %0d\n", cov_icache_miss_seen);
+    $fwrite(fd, "cg_icache.no_miss_seen      %0d\n", cov_icache_no_miss_seen);
     $fclose(fd);
   endtask
 
