@@ -453,3 +453,39 @@ detection.
 
 See `docs/superpowers/specs/2026-04-26-crv-harness-design.md` for the
 full design.
+
+### Instruction cache (Stage 5e)
+
+A 16 KB, 4-way set-associative instruction cache between the fetch unit
+and the AXI4 master.  Replaces the per-instruction fetch FSM that was in
+place through Stage 5d.
+
+**Organization:**
+
+| Parameter        | Value                                               |
+|------------------|-----------------------------------------------------|
+| Total size       | 16 KB                                               |
+| Associativity    | 4-way set-associative                               |
+| Line size        | 64 bytes                                            |
+| Sets             | 64                                                  |
+| Replacement      | Tree-PLRU (3 bits/set)                              |
+| Refill           | Critical-word-first via 8-beat AXI WRAP burst       |
+| Hit latency      | 1 cycle (registered output)                         |
+| Miss latency     | AXI ar→r latency + 1 cycle (CWF bypass)             |
+
+**FENCE.I:** detected from raw instruction bits in `kronos_top.sv`
+(`opcode == 7'b0001111 && funct3 == 3'b001`); not surfaced through the
+decoder (decoder change broke the Zifencei ACT4 baseline; see commit
+`87aac14`).  Asserts `flush_i` for one cycle, clearing all valid bits.
+
+**Performance counter:** I$ miss → event ID `0x10` (the first event in
+the reserved cache/MMU/OOO range from the Stage 5c spec).  Wired through
+`event_bus[16]`; `event_bus` widened from 16 to 32 bits in this stage.
+
+**AXI:** the AXI bus was widened from 32-bit to 64-bit (data + address)
+as part of this work.  All AXI consumers (LSU, top, sim infrastructure)
+were updated.  Single 64-bit beats serve 64-bit LD/SD; 32-bit accesses
+occupy the appropriate 32-bit lane.
+
+See `docs/superpowers/specs/2026-04-26-icache-design.md`.
+

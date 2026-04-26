@@ -31,7 +31,7 @@ module tb_csr_perf;
   logic [14:0] irq_fast = '0;
   logic        irq_pending;
   logic        instret_retire = 0;
-  logic [15:0] event_bus = '0;
+  logic [31:0] event_bus = '0;
 
   kronos_csr u_dut (
     .clk_i(clk), .rst_ni(rst_n),
@@ -126,17 +126,17 @@ module tb_csr_perf;
 
     // Pulse event_bus[5] high for 4 negedges; counter should increment 4 times.
     for (int i = 0; i < 4; i++) begin
-      @(negedge clk); event_bus = 16'h0020;       // bit 5
+      @(negedge clk); event_bus = 32'h0020;       // bit 5
     end
-    @(negedge clk); event_bus = 16'h0;
+    @(negedge clk); event_bus = 32'h0;
     csrread(12'hB03, v);
     if (v !== 64'd4) $fatal(1, "mhpmcounter3 expected 4, got %h", v);
 
     // ---- Test: mhpmcounterX does NOT increment when its event ID is unselected ----
     csrrw(12'hB04, 64'h0);
     csrrw(12'h324, 64'h08);                       // mhpmevent4 = 8 (unselected by bus)
-    @(negedge clk); event_bus = 16'h0020;
-    @(negedge clk); event_bus = 16'h0;
+    @(negedge clk); event_bus = 32'h0020;
+    @(negedge clk); event_bus = 32'h0;
     csrread(12'hB04, v);
     if (v !== 64'd0) $fatal(1, "mhpmcounter4 should not have ticked: %h", v);
 
@@ -147,9 +147,9 @@ module tb_csr_perf;
       static logic [63:0] before_v = '0;
       before_v = v;
       for (int i = 0; i < 8; i++) begin
-        @(negedge clk); event_bus = 16'h0020;
+        @(negedge clk); event_bus = 32'h0020;
       end
-      @(negedge clk); event_bus = 16'h0;
+      @(negedge clk); event_bus = 32'h0;
       csrread(12'hB03, v);
       if (v !== before_v) $fatal(1, "mcountinhibit failed to freeze: %h vs %h", v, before_v);
     end
@@ -159,10 +159,10 @@ module tb_csr_perf;
     // Set event_bus and req=1 on the same negedge so they hit the same posedge.
     csrrw(12'hB03, 64'h0);
     @(negedge clk);
-    event_bus = 16'h0020;                         // bit 5 asserted
+    event_bus = 32'h0020;                         // bit 5 asserted
     req = 1; addr = 12'hB03; funct3 = 3'b001; use_imm = 0;
     rs1_data = 64'hDEAD_BEEF_DEAD_BEEF;           // CSRRW: write DEAD_BEEF...
-    @(negedge clk); req = 0; event_bus = 16'h0;
+    @(negedge clk); req = 0; event_bus = 32'h0;
     csrread(12'hB03, v);
     if (v !== 64'hDEAD_BEEF_DEAD_BEEF)
       $fatal(1, "SW write should win, got %h", v);
@@ -170,8 +170,8 @@ module tb_csr_perf;
     // ---- Test: out-of-range event ID does not increment ----
     csrrw(12'h325, 64'h10);                       // mhpmevent5 = 0x10 (>= 16)
     csrrw(12'hB05, 64'h0);
-    @(negedge clk); event_bus = 16'hFFFF;
-    @(negedge clk); event_bus = 16'h0;
+    @(negedge clk); event_bus = 32'hFFFF;
+    @(negedge clk); event_bus = 32'h0;
     csrread(12'hB05, v);
     if (v !== 64'd0) $fatal(1, "out-of-range event ID should be inert: %h", v);
 
@@ -202,9 +202,9 @@ module tb_csr_perf;
     csrrw(12'hB03, 64'h0);                        // mhpmcounter3 = 0
     csrrw(12'h320, 64'h0);                        // mcountinhibit = 0
     // Drive event_bus[5] high while doing a CSR read of mstatus (unrelated addr).
-    @(negedge clk); event_bus = 16'h0020; req = 1; addr = 12'h300;
+    @(negedge clk); event_bus = 32'h0020; req = 1; addr = 12'h300;
                     funct3 = 3'b010; use_imm = 1; rs1_addr = 0;
-    @(negedge clk); event_bus = 16'h0; req = 0;
+    @(negedge clk); event_bus = 32'h0; req = 0;
     csrread(12'hB03, v);
     if (v === 64'd0)
       $fatal(1, "unrelated CSR access suppressed counter tick: %h", v);

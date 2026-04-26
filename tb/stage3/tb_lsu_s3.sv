@@ -48,7 +48,7 @@ module tb_lsu_s3;
   // posedge.  Verilator's coroutine resumes after the NBA region so state_q
   // and all combinatorial outputs are stable when the task returns.
   task automatic tick(
-    input logic ar_ready, r_valid, logic [31:0] r_data,
+    input logic ar_ready, r_valid, logic [63:0] r_data,
     input logic aw_ready, w_ready, b_valid
   );
     axi_rsp          = '0;
@@ -90,8 +90,9 @@ module tb_lsu_s3;
     check(!axi_req.ar_valid,  "T1: ar_valid should be 0 in LOAD_DATA");
     check(axi_req.r_ready,    "T1: r_ready should be 1 in LOAD_DATA");
 
-    // Tick 3: LOAD_DATA → LOAD_DONE.  Slave sends read data.
-    tick(0, 1, 32'hDEAD_BEEF, 0,0,0);
+    // Tick 3: LOAD_DATA → LOAD_DONE.  Slave sends read data (64-bit beat).
+    // addr=0x100 → addr[2]=0 → lower lane used.
+    tick(0, 1, 64'hCAFECAFE_DEAD_BEEF, 0,0,0);
     check(valid,                   "T1: valid should be asserted in LOAD_DONE");
     check(!mem_stall,              "T1: mem_stall should clear in LOAD_DONE");
     check(rdata == 32'hDEAD_BEEF,  "T1: rdata wrong");
@@ -112,8 +113,9 @@ module tb_lsu_s3;
     check(axi_req.aw_valid,                          "T2: aw_valid not asserted");
     check(axi_req.w_valid,                           "T2: w_valid not asserted");
     check(axi_req.aw.addr == 32'h0000_0200,          "T2: aw_addr wrong");
-    check(axi_req.w.data  == 32'h1234_5678,          "T2: w_data wrong");
-    check(axi_req.w.strb  == 4'hF,                   "T2: w_strb wrong for SW");
+    // SW to 0x200: addr[2]=0 → lower 32-bit lane → data replicated, strb 0F
+    check(axi_req.w.data[31:0] == 32'h1234_5678,     "T2: w_data wrong");
+    check(axi_req.w.strb  == 8'h0F,                  "T2: w_strb wrong for SW");
     check(axi_req.w.last,                            "T2: w_last should be 1");
     check(mem_stall,                                 "T2: mem_stall should be asserted");
 
@@ -139,8 +141,9 @@ module tb_lsu_s3;
     req = 1; we = 0; addr = 32'h0000_0101; funct3 = 3'b000; // LB
     tick(0,0,0, 0,0,0);           // IDLE → LOAD_ADDR
     tick(1,0,0, 0,0,0);           // LOAD_ADDR → LOAD_DATA (AR accepted)
-    // r_data: raw word = 32'h0000_8F00 → byte 1 = 0x8F → sign-extended = 32'hFFFF_FF8F
-    tick(0, 1, 32'h0000_8F00, 0,0,0); // LOAD_DATA → LOAD_DONE
+    // addr=0x101: addr[2]=0 → lower lane. byte 1 = 0x8F → sign-extended = 32'hFFFF_FF8F
+    // 64-bit beat: lower word = 32'h0000_8F00, upper word = don't-care.
+    tick(0, 1, 64'h0000_0000_0000_8F00, 0,0,0); // LOAD_DATA → LOAD_DONE
     check(rdata == 32'hFFFF_FF8F,  "T3: LB sign-extension wrong");
     req = 0;
     tick(0,0,0, 0,0,0);           // LOAD_DONE → IDLE
@@ -173,7 +176,7 @@ module tb_lsu_s3;
     req = 1; we = 0; addr = 32'h0000_0400; funct3 = 3'b010;
     tick(0,0,0, 0,0,0);            // IDLE → LOAD_ADDR
     tick(1,0,0, 0,0,0);            // LOAD_ADDR → LOAD_DATA
-    tick(0,1,32'hCAFE_F00D, 0,0,0); // LOAD_DATA → LOAD_DONE
+    tick(0,1,64'h0000_0000_CAFE_F00D, 0,0,0); // LOAD_DATA → LOAD_DONE (addr[2]=0)
     check(rdata == 32'hCAFE_F00D,  "T5: LW rdata wrong");
     // Release LOAD_DONE
     we = 1; addr = 32'h0000_0500; wdata = 32'hBEEF_CAFE;

@@ -107,7 +107,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         build-s5 run-s5-% run-s5b-% sim-s5 sim-core-fp-basic sim-core-fp-forwarding \
         gen-arch-tests-s1 sim-arch-test-s1 gen-arch-tests-s2 sim-arch-test-s2 gen-arch-tests-s3 sim-arch-test-s3 gen-arch-tests-s4 sim-arch-test-s4 gen-arch-tests-s5 sim-arch-test-s5 \
         sim-pkg-fp sim-regfile-fp sim-hf-smoke sim-sf-smoke \
-        sim-csr-fp sim-csr-perf-s5 sim-fpu-scoreboard \
+        sim-csr-fp sim-csr-perf-s5 sim-fpu-scoreboard sim-icache \
         sim-decode-fp sim-fpu-fmisc sim-fpu-fcvt sim-fpu-fadd sim-fpu-fmul \
         sim-fpu-fma sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-iter-skeleton sim-fpu-top \
         sim-fpu-top-iter \
@@ -773,6 +773,7 @@ SV_FILES_S5 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage5/kronos_alu.sv \
                $(RTL_DIR)/stage5/kronos_decode.sv \
                $(RTL_DIR)/stage0/kronos_regfile.sv \
+               $(RTL_DIR)/stage5/kronos_icache.sv \
                $(RTL_DIR)/stage5/kronos_csr.sv \
                $(RTL_DIR)/stage5/kronos_lsu.sv \
                $(RTL_DIR)/stage1/kronos_forward.sv \
@@ -1009,6 +1010,14 @@ sim-csr-perf-s5:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/csr_perf -Wno-UNUSED \
 	  --top-module tb_csr_perf $(TB_CSR_PERF_FILES)
 	$(OBJ_DIR)/csr_perf/Vtb_csr_perf
+
+TB_ICACHE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage5/kronos_icache.sv \
+                   $(TB_DIR)/stage5/tb_icache.sv
+sim-icache:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-UNUSED \
+	  -Mdir $(OBJ_DIR)/icache --top-module tb_icache $(TB_ICACHE_FILES)
+	$(OBJ_DIR)/icache/Vtb_icache
 
 TB_FPU_SB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \

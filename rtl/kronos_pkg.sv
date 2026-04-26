@@ -9,10 +9,10 @@ package kronos_pkg;
   // -------------------------------------------------------------------------
   // Stage 3+: AXI4 master port types
   // -------------------------------------------------------------------------
-  typedef logic [31:0] kronos_axi_addr_t;
+  typedef logic [63:0] kronos_axi_addr_t;
   typedef logic [ 0:0] kronos_axi_id_t;
-  typedef logic [31:0] kronos_axi_data_t;
-  typedef logic [ 3:0] kronos_axi_strb_t;
+  typedef logic [63:0] kronos_axi_data_t;
+  typedef logic [ 7:0] kronos_axi_strb_t;
   typedef logic [ 0:0] kronos_axi_user_t;
 
   // Generates: kronos_axi_aw_chan_t, kronos_axi_w_chan_t, kronos_axi_b_chan_t,

@@ -29,6 +29,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4    | Complete    |
 | 5c    | Performance counters (Zicntr + partial Zihpm)   | RV64IMAFDC       | AXI4    | Complete    |
 | 5d    | CRV harness (random gen + Sail diff + 144-bin coverage) | RV64IMAFDC | AXI4    | Complete    |
+| 5e    | Instruction cache (16 KB / 4-way / Tree-PLRU)   | RV64IMAFDC       | AXI4    | Complete    |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
@@ -268,9 +269,15 @@ microarchitectural corners (hazards, mul/div, memory ordering, FP,
 FDIV/FSQRT, branches, traps).  Each test runs on Kronos and Sail; the
 existing `tools/trace_diff.py` confirms architectural agreement.
 PR-blocking smoke (`make sim-crv-coverage`) gates 100% functional
-coverage across 82 bins (with 23 documented exclusions for
+coverage across 84 bins (with 23 documented exclusions for
 known-limitation paths); nightly `crv-deep` runs 50 seeds per scenario.
 See `docs/superpowers/specs/2026-04-26-crv-harness-design.md`.
+
+**Instruction cache:** A 16 KB, 4-way set-associative instruction cache
+(`rtl/stage5/kronos_icache.sv`) sits between the fetch unit and the AXI4
+master.  Tree-PLRU replacement, critical-word-first WRAP refill, FENCE.I
+full invalidate.  AXI bus widened to 64-bit (data + address) as part of
+this work.  See `docs/superpowers/specs/2026-04-26-icache-design.md`.
 
 ## Continuous integration
 
