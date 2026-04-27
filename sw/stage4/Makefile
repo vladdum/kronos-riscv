@@ -3,7 +3,7 @@ CC        := $(TOOLCHAIN)-gcc
 OBJCOPY   := $(TOOLCHAIN)-objcopy
 OBJDUMP   := $(TOOLCHAIN)-objdump
 
-ARCH   := rv64imac
+ARCH   := rv64imac_zicsr_zifencei
 ABI    := lp64
 CFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostdlib -static -T../stage0/link.ld
 

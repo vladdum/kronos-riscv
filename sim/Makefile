@@ -107,7 +107,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         build-s5 run-s5-% run-s5b-% sim-s5 sim-core-fp-basic sim-core-fp-forwarding \
         gen-arch-tests-s1 sim-arch-test-s1 gen-arch-tests-s2 sim-arch-test-s2 gen-arch-tests-s3 sim-arch-test-s3 gen-arch-tests-s4 sim-arch-test-s4 gen-arch-tests-s5 sim-arch-test-s5 \
         sim-pkg-fp sim-regfile-fp sim-hf-smoke sim-sf-smoke \
-        sim-csr-fp sim-csr-perf-s5 sim-fpu-scoreboard sim-icache sim-dcache \
+        sim-csr-fp sim-csr-perf-s5 sim-trigger sim-fpu-scoreboard sim-icache sim-dcache \
         sim-decode-fp sim-fpu-fmisc sim-fpu-fcvt sim-fpu-fadd sim-fpu-fmul \
         sim-fpu-fma sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-iter-skeleton sim-fpu-top \
         sim-fpu-top-iter \
@@ -119,7 +119,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-group-s5-int \
         sim-group-s1s2 sim-group-s3s4 sim-group-fp-unit sim-group-fp-top \
         sim-group-crv-smoke \
-        sim-diff-% sim-diff-all \
+        sim-diff-% sim-diff-all sim-diff-s5-traced \
         sim-crv-% sim-crv-smoke sim-crv-deep \
         sim-crv-cov-build sim-crv-coverage \
         sim-crv-assists
@@ -153,6 +153,27 @@ sim-diff-all: build-s5
 	done; \
 	echo "sim-diff-all: $$fail failing"; \
 	[ $$fail -eq 0 ]
+
+# Stage 5h D1: traced sim-diff — runs one short test under sim_diff with
+# +trace/+profile/+stalls enabled and writes the three CSVs to TRACE_DIR.
+# Picks test_dcache_hit_loop because it has a tight inner loop that produces
+# a useful PC histogram and stall breakdown.
+TRACED_TEST ?= test_dcache_hit_loop
+sim-diff-s5-traced: build-s5
+	@mkdir -p $(TRACE_DIR)
+	@$(MAKE) -C $(SW_DIR_S5) build/$(TRACED_TEST).hex >/dev/null
+	@./$(SIM_BIN_S5) $(SW_DIR_S5)/build/$(TRACED_TEST).hex \
+	   +trace=$(TRACE_DIR)/$(TRACED_TEST).trace.csv \
+	   +profile=$(TRACE_DIR)/$(TRACED_TEST).profile.csv \
+	   +stalls=$(TRACE_DIR)/$(TRACED_TEST).stalls.csv \
+	   > $(TRACE_DIR)/$(TRACED_TEST).log 2>&1
+	@echo "[traced] outputs:"
+	@ls -lh $(TRACE_DIR)/$(TRACED_TEST).trace.csv \
+	         $(TRACE_DIR)/$(TRACED_TEST).profile.csv \
+	         $(TRACE_DIR)/$(TRACED_TEST).stalls.csv
+	@grep -q "x10 = 0" $(TRACE_DIR)/$(TRACED_TEST).log \
+	  && echo "PASS  sim-diff-s5-traced" \
+	  || { echo "FAIL  sim-diff-s5-traced"; cat $(TRACE_DIR)/$(TRACED_TEST).log; exit 1; }
 
 # ---------------------------------------------------------------------------
 # Stage 5d — Constrained-random verification (CRV) targets.
@@ -691,7 +712,7 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
              sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
              sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc \
              sim-fpu-iter sim-fpu-top sim-fpu-top-iter \
-             sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5
+             sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger
 # Stage 5f LSU is a thin adapter; coverage of the integrated LSU + dcache
 # path comes from sim-dcache, sim-s5, sim-crv-smoke, ACT4 (303 tests), and
 # sim-diff-s5.
@@ -715,7 +736,7 @@ SIM_GROUP_FP_UNIT := sim-pkg-fp sim-hf-smoke sim-sf-smoke \
 
 SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
 
-SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5
+SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger
 
 $(OBJ_DIR):
 	mkdir -p $@
@@ -732,7 +753,8 @@ sim-all: $(SF_LIB)
 	@rm -rf $(SIM_REPORT_DIR) && mkdir -p $(SIM_REPORT_DIR)
 	@pids=""; \
 	for t in $(SIM_UNITS); do \
-	  { if $(MAKE) $$t > $(SIM_REPORT_DIR)/$$t.log 2>&1; \
+	  { if $(MAKE) $$t > $(SIM_REPORT_DIR)/$$t.log 2>&1 \
+	       && ! grep -qE "^FAIL|: [1-9][0-9]* FAILED|FAIL " $(SIM_REPORT_DIR)/$$t.log; \
 	    then echo "PASS  $$t"; \
 	    else echo "FAIL  $$t"; \
 	    fi; } > $(SIM_REPORT_DIR)/$$t.result & \
@@ -778,6 +800,7 @@ SV_FILES_S5 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage0/kronos_regfile.sv \
                $(RTL_DIR)/stage5/kronos_icache.sv \
                $(RTL_DIR)/stage5/kronos_csr.sv \
+               $(RTL_DIR)/stage5/kronos_trigger.sv \
                $(RTL_DIR)/stage5/kronos_lsu.sv \
                $(RTL_DIR)/stage5/kronos_dcache.sv \
                $(RTL_DIR)/stage1/kronos_forward.sv \
@@ -1017,6 +1040,14 @@ sim-csr-perf-s5:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/csr_perf -Wno-UNUSED \
 	  --top-module tb_csr_perf $(TB_CSR_PERF_FILES)
 	$(OBJ_DIR)/csr_perf/Vtb_csr_perf
+
+TB_TRIGGER_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                    $(RTL_DIR)/stage5/kronos_trigger.sv \
+                    $(TB_DIR)/stage5/tb_trigger.sv
+sim-trigger:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/trigger -Wno-UNUSED \
+	  --top-module tb_trigger $(TB_TRIGGER_FILES)
+	$(OBJ_DIR)/trigger/Vtb_trigger
 
 TB_ICACHE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/kronos_icache.sv \

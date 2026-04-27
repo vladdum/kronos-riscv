@@ -1,0 +1,13 @@
+event_id,event_name,cycle_count,fraction
+0x14,load_use_stall,12345,0.082000
+0x16,fp_raw_stall,4567,0.030000
+0x1A,mem_busy_stall,103420,0.681000
+0x1B,muldiv_stall,2200,0.014500
+0x1C,fpu_stall,800,0.005300
+0x1D,instr_fetch_stall,700,0.004600
+0x1E,branch_mispredict,500,0.003300
+0x1F,ex_redirect,2100,0.013800
+0x15,jalr_fwd_stall,150,0.001000
+0x17,frm_hazard_stall,0,0.000000
+0x18,fp_inflight_stall,5000,0.033000
+0x19,fence_i_drain_stall,80,0.000500

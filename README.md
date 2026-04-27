@@ -32,6 +32,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 5e    | Instruction cache (16 KB / 4-way / Tree-PLRU)   | RV64IMAFDC       | AXI4    | Complete    |
 | 5f    | Data cache (16 KB / 4-way / write-back+allocate) | RV64IMAFDC      | AXI4    | Complete    |
 | 5g    | FENCE.I → D-cache flush + LSU TB cleanup        | RV64IMAFDC       | AXI4    | Complete    |
+| 5h    | Debug & trace layer (Sdtrig, event taxonomy, sim-side trace) | RV64IMAFDC | AXI4 | Complete |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same

@@ -42,7 +42,15 @@ module kronos_csr #(
   input  logic        instret_retire_i,
   // Zihpm event bus.  Bit i high if event ID i fires this cycle.
   // Indexed by mhpmeventX[7:0] (event IDs >= 32 increment no counter).
-  input  logic [31:0] event_bus_i
+  input  logic [31:0] event_bus_i,
+  // Stage 5h: hand-off for Sdtrig CSRs (0x7A0..0x7A4).  When trig_csr_match_i
+  // is high, the trigger module owns this CSR read; csr_rdata is sourced from
+  // trig_csr_rdata_i instead of the local mux.  Writes are forwarded to the
+  // trigger module via trig_csr_we_o below.
+  input  logic [63:0] trig_csr_rdata_i,
+  input  logic        trig_csr_match_i,
+  output logic        trig_csr_we_o,    // 1 = current cycle is a trigger CSR write
+  output logic [63:0] trig_csr_wdata_o  // CSR new value (after CSRRS/CSRRC)
 );
 
   // -------------------------------------------------------------------------
@@ -146,7 +154,7 @@ module kronos_csr #(
       12'hB08, 12'hC08: rdata_o = mhpmcounter[8];
       12'hB09, 12'hC09: rdata_o = mhpmcounter[9];
       12'hB0A, 12'hC0A: rdata_o = mhpmcounter[10];
-      default: rdata_o = 64'hDEAD_C5A0_DEAD_C5A0; // unimplemented CSR
+      default: rdata_o = trig_csr_match_i ? trig_csr_rdata_i : 64'hDEAD_C5A0_DEAD_C5A0;
     endcase
   end
 
@@ -162,10 +170,12 @@ module kronos_csr #(
   end
 
   // SW write to any FP CSR (fflags=0x001, frm=0x002, fcsr=0x003) marks FS=Dirty.
-  assign fp_csr_sw_write = req_i &
+  assign fp_csr_sw_write  = req_i &
                            (addr_i == 12'h001
                           | addr_i == 12'h002
                           | addr_i == 12'h003);
+  assign trig_csr_we_o    = req_i & trig_csr_match_i & (funct3_i[1:0] != 2'b00);
+  assign trig_csr_wdata_o = csr_new_val;
 
   // -------------------------------------------------------------------------
   // Sequential logic

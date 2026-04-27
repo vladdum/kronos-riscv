@@ -25,7 +25,7 @@
 
 .equ EVT_BRANCH_RETIRE, 0x01
 .equ EVT_LOAD_RETIRE,   0x03
-.equ EVT_RESERVED_HI,   0x1F        # reserved (no event wired)
+.equ EVT_RESERVED_HI,   0x12        # reserved (no event wired at this ID)
 
 .section .text
 .global main

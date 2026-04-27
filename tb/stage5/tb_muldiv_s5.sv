@@ -98,16 +98,10 @@ module tb_muldiv_s5;
     do_op(MULDIV_REMU, 64'hDEAD_BEEF_CAFE_BABE, 64'd0, 0,
           64'hDEAD_BEEF_CAFE_BABE, "REMU64_zero");
 
-    // ---- Directed: invalid muldiv_op_e → IDLE default arm  [covers line 248] ----
-    // Drive req with an invalid op for one cycle; state stays IDLE, valid stays low.
-    @(posedge clk);
-    op = muldiv_op_e'(4'd15); a = 64'hDEAD; b = 64'hBEEF; word_op = 0; req = 1;
-    @(posedge clk);
-    req = 0;
-    @(posedge clk);
-    if (!idle) begin
-      $display("FAIL muldiv invalid op: not idle after invalid op"); errors++;
-    end
+    // (Removed: an "invalid muldiv_op_e" test would cast 4'd15 to the 3-bit
+    // enum, which truncates to 3'b111 = MULDIV_REMU — a valid op. The
+    // default arms in the FSM are defensive-only and unreachable from this
+    // enum; both are tagged `verilator coverage_off` to reflect that.)
 
     if (errors == 0) $display("tb_muldiv_s5: ALL PASSED");
     else $display("tb_muldiv_s5: %0d FAILED", errors);
