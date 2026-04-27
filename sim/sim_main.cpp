@@ -61,22 +61,19 @@ struct AxiRead {
     uint8_t  len       = 0;   // ar_len: number of beats minus one
     uint8_t  beat      = 0;   // current beat index (0..len)
     int      fire_at   = -1;  // cycle when r_valid should first be driven
-    // Legacy single-beat field kept for data port (no burst needed there yet).
-    uint64_t data      = 0;
 };
 
 // -------------------------------------------------------------------------
-// AXI4 single-outstanding write channel state
+// AXI4 write channel state — supports multi-beat bursts (INCR).
+// Accepts AW and W beats independently; commits writes per W beat.
+// B response fires after the last W beat (w_last) is accepted.
 // -------------------------------------------------------------------------
 struct AxiWrite {
-    bool     aw_done   = false;
-    bool     w_done    = false;
-    uint32_t addr      = 0;
-    uint64_t wdata     = 0;
-    uint8_t  wstrb     = 0;
-    int      fire_at   = -1;   // cycle when b_valid should be driven
-    bool     b_pending = false;
-    bool     irq_write = false; // fire irq_timer_i one cycle after B handshake
+    bool     aw_done   = false;  // AW handshake received
+    bool     b_pending = false;  // waiting for B handshake
+    bool     irq_write = false;  // fire irq_timer_i one cycle after B handshake
+    uint64_t base_addr = 0;      // AW address (first beat)
+    uint8_t  beat      = 0;      // current W beat index
 };
 
 int main(int argc, char** argv) {
@@ -139,9 +136,11 @@ int main(int argc, char** argv) {
     top->data_ar_ready_i  = 0;
     top->data_r_valid_i   = 0;
     top->data_r_data_i    = 0;
+    top->data_r_last_i    = 0;
     top->data_aw_ready_i  = 0;
     top->data_w_ready_i   = 0;
     top->data_b_valid_i   = 0;
+    top->data_b_resp_i    = 0;
     // Note: data widths are now 64-bit; C++ types are updated accordingly.
 
     // Hold reset for 4 cycles
@@ -186,9 +185,10 @@ int main(int argc, char** argv) {
         top->instr_ar_ready_i = 1;
         top->data_ar_ready_i  = 1;
 
-        // AW/W channels: always ready
+        // AW channel: always ready
         top->data_aw_ready_i = 1;
-        top->data_w_ready_i  = 1;
+        // W channel: gated — driven below after AW handshake detection
+        top->data_w_ready_i  = 0;
 
         // R response — instr (multi-beat burst support: INCR and WRAP)
         if (instr_r.pending && cycle >= instr_r.fire_at) {
@@ -218,20 +218,32 @@ int main(int argc, char** argv) {
             top->instr_r_last_i  = 0;
         }
 
-        // R response — data (64-bit beat)
+        // R response — data (multi-beat burst: INCR and WRAP)
         if (data_r.pending && cycle >= data_r.fire_at) {
+            uint64_t addr = data_r.base_addr;
+            if (data_r.burst == 0x1) {
+                // INCR: linear advance by 8 bytes per beat.
+                addr += (uint64_t)data_r.beat * 8;
+            } else if (data_r.burst == 0x2) {
+                // WRAP: wrap within a power-of-two aligned line.
+                // line_size = (len+1) * 8 bytes.
+                uint64_t line_size = ((uint64_t)data_r.len + 1) * 8;
+                uint64_t line_mask = line_size - 1;
+                uint64_t line_base = addr & ~line_mask;
+                uint64_t off       = ((addr & line_mask) + (uint64_t)data_r.beat * 8) & line_mask;
+                addr = line_base | off;
+            }
+            // Fetch the 64-bit beat (two consecutive 32-bit words, little-endian).
+            uint32_t wa    = ((uint32_t)(addr >> 2)) & 0x7FFFF;
+            uint32_t wa_hi = (wa + 1) & 0x7FFFF;
+            uint64_t beat_data = (uint64_t)mem[wa] | ((uint64_t)mem[wa_hi] << 32);
             top->data_r_valid_i = 1;
-            top->data_r_data_i  = data_r.data;
+            top->data_r_data_i  = beat_data;
+            top->data_r_last_i  = (data_r.beat == data_r.len) ? 1 : 0;
         } else {
             top->data_r_valid_i = 0;
             top->data_r_data_i  = 0;
-        }
-
-        // B response
-        if (data_w.b_pending && cycle >= data_w.fire_at) {
-            top->data_b_valid_i = 1;
-        } else {
-            top->data_b_valid_i = 0;
+            top->data_r_last_i  = 0;
         }
 
         // ---- Evaluate combinatorial outputs BEFORE rising edge ----
@@ -293,69 +305,72 @@ int main(int argc, char** argv) {
         // Data AR handshake
         if (top->data_ar_valid_o && top->data_ar_ready_i) {
             if (data_r.pending) {
-                fprintf(stderr, "[AXI] FATAL: duplicate data AR at cycle %d\n", cycle);
+                fprintf(stderr, "[AXI] FATAL: duplicate data AR at cycle %d (addr=0x%016llx)\n",
+                        cycle, (unsigned long long)top->data_ar_addr_o);
                 return 1;
             }
-            // 64-bit beat: two consecutive 32-bit words, little-endian.
-            uint32_t wa_lo = (top->data_ar_addr_o >> 2) & 0x7FFFF;
-            uint32_t wa_hi = (wa_lo + 1) & 0x7FFFF;
-            data_r.pending = true;
-            data_r.data    = (uint64_t)mem[wa_lo] | ((uint64_t)mem[wa_hi] << 32);
-            data_r.fire_at = cycle + DATA_LAT;
+            data_r.pending   = true;
+            data_r.base_addr = (uint64_t)top->data_ar_addr_o;
+            data_r.burst     = (uint8_t)top->data_ar_burst_o;
+            data_r.len       = (uint8_t)top->data_ar_len_o;
+            data_r.beat      = 0;
+            data_r.fire_at   = cycle + DATA_LAT;
             if (debug) {
-                uint64_t addr = top->data_ar_addr_o;
                 uint32_t pc = top->rootp->sim_top__DOT__u_top__DOT__pc_q;
-                fprintf(stderr, "[MEM] C%05d pc=%08x R  addr=%016llx data=%016llx\n",
-                        cycle, pc, (unsigned long long)addr,
-                        (unsigned long long)data_r.data);
+                fprintf(stderr, "[MEM] C%05d pc=%08x AR addr=%016llx len=%u burst=%u\n",
+                        cycle, pc, (unsigned long long)data_r.base_addr,
+                        (unsigned)data_r.len, (unsigned)data_r.burst);
             }
         }
 
-        // Data R handshake complete
+        // Data R handshake: advance beat or complete burst
         if (top->data_r_valid_i && top->data_r_ready_o) {
-            data_r.pending = false;
+            if (data_r.beat == data_r.len) {
+                data_r.pending = false;
+                data_r.beat    = 0;
+            } else {
+                data_r.beat++;
+            }
         }
 
         // Data AW handshake
         if (top->data_aw_valid_o && top->data_aw_ready_i) {
-            data_w.addr    = (uint32_t)top->data_aw_addr_o;
-            data_w.aw_done = true;
+            data_w.base_addr = (uint64_t)top->data_aw_addr_o;
+            data_w.beat      = 0;
+            data_w.aw_done   = true;
         }
 
-        // Data W handshake
-        if (top->data_w_valid_o && top->data_w_ready_i) {
-            data_w.wdata  = top->data_w_data_o;
-            data_w.wstrb  = (uint8_t)top->data_w_strb_o;
-            data_w.w_done = true;
-        }
+        // Data W handshake: accept beats when AW has been received.
+        // Commits each W beat immediately (INCR burst: +8 bytes per beat).
+        // B response fires after the last W beat (w_last) is accepted.
+        top->data_w_ready_i = data_w.aw_done ? 1 : 0;
+        if (data_w.aw_done && top->data_w_valid_o && top->data_w_ready_i) {
+            uint64_t waddr = data_w.base_addr + (uint64_t)data_w.beat * 8;
+            uint64_t wdat  = (uint64_t)top->data_w_data_o;
+            uint8_t  be    = (uint8_t)top->data_w_strb_o;
 
-        // Both AW and W accepted: commit write and schedule B
-        if (data_w.aw_done && data_w.w_done && !data_w.b_pending) {
-            uint32_t waddr = data_w.addr;
-            uint64_t wdat  = data_w.wdata;
-            uint8_t  be    = data_w.wstrb;
-
-            if (waddr == 0x80000000u) {
+            if ((uint32_t)waddr == 0x80000000u) {
                 // Timer IRQ trigger — fire one cycle after B handshake completes
                 // so the pipeline is not mem-stalled when irq_timer_i asserts.
                 data_w.irq_write = true;
-            } else if (waddr == 0x10000000u) {
+            } else if ((uint32_t)waddr == 0x10000000u) {
                 // Console output: use lower 32-bit lane (byte strobes 0-3)
                 for (int i = 0; i < 4; i++)
                     if (be & (1u << i))
                         putchar((wdat >> (i * 8)) & 0xFF);
                 fflush(stdout);
-            } else if ((waddr & 0xC0000000u) == 0x40000000u) {
-                // Halt — drain DATA_LAT+1 more cycles so mem_stall can clear and
-                // any instruction stalled in mem_wb_q behind the store can retire.
-                // x10 is in the lower 32 bits of the 64-bit beat.
-                halt_x10 = (uint32_t)(wdat & 0xFFFFFFFFu);
-                printf("[sim] halt at cycle %d, x10 = %u\n", cycle, halt_x10);
-                halted = 1;
-                halt_drain = DATA_LAT + 1;
+            } else if (((uint32_t)waddr & 0xC0000000u) == 0x40000000u) {
+                // Halt via AXI writeback (dcache eviction path).
+                // Only trigger if not already halted via the retire-trace path.
+                if (!halted) {
+                    halt_x10 = (uint32_t)(wdat & 0xFFFFFFFFu);
+                    printf("[sim] halt at cycle %d, x10 = %u\n", cycle, halt_x10);
+                    halted = 1;
+                    halt_drain = DATA_LAT + 1;
+                }
             } else {
                 // Write lower 32-bit word (bytes 0-3)
-                uint32_t wi_lo = (waddr >> 2) & 0x7FFFF;
+                uint32_t wi_lo = ((uint32_t)waddr >> 2) & 0x7FFFF;
                 uint32_t cur_lo = mem[wi_lo];
                 if (be & 0x01) cur_lo = (cur_lo & ~0x000000FFu) | (uint32_t)((wdat >>  0) & 0xFFu);
                 if (be & 0x02) cur_lo = (cur_lo & ~0x0000FF00u) | (uint32_t)((wdat >>  8) & 0xFFu) <<  8;
@@ -370,13 +385,25 @@ int main(int argc, char** argv) {
                 if (be & 0x40) cur_hi = (cur_hi & ~0x00FF0000u) | (uint32_t)((wdat >> 48) & 0xFFu) << 16;
                 if (be & 0x80) cur_hi = (cur_hi & ~0xFF000000u) | (uint32_t)((wdat >> 56) & 0xFFu) << 24;
                 mem[wi_hi] = cur_hi;
+                if (debug) {
+                    uint32_t pc = top->rootp->sim_top__DOT__u_top__DOT__pc_q;
+                    fprintf(stderr, "[MEM] C%05d pc=%08x AW addr=%016llx beat=%u data=%016llx strb=%02x\n",
+                            cycle, pc, (unsigned long long)waddr,
+                            (unsigned)data_w.beat, (unsigned long long)wdat, (unsigned)be);
+                }
             }
 
-            data_w.aw_done   = false;
-            data_w.w_done    = false;
-            data_w.b_pending = true;
-            data_w.fire_at   = cycle + DATA_LAT;
+            data_w.beat++;
+            if (top->data_w_last_o) {
+                data_w.aw_done   = false;
+                data_w.b_pending = true;
+            }
         }
+
+        // B response — drive immediately once b_pending; no latency needed here
+        // (the write latency was already absorbed by w_ready gating on aw_done).
+        top->data_b_valid_i = data_w.b_pending ? 1 : 0;
+        top->data_b_resp_i  = 0;
 
         // B handshake complete
         if (top->data_b_valid_i && top->data_b_ready_o) {
@@ -423,6 +450,33 @@ int main(int argc, char** argv) {
                         (unsigned long long)top->retire_csr_wdata_o);
             }
             fputc('\n', trace_fp);
+        }
+
+        // Retire-trace halt detection: a store that retires to the 0x4000_0000
+        // sentinel region signals termination.  This works with the write-back
+        // dcache where the AXI writeback may be deferred indefinitely (the dirty
+        // line stays in cache until eviction).
+        if (!halted && top->retire_mem_wen_o &&
+            ((uint32_t)top->retire_mem_addr_o & 0xC0000000u) == 0x40000000u) {
+            halt_x10 = (uint32_t)(top->retire_mem_wdata_o & 0xFFFFFFFFu);
+            printf("[sim] halt at cycle %d, x10 = %u\n", cycle, halt_x10);
+            halted = 1;
+            halt_drain = 2;
+        }
+
+        // Retire-trace console output: a store that retires to 0x10000000
+        // (the ACT4 RVMODEL_IO_WRITE_STR address).  Same rationale as halt:
+        // write-back dcache means the AXI writeback may never fire in a
+        // self-checking test, so we surface the store from the retire stream
+        // immediately.  funct3 selects the access size (000=B, 001=H, 010=W,
+        // 011=D); console writes are typically byte stores.
+        if (top->retire_mem_wen_o &&
+            ((uint32_t)top->retire_mem_addr_o == 0x10000000u)) {
+            uint8_t funct3 = (uint8_t)top->retire_mem_funct3_o & 0x07u;
+            uint64_t wdat  = (uint64_t)top->retire_mem_wdata_o;
+            int nbytes = (funct3 == 0) ? 1 : (funct3 == 1) ? 2 : (funct3 == 2) ? 4 : 8;
+            for (int i = 0; i < nbytes; i++) putchar((wdat >> (i * 8)) & 0xFF);
+            fflush(stdout);
         }
 
         if (halted) {

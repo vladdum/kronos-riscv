@@ -37,6 +37,8 @@ module tb_core_fp_basic;
   // -----------------------------------------------------------------------
   kronos_axi_req_t  instr_req, data_req;
   kronos_axi_resp_t instr_rsp, data_rsp;
+  logic             retire_mem_wen;
+  logic [63:0]      retire_mem_addr;
 
   kronos_top u_top (
     .clk_i                (clk),
@@ -57,9 +59,10 @@ module tb_core_fp_basic;
     .retire_fp_wen_o      (),
     .retire_fp_rd_o       (),
     .retire_fp_wdata_o    (),
-    .retire_mem_wen_o     (),
-    .retire_mem_addr_o    (),
+    .retire_mem_wen_o     (retire_mem_wen),
+    .retire_mem_addr_o    (retire_mem_addr),
     .retire_mem_wdata_o   (),
+    .retire_mem_funct3_o  (),
     .retire_csr_wen_o     (),
     .retire_csr_addr_o    (),
     .retire_csr_wdata_o   (),
@@ -68,128 +71,153 @@ module tb_core_fp_basic;
   );
 
   // -----------------------------------------------------------------------
-  // AXI slave — instruction port (read only)
+  // AXI slave — instruction port (multi-beat read, icache issues 8-beat bursts)
   // -----------------------------------------------------------------------
   logic        instr_r_pend;
-  logic [63:0] instr_r_data_q;
+  logic [63:0] instr_ar_addr_q;
+  logic [7:0]  instr_ar_len_q;
+  logic [7:0]  instr_r_beat;
 
   always_comb begin
     instr_rsp          = '0;
-    instr_rsp.ar_ready = 1'b1;
+    instr_rsp.ar_ready = ~instr_r_pend;
     instr_rsp.r_valid  = instr_r_pend;
-    instr_rsp.r.data   = instr_r_data_q;
-    instr_rsp.r.last   = 1'b1;
+    begin
+      automatic int wi = int'(({25'b0, instr_ar_addr_q[9:3]} + {24'b0, instr_r_beat}) & 32'h3F) * 2;
+      instr_rsp.r.data = {mem[wi+1], mem[wi]};
+    end
+    instr_rsp.r.last = (instr_r_beat == instr_ar_len_q);
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      instr_r_pend   <= 1'b0;
-      instr_r_data_q <= '0;
+      instr_r_pend    <= 1'b0;
+      instr_ar_addr_q <= '0;
+      instr_ar_len_q  <= '0;
+      instr_r_beat    <= '0;
     end else begin
-      if (instr_r_pend && instr_req.r_ready) begin
-        // R handshake complete; accept new AR if arriving simultaneously
-        if (instr_req.ar_valid) begin
-          instr_r_data_q <= {mem[instr_req.ar.addr[7:3]*2+1], mem[instr_req.ar.addr[7:3]*2]};
-        end else begin
+      if (!instr_r_pend && instr_req.ar_valid) begin
+        instr_ar_addr_q <= instr_req.ar.addr;
+        instr_ar_len_q  <= instr_req.ar.len;
+        instr_r_beat    <= '0;
+        instr_r_pend    <= 1'b1;
+      end else if (instr_r_pend && instr_req.r_ready) begin
+        if (instr_r_beat == instr_ar_len_q) begin
           instr_r_pend <= 1'b0;
+          instr_r_beat <= '0;
+        end else begin
+          instr_r_beat <= instr_r_beat + 8'd1;
         end
-      end else if (!instr_r_pend && instr_req.ar_valid) begin
-        instr_r_data_q <= {mem[instr_req.ar.addr[7:3]*2+1], mem[instr_req.ar.addr[7:3]*2]};
-        instr_r_pend   <= 1'b1;
       end
     end
   end
 
   // -----------------------------------------------------------------------
-  // AXI slave — data port (read + write)
+  // AXI slave — data port (multi-beat read + write, dcache issues 8-beat bursts)
   // -----------------------------------------------------------------------
+  // Read channel
   logic        data_r_pend;
-  logic [63:0] data_r_data_q;
-  logic        data_aw_done;
-  logic        data_w_done;
+  logic [63:0] data_ar_addr_q;
+  logic [7:0]  data_ar_len_q;
+  logic [7:0]  data_r_beat;
+  // Write channel
+  logic        data_aw_pend;
   logic [63:0] data_aw_addr_q;
-  logic [63:0] data_w_data_q;
-  logic [ 7:0] data_w_strb_q;
+  logic [7:0]  data_aw_len_q;
+  logic [7:0]  data_w_beat;
   logic        data_b_pend;
-  int          halted;
+  logic [31:0] halted;
 
   always_comb begin
     data_rsp          = '0;
-    data_rsp.ar_ready = 1'b1;
-    data_rsp.aw_ready = 1'b1;
-    data_rsp.w_ready  = 1'b1;
+    data_rsp.ar_ready = ~data_r_pend;
+    data_rsp.aw_ready = ~data_aw_pend;
+    data_rsp.w_ready  = data_aw_pend;
     data_rsp.r_valid  = data_r_pend;
-    data_rsp.r.data   = data_r_data_q;
-    data_rsp.r.last   = 1'b1;
+    data_rsp.r.last   = (data_r_beat == data_ar_len_q);
     data_rsp.b_valid  = data_b_pend;
+    begin
+      automatic int wi = int'(({25'b0, data_ar_addr_q[9:3]} + {24'b0, data_r_beat}) & 32'h3F) * 2;
+      data_rsp.r.data = {mem[wi+1], mem[wi]};
+    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       data_r_pend    <= 1'b0;
-      data_r_data_q  <= '0;
-      data_aw_done   <= 1'b0;
-      data_w_done    <= 1'b0;
+      data_ar_addr_q <= '0;
+      data_ar_len_q  <= '0;
+      data_r_beat    <= '0;
+      data_aw_pend   <= 1'b0;
       data_aw_addr_q <= '0;
-      data_w_data_q  <= '0;
-      data_w_strb_q  <= '0;
+      data_aw_len_q  <= '0;
+      data_w_beat    <= '0;
       data_b_pend    <= 1'b0;
-      halted         <= 0;
     end else begin
-      // Read AR
-      if (data_r_pend && data_req.r_ready) begin
-        if (data_req.ar_valid) begin
-          data_r_data_q <= {mem[data_req.ar.addr[7:3]*2+1], mem[data_req.ar.addr[7:3]*2]};
-        end else begin
+      // ---- Read ----
+      if (!data_r_pend && data_req.ar_valid) begin
+        data_ar_addr_q <= data_req.ar.addr;
+        data_ar_len_q  <= data_req.ar.len;
+        data_r_beat    <= '0;
+        data_r_pend    <= 1'b1;
+      end else if (data_r_pend && data_req.r_ready) begin
+        if (data_r_beat == data_ar_len_q) begin
           data_r_pend <= 1'b0;
-        end
-      end else if (!data_r_pend && data_req.ar_valid) begin
-        data_r_data_q <= {mem[data_req.ar.addr[7:3]*2+1], mem[data_req.ar.addr[7:3]*2]};
-        data_r_pend   <= 1'b1;
-      end
-
-      // Write AW
-      if (data_req.aw_valid) begin
-        data_aw_addr_q <= data_req.aw.addr;
-        data_aw_done   <= 1'b1;
-      end
-      // Write W
-      if (data_req.w_valid) begin
-        data_w_data_q <= data_req.w.data;
-        data_w_strb_q <= data_req.w.strb;
-        data_w_done   <= 1'b1;
-      end
-
-      // Commit write once both AW and W received
-      if ((data_aw_done || data_req.aw_valid) &&
-          (data_w_done  || data_req.w_valid)  && !data_b_pend) begin
-        automatic logic [63:0] waddr = data_aw_done ? data_aw_addr_q : data_req.aw.addr;
-        automatic logic [63:0] wdata = data_w_done  ? data_w_data_q  : data_req.w.data;
-        automatic logic [ 7:0] wstrb = data_w_done  ? data_w_strb_q  : data_req.w.strb;
-        automatic int wi_lo = int'(waddr[7:3]) * 2;
-        automatic int wi_hi = wi_lo + 1;
-        if ((waddr & 64'hC000_0000) == 64'h4000_0000) begin
-          halted <= halted + 1;
+          data_r_beat <= '0;
         end else begin
-          if (wstrb[0]) mem[wi_lo][ 7: 0] <= wdata[ 7: 0];
-          if (wstrb[1]) mem[wi_lo][15: 8] <= wdata[15: 8];
-          if (wstrb[2]) mem[wi_lo][23:16] <= wdata[23:16];
-          if (wstrb[3]) mem[wi_lo][31:24] <= wdata[31:24];
-          if (wstrb[4]) mem[wi_hi][ 7: 0] <= wdata[39:32];
-          if (wstrb[5]) mem[wi_hi][15: 8] <= wdata[47:40];
-          if (wstrb[6]) mem[wi_hi][23:16] <= wdata[55:48];
-          if (wstrb[7]) mem[wi_hi][31:24] <= wdata[63:56];
+          data_r_beat <= data_r_beat + 8'd1;
         end
-        data_aw_done <= 1'b0;
-        data_w_done  <= 1'b0;
-        data_b_pend  <= 1'b1;
       end
 
-      // B handshake
+      // ---- Write AW ----
+      if (!data_aw_pend && data_req.aw_valid) begin
+        data_aw_addr_q <= data_req.aw.addr;
+        data_aw_len_q  <= data_req.aw.len;
+        data_w_beat    <= '0;
+        data_aw_pend   <= 1'b1;
+      end
+
+      // ---- Write W beats ----
+      if (data_aw_pend && data_req.w_valid) begin
+        automatic logic [63:0] beat_addr = data_aw_addr_q + {56'b0, data_w_beat} * 8;
+        automatic int wi_lo = int'(beat_addr[9:3]) * 2;
+        automatic int wi_hi = wi_lo + 1;
+        if (1'b0) begin
+          // halt detection moved to retire_mem path
+        end else begin
+          if (data_req.w.strb[0]) mem[wi_lo][ 7: 0] <= data_req.w.data[ 7: 0];
+          if (data_req.w.strb[1]) mem[wi_lo][15: 8] <= data_req.w.data[15: 8];
+          if (data_req.w.strb[2]) mem[wi_lo][23:16] <= data_req.w.data[23:16];
+          if (data_req.w.strb[3]) mem[wi_lo][31:24] <= data_req.w.data[31:24];
+          if (data_req.w.strb[4]) mem[wi_hi][ 7: 0] <= data_req.w.data[39:32];
+          if (data_req.w.strb[5]) mem[wi_hi][15: 8] <= data_req.w.data[47:40];
+          if (data_req.w.strb[6]) mem[wi_hi][23:16] <= data_req.w.data[55:48];
+          if (data_req.w.strb[7]) mem[wi_hi][31:24] <= data_req.w.data[63:56];
+        end
+        data_w_beat <= data_w_beat + 8'd1;
+        if (data_req.w.last) begin
+          data_aw_pend <= 1'b0;
+          data_b_pend  <= 1'b1;
+        end
+      end
+
+      // ---- B handshake ----
       if (data_b_pend && data_req.b_ready) begin
         data_b_pend <= 1'b0;
       end
     end
+  end
+
+  // -----------------------------------------------------------------------
+  // Halt detection via retire port (write to 0x4000_0000 region).
+  // Using retire_mem_wen + retire_mem_addr avoids depending on dcache
+  // write-back eviction timing.
+  // -----------------------------------------------------------------------
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)
+      halted <= 0;
+    else if (retire_mem_wen && (retire_mem_addr & 64'hC000_0000) == 64'h4000_0000)
+      halted <= halted + 1;
   end
 
   // -----------------------------------------------------------------------
@@ -217,14 +245,14 @@ module tb_core_fp_basic;
     repeat (8) @(posedge clk);
     @(negedge clk); rst_n = 1'b1;
 
-    // Wait for halt (max 500 cycles)
+    // Wait for halt (max 5000 cycles — dcache refills take ~10 cycles each)
     fork
       begin : wait_halt
         wait (halted > 0);
       end
       begin : timeout
-        for (int i = 0; i < 500; i++) @(posedge clk);
-        $display("FAIL tb_core_fp_basic: timeout (no halt within 500 cycles)");
+        for (int i = 0; i < 5000; i++) @(posedge clk);
+        $display("FAIL tb_core_fp_basic: timeout (no halt within 5000 cycles)");
         errors++;
         $finish(1);
       end

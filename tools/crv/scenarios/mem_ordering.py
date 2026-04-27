@@ -5,19 +5,19 @@ region and an ATOMIC region.  Focuses on back-to-back and interleaved
 address streams that stress the AXI4 data channel and the LSU ordering
 logic.
 
-Note: AMO instructions (amoadd.w etc.) are excluded because the Kronos
-retire-trace does not emit `mem[...]` for AMO memory writes while the
-Sail reference trace does, making traces incompatible for comparison.
+Note: AMO instructions (amoadd.w etc.) are excluded from this Sail-compared
+scenario because the Kronos retire trace emits mem[addr]=rs2 (source operand)
+while Sail emits mem[addr]=AMO_OP(old,rs2) (computed new value), so traces
+would diverge.  AMO coverage is provided by the directed assist_amo.S test
+which runs through tb_crv_cov without Sail trace comparison.
 LR/SC is also excluded because the Sail sail.json for this config sets
 `"reservability": "RsrvNone"`, causing Sail to raise a load-access-fault
 on LR.W — a configuration mismatch rather than a CPU bug.
-TODO: include AMOs and LR/SC once trace infrastructure and Sail
-      configuration support them.
 
 Constraints:
   - 40% DATA-region loads/stores (lw/ld/sw/sd, aligned offsets).
   - 20% ATOMIC-region loads/stores (plain lw/ld/sw/sd — tests the
-    AXI4 path to that address range without using atomic instructions).
+    D-cache path to that address range without using atomic instructions).
   - 40% integer ALU filler.
 
 Pointer setup:

@@ -31,15 +31,20 @@ module sim_top
   // Data port — DUT outputs (AR channel)
   output logic        data_ar_valid_o,
   output logic [63:0] data_ar_addr_o,
+  output logic [ 7:0] data_ar_len_o,
+  output logic [ 1:0] data_ar_burst_o,
   // Data port — DUT outputs (R channel)
   output logic        data_r_ready_o,
   // Data port — DUT outputs (AW channel)
   output logic        data_aw_valid_o,
   output logic [63:0] data_aw_addr_o,
+  output logic [ 7:0] data_aw_len_o,
+  output logic [ 1:0] data_aw_burst_o,
   // Data port — DUT outputs (W channel)
   output logic        data_w_valid_o,
   output logic [63:0] data_w_data_o,
   output logic [ 7:0] data_w_strb_o,
+  output logic        data_w_last_o,
   // Data port — DUT outputs (B channel)
   output logic        data_b_ready_o,
   // Data port — slave inputs (AR channel)
@@ -47,11 +52,13 @@ module sim_top
   // Data port — slave inputs (R channel)
   input  logic        data_r_valid_i,
   input  logic [63:0] data_r_data_i,
+  input  logic        data_r_last_i,
   // Data port — slave inputs (AW/W channels)
   input  logic        data_aw_ready_i,
   input  logic        data_w_ready_i,
   // Data port — slave inputs (B channel)
   input  logic        data_b_valid_i,
+  input  logic [ 1:0] data_b_resp_i,
 
   // Retire-trace outputs (simulation observability — stage 5 only; tied
   // to zero by stages 3/4 which do not emit retire traces).
@@ -67,6 +74,7 @@ module sim_top
   output logic        retire_mem_wen_o,
   output logic [63:0] retire_mem_addr_o,
   output logic [63:0] retire_mem_wdata_o,
+  output logic [2:0]  retire_mem_funct3_o,
   output logic        retire_csr_wen_o,
   output logic [11:0] retire_csr_addr_o,
   output logic [63:0] retire_csr_wdata_o,
@@ -102,12 +110,17 @@ module sim_top
   // -------------------------------------------------------------------------
   assign data_ar_valid_o = data_req.ar_valid;
   assign data_ar_addr_o  = data_req.ar.addr;
+  assign data_ar_len_o   = data_req.ar.len;
+  assign data_ar_burst_o = data_req.ar.burst;
   assign data_r_ready_o  = data_req.r_ready;
   assign data_aw_valid_o = data_req.aw_valid;
   assign data_aw_addr_o  = data_req.aw.addr;
+  assign data_aw_len_o   = data_req.aw.len;
+  assign data_aw_burst_o = data_req.aw.burst;
   assign data_w_valid_o  = data_req.w_valid;
   assign data_w_data_o   = data_req.w.data;
   assign data_w_strb_o   = data_req.w.strb;
+  assign data_w_last_o   = data_req.w.last;
   assign data_b_ready_o  = data_req.b_ready;
 
   // -------------------------------------------------------------------------
@@ -118,10 +131,11 @@ module sim_top
     data_rsp.ar_ready  = data_ar_ready_i;
     data_rsp.r_valid   = data_r_valid_i;
     data_rsp.r.data    = data_r_data_i;
-    data_rsp.r.last    = 1'b1;
+    data_rsp.r.last    = data_r_last_i;
     data_rsp.aw_ready  = data_aw_ready_i;
     data_rsp.w_ready   = data_w_ready_i;
     data_rsp.b_valid   = data_b_valid_i;
+    data_rsp.b.resp    = data_b_resp_i;
   end
 
   // -------------------------------------------------------------------------
@@ -146,10 +160,11 @@ module sim_top
     .retire_fp_wen_o    (retire_fp_wen_o),
     .retire_fp_rd_o     (retire_fp_rd_o),
     .retire_fp_wdata_o  (retire_fp_wdata_o),
-    .retire_mem_wen_o   (retire_mem_wen_o),
-    .retire_mem_addr_o  (retire_mem_addr_o),
-    .retire_mem_wdata_o (retire_mem_wdata_o),
-    .retire_csr_wen_o   (retire_csr_wen_o),
+    .retire_mem_wen_o     (retire_mem_wen_o),
+    .retire_mem_addr_o    (retire_mem_addr_o),
+    .retire_mem_wdata_o   (retire_mem_wdata_o),
+    .retire_mem_funct3_o  (retire_mem_funct3_o),
+    .retire_csr_wen_o     (retire_csr_wen_o),
     .retire_csr_addr_o    (retire_csr_addr_o),
     .retire_csr_wdata_o   (retire_csr_wdata_o),
     .retire_trap_taken_o  (retire_trap_taken_o),

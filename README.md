@@ -30,6 +30,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 5c    | Performance counters (Zicntr + partial Zihpm)   | RV64IMAFDC       | AXI4    | Complete    |
 | 5d    | CRV harness (random gen + Sail diff + 144-bin coverage) | RV64IMAFDC | AXI4    | Complete    |
 | 5e    | Instruction cache (16 KB / 4-way / Tree-PLRU)   | RV64IMAFDC       | AXI4    | Complete    |
+| 5f    | Data cache (16 KB / 4-way / write-back+allocate) | RV64IMAFDC      | AXI4    | Complete    |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
