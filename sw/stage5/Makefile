@@ -3,11 +3,11 @@ CC        := $(TOOLCHAIN)-gcc
 OBJCOPY   := $(TOOLCHAIN)-objcopy
 OBJDUMP   := $(TOOLCHAIN)-objdump
 
-ARCH   := rv64imafdc_zicsr
+ARCH   := rv64imafdc_zicsr_zifencei
 ABI    := lp64
 CFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostdlib -static -T../stage0/link.ld
 
-TESTS  := test_fp_basic test_fp_loadstore test_fp_nan_box test_fp_rounding test_fp_csr test_fp_convert test_fp_compare test_rvc_fp_loadstore test_fcvt_sd_subnormal test_mstatus_fs_dirty test_muldiv_redirect test_blt64 test_blt_act4 test_mret_rvc test_csr_warl test_illegal_insn test_perf_counters test_icache_hit_loop test_dcache_hit_loop
+TESTS  := test_fp_basic test_fp_loadstore test_fp_nan_box test_fp_rounding test_fp_csr test_fp_convert test_fp_compare test_rvc_fp_loadstore test_fcvt_sd_subnormal test_mstatus_fs_dirty test_muldiv_redirect test_blt64 test_blt_act4 test_mret_rvc test_csr_warl test_illegal_insn test_perf_counters test_icache_hit_loop test_dcache_hit_loop test_fence_i
 
 BUILD_DIR := build
 

@@ -127,6 +127,10 @@ module kronos_top
   logic        icache_stall;
   logic        icache_miss_pulse;
   logic        fence_i_pulse;
+  logic        fence_i_pulse_raw;
+  logic        fence_i_active_q;
+  logic        dcache_flush_done;
+  logic        dcache_dirty_pending;
 
   // STAGE3: C extension — alignment unit signals
   logic [31:0] align_instr;
@@ -156,6 +160,7 @@ module kronos_top
   logic [63:0]      lsu_rdata;
   logic             lsu_valid;
   logic             mem_stall;
+  logic             lsu_mem_stall;
   // mem_done_q: set when LSU signals valid_o; cleared when MEM/WB register
   // advances.  Gates req_i so LSU does not re-issue while the pipeline is
   // frozen by instr_fetch_stall.
@@ -300,9 +305,34 @@ module kronos_top
   // FENCE.I detection from raw instruction bits (decoder doesn't surface it —
   // see commit 87aac14 for why we don't change the decoder).
   // FENCE.I: opcode = 7'b0001111, funct3 = 3'b001.
-  assign fence_i_pulse = id_ex_q.valid & ~combined_stall &
-                         (id_ex_q.instr[6:0]   == 7'b0001111) &
-                         (id_ex_q.instr[14:12] == 3'b001);
+  //
+  // Raw decode: fires whenever a FENCE.I sits in EX without a stall.  When
+  // the D-cache holds dirty lines, we must drain them (writeback to AXI)
+  // before the I-cache flush takes effect — otherwise self-modifying code
+  // sees stale instruction bytes.  fence_i_active_q stalls the pipeline
+  // until the D-cache reports flush_done; only then does fence_i_pulse fire
+  // for one cycle (driving the I-cache flush and letting FENCE.I retire).
+  // fence_i_pulse_raw: FENCE.I sits in EX with no non-mem stall.  We do NOT
+  // include mem_stall here because mem_stall must depend combinationally on
+  // this signal (to assert the stall the same cycle FENCE.I enters EX) —
+  // including mem_stall would form a combinational loop.
+  assign fence_i_pulse_raw = id_ex_q.valid &
+                             ~lsu_mem_stall & ~instr_fetch_stall &
+                             ~fpu_stall & ~muldiv_stall &
+                             (id_ex_q.instr[6:0]   == 7'b0001111) &
+                             (id_ex_q.instr[14:12] == 3'b001);
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)
+      fence_i_active_q <= 1'b0;
+    else if (fence_i_pulse_raw & dcache_dirty_pending & ~fence_i_active_q)
+      fence_i_active_q <= 1'b1;
+    else if (dcache_flush_done)
+      fence_i_active_q <= 1'b0;
+  end
+
+  assign fence_i_pulse = fence_i_pulse_raw &
+                         (~dcache_dirty_pending | dcache_flush_done);
   // fpu_dispatching: the FPU dispatch will fire this cycle.  Stall immediately
   // so the following instruction stays in IF/ID and can receive the FP result
   // via the ID forwarding mux when the stall releases.
@@ -447,7 +477,7 @@ module kronos_top
     .funct3_i           (ex_mem_q.dec.mem_funct3),
     .rdata_o            (lsu_rdata),
     .valid_o            (lsu_valid),
-    .mem_stall_o        (mem_stall),
+    .mem_stall_o        (lsu_mem_stall),
     // Stage 5a: FP load/store ports
     .fp_dest_req_i      (ex_mem_q.valid &
                          (ex_mem_q.dec.fp_load | ex_mem_q.dec.fp_store) & ~mem_done_q),
@@ -475,25 +505,37 @@ module kronos_top
     .dcache_stall_i     (dcache_stall)
   );
 
+  // mem_stall extends LSU stall with the FENCE.I D-cache flush window so
+  // FENCE.I is held in EX (id_ex_q.valid stays high) until the cache is
+  // drained.  The kick-off term (fence_i_pulse_raw & dirty_pending) is
+  // combinational so the pipeline freezes the SAME cycle FENCE.I enters EX,
+  // before id_ex_q can advance.  fence_i_active_q latches one cycle later
+  // and holds the stall across the rest of the flush walk.
+  assign mem_stall = lsu_mem_stall | fence_i_active_q |
+                     (fence_i_pulse_raw & dcache_dirty_pending);
+
   // D-cache instance: owns AXI master for the data port.
   kronos_dcache u_dcache (
-    .clk_i        (clk_i),
-    .rst_ni       (rst_ni),
-    .req_i        (dcache_req),
-    .addr_i       (dcache_addr),
-    .size_i       (dcache_size),
-    .we_i         (dcache_we),
-    .wdata_i      (dcache_wdata),
-    .amo_req_i    (dcache_amo_req),
-    .amo_op_i     (dcache_amo_op),
-    .rsrv_clear_i (trap_taken_pulse),
-    .data_valid_o (dcache_data_valid),
-    .rdata_o      (dcache_rdata),
-    .sc_success_o (dcache_sc_success),
-    .stall_o      (dcache_stall),
-    .axi_req_o    (data_axi_req_o),
-    .axi_rsp_i    (data_axi_rsp_i),
-    .miss_pulse_o (dcache_miss_pulse)
+    .clk_i           (clk_i),
+    .rst_ni          (rst_ni),
+    .req_i           (dcache_req),
+    .addr_i          (dcache_addr),
+    .size_i          (dcache_size),
+    .we_i            (dcache_we),
+    .wdata_i         (dcache_wdata),
+    .amo_req_i       (dcache_amo_req),
+    .amo_op_i        (dcache_amo_op),
+    .rsrv_clear_i    (trap_taken_pulse),
+    .data_valid_o    (dcache_data_valid),
+    .rdata_o         (dcache_rdata),
+    .sc_success_o    (dcache_sc_success),
+    .stall_o         (dcache_stall),
+    .flush_i         (fence_i_active_q),
+    .flush_done_o    (dcache_flush_done),
+    .dirty_pending_o (dcache_dirty_pending),
+    .axi_req_o       (data_axi_req_o),
+    .axi_rsp_i       (data_axi_rsp_i),
+    .miss_pulse_o    (dcache_miss_pulse)
   );
 
   // Stage 5a: FPU top
@@ -890,9 +932,21 @@ module kronos_top
   // Suppress BTB update from the speculative instruction in EX when mem_redirect fires.
   assign bpred_update_en = id_ex_q.valid & ex_mem_en & is_branch_or_jump & ~mem_redirect;
 
+  // FENCE.I trap suppression: when FENCE.I sits in EX and the D-cache still
+  // holds dirty data, suppress the illegal-instruction redirect until the
+  // flush completes.  Once dcache_flush_done pulses (or there were no dirty
+  // lines), the redirect resumes and the trap handler advances MEPC past
+  // the FENCE.I — by which time AXI memory has the up-to-date bytes.
+  logic fence_i_dirty_block;
+  assign fence_i_dirty_block = id_ex_q.valid &
+                                (id_ex_q.instr[6:0]   == 7'b0001111) &
+                                (id_ex_q.instr[14:12] == 3'b001) &
+                                dcache_dirty_pending & ~dcache_flush_done;
+
   assign ex_redirect = bpred_mispredict |
     (id_ex_q.valid &
-     (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak | id_ex_q.dec.illegal |
+     (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
+      (id_ex_q.dec.illegal & ~fence_i_dirty_block) |
       irq_pending | id_ex_q.dec.is_mret));
 
   always_ff @(posedge clk_i or negedge rst_ni) begin

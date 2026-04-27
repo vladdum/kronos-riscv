@@ -24,28 +24,34 @@ module tb_dcache;
   logic        sc_success;
   logic        stall;
   logic        miss_pulse;
+  logic        flush;
+  logic        flush_done;
+  logic        dirty_pending;
 
   kronos_axi_req_t  axi_req;
   kronos_axi_resp_t axi_rsp;
 
   kronos_dcache u_dut (
-    .clk_i        (clk),
-    .rst_ni       (rst_n),
-    .req_i        (req),
-    .addr_i       (addr),
-    .size_i       (size),
-    .we_i         (we),
-    .wdata_i      (wdata),
-    .amo_req_i    (amo_req),
-    .amo_op_i     (amo_op),
-    .rsrv_clear_i (rsrv_clear),
-    .data_valid_o (data_valid),
-    .rdata_o      (rdata),
-    .sc_success_o (sc_success),
-    .stall_o      (stall),
-    .axi_req_o    (axi_req),
-    .axi_rsp_i    (axi_rsp),
-    .miss_pulse_o (miss_pulse)
+    .clk_i           (clk),
+    .rst_ni          (rst_n),
+    .req_i           (req),
+    .addr_i          (addr),
+    .size_i          (size),
+    .we_i            (we),
+    .wdata_i         (wdata),
+    .amo_req_i       (amo_req),
+    .amo_op_i        (amo_op),
+    .rsrv_clear_i    (rsrv_clear),
+    .data_valid_o    (data_valid),
+    .rdata_o         (rdata),
+    .sc_success_o    (sc_success),
+    .stall_o         (stall),
+    .flush_i         (flush),
+    .flush_done_o    (flush_done),
+    .dirty_pending_o (dirty_pending),
+    .axi_req_o       (axi_req),
+    .axi_rsp_i       (axi_rsp),
+    .miss_pulse_o    (miss_pulse)
   );
 
   // TB-side AXI memory model with multi-beat read support (read-only for now;
@@ -125,6 +131,7 @@ module tb_dcache;
   initial begin
     req = 0; addr = 0; size = 3'd3; we = 0; wdata = 0;
     amo_req = 0; amo_op = 0; rsrv_clear = 0;
+    flush = 0;
     #12 rst_n = 1;
     repeat (5) @(posedge clk);
 
@@ -302,6 +309,55 @@ module tb_dcache;
     while (stall || !data_valid) @(posedge clk);
     if (sc_success) $fatal(1, "SC should fail (reservation cleared by intervening store)");
     @(negedge clk); req = 0; amo_req = 0;
+
+    // -----------------------------------------------------------------------
+    // FENCE.I flush directed test (Stage 5g):
+    //   1. Prime several cache lines with stores so they become dirty.
+    //   2. Confirm dirty_pending_o == 1.
+    //   3. Assert flush_i; expect AXI write bursts for each dirty line.
+    //   4. After flush_done_o, expect dirty_pending_o == 0 and a load to
+    //      one of the previously-dirty addresses to miss (refill via AR).
+    // -----------------------------------------------------------------------
+    repeat (2) @(posedge clk);
+
+    // Prime 4 distinct cache lines (different set indices).
+    for (int i = 0; i < 4; i++) begin
+      @(negedge clk); req = 1; addr = 64'(i) * 64'h40; size = 3'd3; we = 1;
+                      wdata = 64'hF00D_0000_0000_0000 | 64'(i);
+      @(posedge clk) #1;
+      while (stall) @(posedge clk);
+      @(negedge clk); req = 0; we = 0;
+      repeat (1) @(posedge clk);
+    end
+
+    if (!dirty_pending) $fatal(1, "dirty_pending should be 1 after stores");
+
+    // Assert flush_i; wait for flush_done.
+    @(negedge clk); flush = 1;
+    fork
+      begin : wait_flush
+        int t;
+        t = 0;
+        while (!flush_done && t < 5000) begin
+          @(posedge clk);
+          t = t + 1;
+        end
+        if (!flush_done) $fatal(1, "flush_done never asserted");
+      end
+    join
+    @(negedge clk); flush = 0;
+    repeat (2) @(posedge clk);
+
+    if (dirty_pending) $fatal(1, "dirty_pending should be 0 after flush");
+
+    // A load to a previously-dirty address should now miss (line invalidated).
+    @(negedge clk); req = 1; addr = 64'h0; size = 3'd3; we = 0;
+    @(posedge clk) #1;
+    if (!stall) $fatal(1, "post-flush load should miss (stall_o=1)");
+    while (stall || !data_valid) @(posedge clk);
+    if (rdata !== 64'hF00D_0000_0000_0000)
+      $fatal(1, "post-flush load: expected F00D_..._0, got %h", rdata);
+    @(negedge clk); req = 0;
 
     $display("tb_dcache PASS");
     $finish;
