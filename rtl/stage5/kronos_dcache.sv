@@ -182,6 +182,14 @@ module kronos_dcache
     return nxt;
   endfunction
 
+  // Vivado synthesis (IEEE 1800 grammar) rejects bit-selects on function-call
+  // returns — e.g. `store_strobes(...)[b]`. Hoist the per-cycle results into
+  // combinational nets so the per-byte loops can index into them directly.
+  logic [ 7:0] store_strobes_in;
+  logic [63:0] store_data_aligned_in;
+  assign store_strobes_in      = store_strobes(size_i, addr_i[2:0]);
+  assign store_data_aligned_in = store_data_aligned(size_i, addr_i[2:0], wdata_i);
+
   logic [SET_IDX_W-1:0]            miss_set_q;
   logic [TAG_W-1:0]                miss_tag_q;
   logic [BEAT_IDX_W-1:0]           miss_beat_q;
@@ -326,9 +334,9 @@ module kronos_dcache
                 for (int w = 0; w < NUM_WAYS; w++) begin
                   if (hit_way_oh[w]) begin
                     for (int b = 0; b < 8; b++) begin
-                      if (store_strobes(size_i, addr_i[2:0])[b])
+                      if (store_strobes_in[b])
                         data_q[w][set_idx][beat_idx][b*8 +: 8]
-                          <= store_data_aligned(size_i, addr_i[2:0], wdata_i)[b*8 +: 8];
+                          <= store_data_aligned_in[b*8 +: 8];
                     end
                     dirty_q[set_idx][w] <= 1'b1;
                   end
@@ -423,9 +431,9 @@ module kronos_dcache
               for (int w = 0; w < NUM_WAYS; w++) begin
                 if (hit_way_oh[w]) begin
                   for (int b = 0; b < 8; b++) begin
-                    if (store_strobes(size_i, addr_i[2:0])[b])
+                    if (store_strobes_in[b])
                       data_q[w][set_idx][beat_idx][b*8 +: 8]
-                        <= store_data_aligned(size_i, addr_i[2:0], wdata_i)[b*8 +: 8];
+                        <= store_data_aligned_in[b*8 +: 8];
                   end
                   dirty_q[set_idx][w] <= 1'b1;
                 end

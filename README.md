@@ -105,7 +105,8 @@ kronos-riscv/
 │   ├── stage2/                # Stage 2 unit testbenches
 │   ├── stage3/                # Stage 3 unit testbenches
 │   ├── stage4/                # Stage 4 unit testbenches
-│   └── stage5/                # Stage 5 FPU unit + integration testbenches
+│   ├── stage5/                # Stage 5 FPU unit + integration testbenches
+│   └── gls/                   # Gate-level sim testbench + AXI memory model
 ├── sw/
 │   ├── stage0/                # Stage 0 test programs (RISC-V assembly)
 │   ├── stage1/                # Stage 1 hazard-focused test programs
@@ -120,10 +121,13 @@ kronos-riscv/
 │   ├── sim_main_obi.cpp       # OBI C++ simulation driver (stages 0–2)
 │   └── run_arch_test_s{1..5}.sh   # ACT4 per-test runner (SIM_MAX_CYCLES + timeout)
 ├── fpga/
-│   └── kv260/                 # Vivado synthesis flow for KV260
-│       ├── synth.tcl          # Synthesis + P&R script
-│       ├── synth.cfg          # Frequency / options overrides
-│       └── synth_directives.xdc  # Timing constraints
+│   ├── kv260/                 # Vivado synthesis flow for KV260
+│   │   ├── synth.tcl          # Synthesis + P&R script
+│   │   ├── synth.cfg          # Frequency / options overrides
+│   │   └── synth_directives.xdc  # Timing constraints
+│   └── gls/                   # Gate-level simulation flow (xsim)
+│       ├── synth_ooc.tcl      # Out-of-context synth + funcsim/timesim emit
+│       └── run_xsim.tcl       # xsim batch runner
 ├── riscv-arch-test/           # git submodule (official ACT4 compliance suite)
 ├── .github/workflows/sim.yml  # sim-all + compliance-s{1..5} matrix CI
 ├── tools/
@@ -236,6 +240,36 @@ Reports land in `build/vivado_kv260_<freq>/`:
 | `post_route_timing.txt` | WNS, TNS, worst path |
 | `post_route_utilization.txt` | LUT / FF / DSP / BRAM counts |
 | `post_synth_timing.txt` | Estimated WNS after synthesis |
+
+### Gate-Level Simulation
+
+Gate-level simulation (GLS) runs the synthesized `kronos_top` netlist under
+xsim against the same stage-5 assembly tests used by the Verilator RTL flow.
+This catches synthesis-induced regressions that 2-state Verilator hides —
+X-propagation, retiming-induced semantic drift, DSP/BRAM inference bugs,
+and (with SDF) reset glitches and races at real cell delays.
+
+The flow synthesizes `kronos_top` **out-of-context** so the AXI ports stay
+on the netlist boundary, then drives the netlist from a SystemVerilog
+testbench (`tb/gls/tb_gls_top.sv`) backed by a pure-SV AXI memory model
+(`tb/gls/axi_mem_model.sv`) that mirrors `sim/sim_main.cpp`'s semantics.
+
+Two phases:
+
+- **Phase A — funcsim** (`make gls-funcsim`): zero-delay post-synth netlist,
+  8-test stage-5 smoke subset (integer / M / branches / FP / icache / dcache
+  / CSR). First run ~10–15 min (Vivado OOC synth + xsim); subsequent runs
+  without RTL changes ~2–5 min (cached netlist via stamp file).
+- **Phase B — SDF timing sim** (`make gls-sdf`): post-route netlist with
+  back-annotated SDF, single smoke test (`test_blt64`). First run ~30–45 min
+  (P&R adds ~25 min); SDF makes xsim ~5–10× slower than funcsim.
+
+Pass criterion: store of `x10 == 0` to the `0x4000_0000`–`0x7FFF_FFFF`
+sentinel region, identical to the Verilator flow. Logs land in
+`build/gls/logs/<test>.<mode>.log`.
+
+GLS is **not run in CI** — Vivado is too heavy for the existing GitHub
+Actions matrix. Run locally before merging changes that touch the RTL.
 
 ## ACT4 compliance
 
