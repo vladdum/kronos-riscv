@@ -1,5 +1,5 @@
 CC      := riscv64-unknown-elf-gcc
-CFLAGS  := -march=rv32i -mabi=ilp32 -nostdlib -static -T link.ld
+CFLAGS  := -march=rv32i_zicsr -mabi=ilp32 -nostdlib -static -T link.ld
 OBJCOPY := riscv64-unknown-elf-objcopy
 
 BUILD_DIR := build

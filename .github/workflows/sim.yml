@@ -56,7 +56,7 @@ jobs:
       - name: Install pytest
         run: pip install pytest pyyaml
       - name: Run unit tests
-        run: PYTHONPATH=. pytest tools/crv/tests/ tools/tests/ -v
+        run: PYTHONPATH=. pytest tools/crv/tests/ tools/tests/ tools/trace/tests/ -v
 
   sim-all:
     runs-on: ubuntu-latest
@@ -168,3 +168,55 @@ jobs:
           name: sim-diff-${{ matrix.stage }}-traces
           path: sim/obj_dir/trace/
           if-no-files-found: ignore
+
+  sim-s5-asm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: sim-s5-asm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      # Runs every test under sw/stage5/ on the stage-5 sim binary, including
+      # Stage 5h additions (test_perf_event_taxonomy, test_sdtrig).
+      - name: Run sim-s5
+        run: make -C sim sim-s5 PULP_AXI_ROOT=/tmp/pulp_axi
+
+  sim-diff-traced:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: sim-diff-s5-traced
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run sim-diff-s5-traced
+        run: make -C sim sim-diff-s5-traced PULP_AXI_ROOT=/tmp/pulp_axi
+
+      - name: Upload trace artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-csvs
+          path: sim/obj_dir/trace/*.csv
+          if-no-files-found: error

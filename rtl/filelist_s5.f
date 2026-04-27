@@ -16,6 +16,7 @@ stage5/kronos_decode.sv
 stage5/kronos_regfile_fp.sv
 stage5/kronos_icache.sv
 stage5/kronos_csr.sv
+stage5/kronos_trigger.sv
 stage5/kronos_lsu.sv
 stage5/kronos_dcache.sv
 stage5/kronos_muldiv.sv

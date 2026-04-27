@@ -18,6 +18,9 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <unordered_map>
+#include <vector>
+#include <algorithm>
 
 // 2 MB memory (byte-addressable, word-aligned access). ACT4 FMA tests carry
 // multi-hundred-KB .data tables (FP edge-case vectors), so 256 KB wraps and
@@ -76,6 +79,84 @@ struct AxiWrite {
     uint8_t  beat      = 0;      // current W beat index
 };
 
+// Stage 5h B1: minimal disassembler — resolves the common-case opcodes.
+// Unknown opcodes return "<unk>:<hex>".  Format-based decode (RISC-V V20191213).
+static const char* resolve_mnemonic(uint32_t instr, char* buf, size_t buflen) {
+    uint32_t opcode = instr & 0x7F;
+    uint32_t funct3 = (instr >> 12) & 0x7;
+    uint32_t funct7 = (instr >> 25) & 0x7F;
+    switch (opcode) {
+        case 0x37: return "lui";
+        case 0x17: return "auipc";
+        case 0x6F: return "jal";
+        case 0x67: return "jalr";
+        case 0x63: switch (funct3) {
+            case 0: return "beq"; case 1: return "bne";
+            case 4: return "blt"; case 5: return "bge";
+            case 6: return "bltu"; case 7: return "bgeu"; }
+            break;
+        case 0x03: switch (funct3) {
+            case 0: return "lb"; case 1: return "lh"; case 2: return "lw"; case 3: return "ld";
+            case 4: return "lbu"; case 5: return "lhu"; case 6: return "lwu"; }
+            break;
+        case 0x23: switch (funct3) {
+            case 0: return "sb"; case 1: return "sh"; case 2: return "sw"; case 3: return "sd"; }
+            break;
+        case 0x13: switch (funct3) {
+            case 0: return "addi"; case 1: return "slli"; case 2: return "slti"; case 3: return "sltiu";
+            case 4: return "xori"; case 5: return (funct7 & 0x40) ? "srai" : "srli";
+            case 6: return "ori";  case 7: return "andi"; }
+            break;
+        case 0x33:
+            if (funct7 == 0x01) {
+                switch (funct3) {
+                    case 0: return "mul"; case 1: return "mulh"; case 2: return "mulhsu"; case 3: return "mulhu";
+                    case 4: return "div"; case 5: return "divu"; case 6: return "rem"; case 7: return "remu"; }
+            }
+            switch (funct3) {
+                case 0: return (funct7 & 0x40) ? "sub" : "add";
+                case 1: return "sll";
+                case 2: return "slt"; case 3: return "sltu";
+                case 4: return "xor";
+                case 5: return (funct7 & 0x40) ? "sra" : "srl";
+                case 6: return "or";  case 7: return "and"; }
+            break;
+        case 0x1B:  // OP-IMM-32
+            switch (funct3) {
+                case 0: return "addiw";
+                case 1: return "slliw";
+                case 5: return (funct7 & 0x40) ? "sraiw" : "srliw"; }
+            break;
+        case 0x3B:  // OP-32
+            if (funct7 == 0x01) {
+                switch (funct3) {
+                    case 0: return "mulw"; case 4: return "divw"; case 5: return "divuw";
+                    case 6: return "remw"; case 7: return "remuw"; }
+            }
+            switch (funct3) {
+                case 0: return (funct7 & 0x40) ? "subw" : "addw";
+                case 1: return "sllw";
+                case 5: return (funct7 & 0x40) ? "sraw" : "srlw"; }
+            break;
+        case 0x0F: return (funct3 == 1) ? "fence.i" : "fence";
+        case 0x73:
+            if (instr == 0x00000073) return "ecall";
+            if (instr == 0x00100073) return "ebreak";
+            if (instr == 0x30200073) return "mret";
+            switch (funct3) {
+                case 1: return "csrrw"; case 2: return "csrrs"; case 3: return "csrrc";
+                case 5: return "csrrwi"; case 6: return "csrrsi"; case 7: return "csrrci"; }
+            break;
+        case 0x07: return (funct3 == 2) ? "flw" : "fld";
+        case 0x27: return (funct3 == 2) ? "fsw" : "fsd";
+        case 0x53: return "fp.op";  // catch-all for FPU
+        case 0x2F: return "amo";    // catch-all for AMO
+        default: break;
+    }
+    snprintf(buf, buflen, "<unk>:%08x", instr);
+    return buf;
+}
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     if (argc < 2) { fprintf(stderr, "Usage: sim <hex_file> [instr_lat] [data_lat]\n"); return 1; }
@@ -122,6 +203,85 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+
+    // Stage 5h B1: structured retire CSV ("+trace=<path>" Verilator plusarg).
+    FILE* csv_fp = nullptr;
+    uint64_t csv_pc_lo = 0, csv_pc_hi = ~uint64_t(0);
+    uint64_t csv_cyc_lo = 0, csv_cyc_hi = ~uint64_t(0);
+    {
+        const char* p = Verilated::commandArgsPlusMatch("trace=");
+        // commandArgsPlusMatch returns "+trace=<path>" or "" if no match.
+        if (p && p[0] == '+') {
+            const char* eq = strchr(p, '=');
+            if (eq && *(eq+1)) {
+                csv_fp = fopen(eq + 1, "w");
+                if (!csv_fp) {
+                    fprintf(stderr, "[sim] ERROR: cannot open +trace=%s\n", eq+1);
+                    return 1;
+                }
+                fprintf(csv_fp,
+                    "cycle,pc,instr,mnemonic,"
+                    "rd_wen,rd,rd_wdata,"
+                    "fp_wen,fp_rd,fp_wdata,"
+                    "csr_wen,csr_addr,csr_wdata,"
+                    "mem_wen,mem_addr,mem_wdata,mem_funct3,"
+                    "trap_taken,trap_cause\n");
+            }
+        }
+        const char* pcr = Verilated::commandArgsPlusMatch("trace_pc=");
+        if (pcr && pcr[0] == '+') {
+            const char* eq = strchr(pcr, '=');
+            unsigned long long lo, hi;
+            if (eq && sscanf(eq+1, "%llx,%llx", &lo, &hi) == 2) {
+                csv_pc_lo = lo; csv_pc_hi = hi;
+            }
+        }
+        const char* cyr = Verilated::commandArgsPlusMatch("trace_cycle=");
+        if (cyr && cyr[0] == '+') {
+            const char* eq = strchr(cyr, '=');
+            unsigned long long lo, hi;
+            if (eq && sscanf(eq+1, "%llu,%llu", &lo, &hi) == 2) {
+                csv_cyc_lo = lo; csv_cyc_hi = hi;
+            }
+        }
+    }
+
+    // Stage 5h B2: hot-PC profiler ("+profile=<path>" Verilator plusarg).
+    FILE* prof_fp = nullptr;
+    {
+        const char* p = Verilated::commandArgsPlusMatch("profile=");
+        if (p && p[0] == '+') {
+            const char* eq = strchr(p, '=');
+            if (eq && *(eq+1)) {
+                prof_fp = fopen(eq + 1, "w");
+                if (!prof_fp) {
+                    fprintf(stderr, "[sim] ERROR: cannot open +profile=%s\n", eq+1);
+                    return 1;
+                }
+            }
+        }
+    }
+    std::unordered_map<uint64_t, uint64_t> pc_count;
+    std::unordered_map<uint64_t, uint32_t> pc_instr;  // last-seen instr at each PC
+
+    // Stage 5h B3: stall-reason histogram ("+stalls=<path>" Verilator plusarg).
+    FILE* stalls_fp = nullptr;
+    {
+        const char* p = Verilated::commandArgsPlusMatch("stalls=");
+        if (p && p[0] == '+') {
+            const char* eq = strchr(p, '=');
+            if (eq && *(eq+1)) {
+                stalls_fp = fopen(eq + 1, "w");
+                if (!stalls_fp) {
+                    fprintf(stderr, "[sim] ERROR: cannot open +stalls=%s\n", eq+1);
+                    return 1;
+                }
+            }
+        }
+    }
+    // Per-event-id cycle counter (only IDs 0x14..0x1F tracked).
+    uint64_t stall_count[32] = {0};
+    uint64_t total_cycles = 0;
 
     // Initialise all inputs
     top->clk_i           = 0;
@@ -452,6 +612,56 @@ int main(int argc, char** argv) {
             fputc('\n', trace_fp);
         }
 
+        if (csv_fp && top->retire_valid_o) {
+            uint64_t pc = (uint64_t)top->retire_pc_o;
+            if (pc >= csv_pc_lo && pc <= csv_pc_hi &&
+                (uint64_t)cycle >= csv_cyc_lo && (uint64_t)cycle <= csv_cyc_hi) {
+                char mbuf[32];
+                const char* mn = resolve_mnemonic(top->retire_instr_o, mbuf, sizeof(mbuf));
+                fprintf(csv_fp,
+                    "%d,%016llx,%08x,%s,"
+                    "%u,%u,%016llx,"
+                    "%u,%u,%016llx,"
+                    "%u,%03x,%016llx,"
+                    "%u,%016llx,%016llx,%u,"
+                    "%u,%u\n",
+                    cycle,
+                    (unsigned long long)pc,
+                    (unsigned)top->retire_instr_o,
+                    mn,
+                    (unsigned)top->retire_rd_wen_o, (unsigned)top->retire_rd_o,
+                    (unsigned long long)top->retire_rd_wdata_o,
+                    (unsigned)top->retire_fp_wen_o, (unsigned)top->retire_fp_rd_o,
+                    (unsigned long long)top->retire_fp_wdata_o,
+                    (unsigned)top->retire_csr_wen_o, (unsigned)top->retire_csr_addr_o,
+                    (unsigned long long)top->retire_csr_wdata_o,
+                    (unsigned)top->retire_mem_wen_o,
+                    (unsigned long long)top->retire_mem_addr_o,
+                    (unsigned long long)top->retire_mem_wdata_o,
+                    (unsigned)top->retire_mem_funct3_o,
+                    (unsigned)top->retire_trap_taken_o,
+                    (unsigned)top->retire_trap_cause_o);
+            }
+        }
+
+        if (prof_fp && top->retire_valid_o) {
+            uint64_t pc = (uint64_t)top->retire_pc_o;
+            pc_count[pc]++;
+            pc_instr[pc] = (uint32_t)top->retire_instr_o;
+        }
+
+#ifdef KRONOS_HAS_FPU
+        if (stalls_fp) {
+            // Read the event_bus directly from the public-flat-rw root path.
+            // Only available in stage-5 builds (event_bus was added in 5c).
+            uint32_t evb = top->rootp->sim_top__DOT__u_top__DOT__event_bus;
+            for (int id = 0x14; id <= 0x1F; id++) {
+                if (evb & (1u << id)) stall_count[id]++;
+            }
+            total_cycles++;
+        }
+#endif
+
         // Retire-trace halt detection: a store that retires to the 0x4000_0000
         // sentinel region signals termination.  This works with the write-back
         // dcache where the AXI writeback may be deferred indefinitely (the dirty
@@ -511,6 +721,50 @@ int main(int argc, char** argv) {
     if (vcd) { vcd->close(); delete vcd; }
 #endif
     if (trace_fp) fclose(trace_fp);
+    if (csv_fp) fclose(csv_fp);
+
+    if (prof_fp) {
+        // Sort by count desc.
+        std::vector<std::pair<uint64_t, uint64_t>> rows(pc_count.begin(), pc_count.end());
+        std::sort(rows.begin(), rows.end(),
+                  [](const auto& a, const auto& b){ return a.second > b.second; });
+        uint64_t total = 0;
+        for (const auto& kv : rows) total += kv.second;
+        fprintf(prof_fp, "pc,mnemonic,count,fraction\n");
+        for (const auto& kv : rows) {
+            char mbuf[32];
+            const char* mn = resolve_mnemonic(pc_instr[kv.first], mbuf, sizeof(mbuf));
+            double frac = total ? (double)kv.second / (double)total : 0.0;
+            fprintf(prof_fp, "%016llx,%s,%llu,%.6f\n",
+                    (unsigned long long)kv.first, mn,
+                    (unsigned long long)kv.second, frac);
+        }
+        fclose(prof_fp);
+    }
+    if (stalls_fp) {
+        static const char* names[32] = {0};
+        names[0x14] = "load_use_stall";
+        names[0x15] = "jalr_fwd_stall";
+        names[0x16] = "fp_raw_stall";
+        names[0x17] = "frm_hazard_stall";
+        names[0x18] = "fp_inflight_stall";
+        names[0x19] = "fence_i_drain_stall";
+        names[0x1A] = "mem_busy_stall";
+        names[0x1B] = "muldiv_stall";
+        names[0x1C] = "fpu_stall";
+        names[0x1D] = "instr_fetch_stall";
+        names[0x1E] = "branch_mispredict";
+        names[0x1F] = "ex_redirect";
+        fprintf(stalls_fp, "event_id,event_name,cycle_count,fraction\n");
+        for (int id = 0x14; id <= 0x1F; id++) {
+            double frac = total_cycles ? (double)stall_count[id] / (double)total_cycles : 0.0;
+            fprintf(stalls_fp, "0x%02x,%s,%llu,%.6f\n",
+                    id, names[id],
+                    (unsigned long long)stall_count[id], frac);
+        }
+        fclose(stalls_fp);
+    }
+
     top->final();
     delete top;
     return (halted && halt_x10 == 0) ? 0 : 1;

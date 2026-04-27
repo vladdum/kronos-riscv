@@ -1,6 +1,6 @@
 # kronos-riscv Architecture Reference
 
-**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 5b
+**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 5h
 
 kronos-riscv is a 5-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. Instructions flow through Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). The IF stage includes an alignment unit that handles variable-width compressed instructions and a bimodal branch predictor that speculatively redirects fetch before branch resolution. The EX stage contains the 64-bit ALU, a multi-cycle 64-bit multiply/divide unit, branch resolution logic, and the CSR unit. The MEM stage drives an AXI4 load/store unit supporting atomic operations (LR/SC, AMO) and floating-point loads/stores. A separate FPU with six pipelined units handles the F and D extensions; the FPU uses a scoreboard rather than the integer forwarding network for hazard management. Hazard and forwarding control modules sit outside the pipeline stages and manage stalls, flushes, and operand forwarding.
 
@@ -533,3 +533,72 @@ and AMOs were re-included in random testing.
 
 See `docs/superpowers/specs/2026-04-27-dcache-design.md`.
 
+---
+
+## Debug — VCD signal groups
+
+When debugging on a VCD dump in GTKWave/Surfer, the following signal groups
+provide a curated view of pipeline state. All paths are relative to the
+top-level `sim_top.u_top` (or `kronos_top` if dumping from a unit TB).
+
+### fetch
+- `pc_q` — current fetch PC
+- `pc_next` — next-cycle PC (committed value)
+- `align_instr` — aligned instruction byte stream
+- `align_instr_valid` — valid alignment unit output
+- `instr_fetch_stall` — alignment unit stalls fetch
+
+### decode
+- `if_id_q.instr` — fetched 32-bit instruction (post-decompression)
+- `if_id_q.pc` — PC of decoded instruction
+- `if_id_q.valid` — decode-stage register valid
+
+### execute
+- `id_ex_q.*` — full EX-stage register (decoded fields, rs1/rs2 data, fwd selects)
+- `ex_redirect` — EX-stage taken-branch / trap / mret redirect
+- `ex_pc_next` — redirect target
+- `combined_stall` — pipeline freeze (any source)
+- `mem_stall` — memory subsystem stall (LSU + dcache + fence.i drain)
+
+### mem
+- `ex_mem_q.*` — full MEM-stage register
+- `lsu_mem_stall` — LSU bus wait
+- `dcache_stall` — D-cache FSM busy
+
+### regfile
+- `u_regfile.regs[]` — 32 × 64-bit integer GPRs
+- `u_regfile_fp.regs[]` — 32 × 64-bit FP GPRs
+- `u_regfile.we` / `u_regfile.wd` / `u_regfile.wa` — write port
+- `u_regfile_fp.we` / `u_regfile_fp.wd` / `u_regfile_fp.wa` — FP write port
+
+### caches
+- `icache_*` — full I-cache subhierarchy (FSM state, way valid, miss pulse)
+- `dcache_*` — full D-cache subhierarchy
+- `fence_i_active_q` — FENCE.I in-flight (D-cache flush window)
+
+### trap
+- `trap_taken_pulse` — pulses high on the cycle a trap is committed
+- `trap_cause` — current cycle's trap cause (only valid when pulse is high)
+- `mcause` / `mepc` — register state after trap entry
+
+### events
+- `event_bus[31:0]` — Zihpm event bus; bit positions documented in `kronos_pkg.sv` `EVT_*` constants
+
+---
+
+## Debug — OoO debug surface (Stage 6 reservation)
+
+Stage 5h reserves the following hierarchical paths for the upcoming Stage 6
+(BOOM-style OoO) debug surface. None of the modules listed below exist yet
+in Stage 5g/5h; this is purely a forward-looking convention so sim-side
+inspectors will not need RTL changes when they're introduced.
+
+| Path             | Purpose                                                |
+|------------------|--------------------------------------------------------|
+| `u_top.u_rob.*`  | Reorder buffer — entries, head/tail, retire mask       |
+| `u_top.u_iq.*`   | Issue queue — entries, ready bits, age                 |
+| `u_top.u_lsq.*`  | Load/store queue — entries, age, completion mask       |
+| `u_top.u_rat.*`  | Register alias table — logical → physical mapping      |
+
+A stub file `sim/sim_ooo_inspect.cpp` reserves the namespace
+`kronos_ooo_inspect::` for the dumper entry points that Stage 6 will define.

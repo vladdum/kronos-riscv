@@ -45,6 +45,11 @@ module tb_csr_perf;
     .fp_rd_we_i(1'b0),
     .instret_retire_i(instret_retire),
     .event_bus_i(event_bus),
+    // Stage 5h Sdtrig hand-off — not exercised here; inputs zero, outputs unconnected.
+    .trig_csr_rdata_i('0),
+    .trig_csr_match_i(1'b0),
+    .trig_csr_we_o(),
+    .trig_csr_wdata_o(),
     .frm_o(frm)
   );
 

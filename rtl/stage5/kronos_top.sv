@@ -60,7 +60,7 @@ module kronos_top
   id_ex_reg_t  id_ex_q;
   ex_mem_reg_t ex_mem_q;
   mem_wb_reg_t mem_wb_q;
-  logic [31:0] pc_q;
+  logic [31:0] pc_q                              /* verilator public_flat_rd */;
 
   // -------------------------------------------------------------------------
   // Hazard / forwarding control
@@ -96,13 +96,13 @@ module kronos_top
   logic [63:0] fwd_rs1_data, fwd_rs2_data;
   logic [63:0] alu_a, alu_b, alu_result;
   logic [63:0] ex_result;
-  logic [31:0] ex_pc_next;
-  logic        ex_redirect;
+  logic [31:0] ex_pc_next                        /* verilator public_flat_rd */;
+  logic        ex_redirect                        /* verilator public_flat_rd */;
   logic        branch_taken;
   logic        irq_pending;
   logic [63:0] csr_rdata;
   logic [63:0] trap_vector, mepc;
-  logic [31:0] trap_cause;
+  logic [31:0] trap_cause                        /* verilator public_flat_rd */;
   logic [63:0] jalr_target_64;
 
   // STAGE2: muldiv signals (64-bit)
@@ -117,24 +117,24 @@ module kronos_top
 
   // STAGE3: fetch control (icache replaces old FSM)
   logic         fetch_flush;
-  logic         instr_fetch_stall;
-  logic         combined_stall;
+  logic         instr_fetch_stall               /* verilator public_flat_rd */;
+  logic         combined_stall                  /* verilator public_flat_rd */;
   logic         combined_stall_no_muldiv;
 
   // I-cache interface signals
   logic        icache_data_valid;
   logic [31:0] icache_data;
   logic        icache_stall;
-  logic        icache_miss_pulse;
+  logic        icache_miss_pulse                 /* verilator public_flat_rd */;
   logic        fence_i_pulse;
   logic        fence_i_pulse_raw;
-  logic        fence_i_active_q;
+  logic        fence_i_active_q                 /* verilator public_flat_rd */;
   logic        dcache_flush_done;
   logic        dcache_dirty_pending;
 
   // STAGE3: C extension — alignment unit signals
-  logic [31:0] align_instr;
-  logic        align_instr_valid;
+  logic [31:0] align_instr                       /* verilator public_flat_rd */;
+  logic        align_instr_valid                 /* verilator public_flat_rd */;
   logic        align_is_16b;
   logic        align_stall;
   logic        align_need_upper;
@@ -159,7 +159,7 @@ module kronos_top
   // -------------------------------------------------------------------------
   logic [63:0]      lsu_rdata;
   logic             lsu_valid;
-  logic             mem_stall;
+  logic             mem_stall                    /* verilator public_flat_rd */;
   logic             lsu_mem_stall;
   // mem_done_q: set when LSU signals valid_o; cleared when MEM/WB register
   // advances.  Gates req_i so LSU does not re-issue while the pipeline is
@@ -179,8 +179,8 @@ module kronos_top
   logic        dcache_data_valid;
   logic [63:0] dcache_rdata;
   logic        dcache_sc_success;
-  logic        dcache_stall;
-  logic        dcache_miss_pulse;
+  logic        dcache_stall                      /* verilator public_flat_rd */;
+  logic        dcache_miss_pulse                 /* verilator public_flat_rd */;
 
   // Stage 5a: LSU FP response
   logic             lsu_fp_dest;
@@ -208,11 +208,28 @@ module kronos_top
   logic        fpu_stall;
   logic        fpu_dispatching;  // combinational: dispatch will fire this cycle
 
+  // Stage 5h event taxonomy: replicated copies of the load-use / FP load-use
+  // / JALR-forward / FRM-hazard expressions that already live inside
+  // rtl/stage1/kronos_hazard.sv.  Re-derived here so we can publish them on
+  // event_bus without adding output ports to the shared hazard module
+  // (which would force every stage's top.sv to be updated).
+  logic load_use_event;
+  logic fp_load_use_event;
+  logic jalr_fwd_event;
+
+  // Stage 5h: Sdtrig (trigger module) interface
+  logic        trig_hit;
+  logic [31:0] trig_hit_pc;
+  logic [63:0] trig_csr_rdata;
+  logic        trig_csr_match;
+  logic        trig_csr_we;
+  logic [63:0] trig_csr_wdata;
+
   // ---- Stage 5c/e performance-counter event bus ----
   logic        bpred_mispredict_pulse;
   logic        fpu_busy_any;
-  logic        trap_taken_pulse;
-  logic [31:0] event_bus;
+  logic        trap_taken_pulse                  /* verilator public_flat_rd */;
+  logic [31:0] event_bus                        /* verilator public_flat_rd */;
 
   // FPU result latch: captures fpu_result when fpu_out_valid fires so the
   // result survives instr_fetch_stall cycles that may hold combined_stall=1
@@ -240,7 +257,7 @@ module kronos_top
   // -------------------------------------------------------------------------
   // PC next (combinational)
   // -------------------------------------------------------------------------
-  logic [31:0] pc_next;
+  logic [31:0] pc_next                           /* verilator public_flat_rd */;
 
   // =========================================================================
   // Submodule instantiations
@@ -347,6 +364,19 @@ module kronos_top
   assign fp_tag_cur        = fpu_out_valid ? fpu_tag_out : fp_tag_q;
   // Release stall once the result is available; keep stalled until then.
   assign fpu_stall         = (fp_inflight_q | fpu_dispatching) & ~fp_result_avail;
+
+  assign load_use_event = id_ex_q.valid & id_ex_q.dec.is_load & (id_ex_q.dec.rd != 5'd0)
+                         & ((id_dec.rs1_used & (id_dec.rs1 == id_ex_q.dec.rd)) |
+                            (id_dec.rs2_used & (id_dec.rs2 == id_ex_q.dec.rd)));
+
+  assign fp_load_use_event = id_ex_q.valid & id_ex_q.dec.fp_load & (id_ex_q.dec.rd != 5'd0)
+                            & ((id_dec.rs1_fp & (id_dec.rs1 == id_ex_q.dec.rd)) |
+                               (id_dec.rs2_fp & (id_dec.rs2 == id_ex_q.dec.rd)) |
+                               (id_dec.rs3_fp & (id_dec.rs3 == id_ex_q.dec.rd)));
+
+  assign jalr_fwd_event = id_dec.is_jalr & ex_mem_q.valid & ex_mem_q.dec.rd_wen
+                         & (ex_mem_q.dec.rd != 5'd0) & (id_dec.rs1 == ex_mem_q.dec.rd);
+
   // Non-muldiv stall sources that hazard must observe with absolute priority
   // (bus/FPU/fetch can't be abandoned mid-flight by a redirect).  muldiv_stall
   // is fed to hazard separately so redirect flush can out-rank it.
@@ -444,7 +474,7 @@ module kronos_top
     // when the pipeline is actually advancing (see stage3 comment for details).
     .trap_i        (id_ex_q.valid & ~combined_stall &
                     (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
-                     id_ex_q.dec.illegal  | irq_pending)),
+                     id_ex_q.dec.illegal  | irq_pending | trig_hit)),
     .trap_pc_i     (id_ex_q.pc),
     .trap_cause_i  (trap_cause),
     .mret_i        (id_ex_q.valid & ~combined_stall & id_ex_q.dec.is_mret),
@@ -462,7 +492,30 @@ module kronos_top
     // transition so the count is visible to a csrrc-instret two instructions
     // later (matches the SAIL reference-model semantics used by ACT4).
     .instret_retire_i (ex_mem_en & id_ex_q.valid & ~combined_stall),
-    .event_bus_i      (event_bus)
+    .event_bus_i      (event_bus),
+    // Stage 5h
+    .trig_csr_rdata_i (trig_csr_rdata),
+    .trig_csr_match_i (trig_csr_match),
+    .trig_csr_we_o    (trig_csr_we),
+    .trig_csr_wdata_o (trig_csr_wdata)
+  );
+
+  kronos_trigger u_trigger (
+    .clk_i         (clk_i),
+    .rst_ni        (rst_ni),
+    .csr_req_i     (id_ex_q.valid & id_ex_q.dec.is_csr & ~combined_stall),
+    .csr_addr_i    (id_ex_q.dec.csr_addr),
+    .csr_we_i      (trig_csr_we),
+    .csr_wdata_i   (trig_csr_wdata),
+    .csr_rdata_o   (trig_csr_rdata),
+    .csr_match_o   (trig_csr_match),
+    .ex_valid_i    (id_ex_q.valid & ~combined_stall),
+    .ex_pc_i       (id_ex_q.pc),
+    .ex_is_load_i  (id_ex_q.dec.is_load),
+    .ex_is_store_i (id_ex_q.dec.is_store),
+    .ex_mem_addr_i (alu_result),
+    .hit_o         (trig_hit),
+    .hit_pc_o      (trig_hit_pc)
   );
 
   // STAGE5f: 64-bit LSU — thin adapter to kronos_dcache.
@@ -889,10 +942,14 @@ module kronos_top
   end
 
   always_comb begin
-    if      (irq_pending)          trap_cause = 32'h8000_0007;
+    // Sdtrig action fires before the matched instruction commits, so a
+    // trigger hit takes priority over the instruction's own illegal/ecall
+    // cause (RISC-V Debug Spec §5).
+    if      (trig_hit)             trap_cause = 32'd3;  // BREAKPOINT (Sdtrig)
+    else if (irq_pending)          trap_cause = 32'h8000_0007;
     else if (id_ex_q.dec.illegal)  trap_cause = 32'd2;
     else if (id_ex_q.dec.is_ecall) trap_cause = 32'd11;
-    else                           trap_cause = 32'd3;
+    else                           trap_cause = 32'd3;  // ebreak (default)
   end
 
   // JALR target: 64-bit add, truncate to 32-bit PC (physical PC is 32-bit).
@@ -900,8 +957,8 @@ module kronos_top
                            & ~64'd1;
 
   always_comb begin
-    if      (id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
-                               id_ex_q.dec.illegal  | irq_pending))
+    if      ((id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
+                               id_ex_q.dec.illegal  | irq_pending)) | trig_hit)
       ex_pc_next = trap_vector[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_mret)
       ex_pc_next = mepc[31:0];
@@ -947,7 +1004,8 @@ module kronos_top
     (id_ex_q.valid &
      (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
       (id_ex_q.dec.illegal & ~fence_i_dirty_block) |
-      irq_pending | id_ex_q.dec.is_mret));
+      irq_pending | id_ex_q.dec.is_mret)) |
+    trig_hit;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) ex_mem_csr_q <= 1'b0;
@@ -1110,7 +1168,7 @@ module kronos_top
   // (This is the canonical "trap entry will fire this cycle" condition.)
   assign trap_taken_pulse = id_ex_q.valid & ~combined_stall &
                             (id_ex_q.dec.illegal | id_ex_q.dec.is_ecall |
-                             id_ex_q.dec.is_ebreak | irq_pending);
+                             id_ex_q.dec.is_ebreak | irq_pending | trig_hit);
 
   assign event_bus[ 0]    = 1'b0;
   assign event_bus[ 1]    = retire_advance & mem_wb_q.dec.is_branch;
@@ -1124,7 +1182,23 @@ module kronos_top
   assign event_bus[15:9]  = '0;
   assign event_bus[16]    = icache_miss_pulse;  // event ID 0x10 = I$ miss
   assign event_bus[17]    = dcache_miss_pulse;  // event ID 0x11 = D$ miss
-  assign event_bus[31:18] = '0;                 // reserved for future events
+  // Stage 5h taxonomy — fine-grained stall causes (IDs 0x14..0x1F).
+  // Some IDs alias pre-existing low bits (muldiv=0x1B↔0x06, fpu=0x1C↔0x07,
+  // mispredict=0x1E↔0x02) so the consolidated taxonomy table is contiguous.
+  assign event_bus[18]    = 1'b0;
+  assign event_bus[19]    = 1'b0;
+  assign event_bus[EVT_LOAD_USE_STALL]      = load_use_event;
+  assign event_bus[EVT_JALR_FWD_STALL]      = jalr_fwd_event;
+  assign event_bus[EVT_FP_RAW_STALL]        = fp_load_use_event;
+  assign event_bus[EVT_FRM_HAZARD_STALL]    = id_ex_is_frm_write & if_id_fp_dyn_rm;
+  assign event_bus[EVT_FP_INFLIGHT_STALL]   = fpu_stall;
+  assign event_bus[EVT_FENCE_I_DRAIN_STALL] = fence_i_active_q;
+  assign event_bus[EVT_MEM_BUSY_STALL]      = lsu_mem_stall | dcache_stall;
+  assign event_bus[EVT_MULDIV_STALL]        = muldiv_stall;
+  assign event_bus[EVT_FPU_STALL]           = fpu_busy_any;
+  assign event_bus[EVT_INSTR_FETCH_STALL]   = instr_fetch_stall;
+  assign event_bus[EVT_BRANCH_MISPREDICT]   = bpred_mispredict_pulse;
+  assign event_bus[EVT_EX_REDIRECT]         = ex_redirect;
 
   assign retire_valid_o      = retire_advance;
   assign retire_pc_o         = {32'b0, mem_wb_q.pc};

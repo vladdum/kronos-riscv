@@ -246,6 +246,35 @@ package kronos_pkg;
   // NaN-box upper-half (for FLW / single-precision operand check).
   localparam logic [31:0] FP_NANBOX_UPPER = 32'hFFFF_FFFF;
 
+  // -------------------------------------------------------------------------
+  // Stage 5h: Event-bus IDs consumed by mhpmevent/mhpmcounter (Zihpm).
+  // Bits 0x00..0x11 are pre-existing; 0x14..0x1F added by Stage 5h taxonomy.
+  // Indexed via `event_bus[EVT_*]`; `mhpmeventX = EVT_*` selects the bit.
+  // -------------------------------------------------------------------------
+  localparam logic [4:0] EVT_BRANCH_RETIRE       = 5'h01;
+  localparam logic [4:0] EVT_BRANCH_MISPREDICT_P = 5'h02; // pulse, pre-existing
+  localparam logic [4:0] EVT_LOAD_RETIRE         = 5'h03;
+  localparam logic [4:0] EVT_STORE_RETIRE        = 5'h04;
+  localparam logic [4:0] EVT_MEM_STALL           = 5'h05;
+  // 0x06 (muldiv) and 0x07 (fpu) are pre-existing low-bit aliases of
+  // EVT_MULDIV_STALL (0x1B) / EVT_FPU_STALL (0x1C); kept driven via literals.
+  localparam logic [4:0] EVT_TRAP_TAKEN          = 5'h08;
+  localparam logic [4:0] EVT_ICACHE_MISS         = 5'h10;
+  localparam logic [4:0] EVT_DCACHE_MISS         = 5'h11;
+  // Stage 5h taxonomy (fine-grained stall causes).
+  localparam logic [4:0] EVT_LOAD_USE_STALL      = 5'h14;
+  localparam logic [4:0] EVT_JALR_FWD_STALL      = 5'h15;
+  localparam logic [4:0] EVT_FP_RAW_STALL        = 5'h16;
+  localparam logic [4:0] EVT_FRM_HAZARD_STALL    = 5'h17;
+  localparam logic [4:0] EVT_FP_INFLIGHT_STALL   = 5'h18;
+  localparam logic [4:0] EVT_FENCE_I_DRAIN_STALL = 5'h19;
+  localparam logic [4:0] EVT_MEM_BUSY_STALL      = 5'h1A;
+  localparam logic [4:0] EVT_MULDIV_STALL        = 5'h1B;
+  localparam logic [4:0] EVT_FPU_STALL           = 5'h1C;
+  localparam logic [4:0] EVT_INSTR_FETCH_STALL   = 5'h1D;
+  localparam logic [4:0] EVT_BRANCH_MISPREDICT   = 5'h1E;
+  localparam logic [4:0] EVT_EX_REDIRECT         = 5'h1F;
+
   // Rounding modes (IEEE 754 / RISC-V FRM encoding).
   typedef enum logic [2:0] {
     FP_RM_RNE = 3'b000, // round to nearest, ties to even
