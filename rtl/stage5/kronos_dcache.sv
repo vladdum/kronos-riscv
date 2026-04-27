@@ -35,6 +35,12 @@ module kronos_dcache
   output logic                   sc_success_o,
   output logic                   stall_o,
 
+  // FENCE.I full flush: writeback every dirty line and invalidate.  Hold
+  // flush_i high until flush_done_o pulses for one cycle.
+  input  logic                   flush_i,
+  output logic                   flush_done_o,
+  output logic                   dirty_pending_o,
+
   // AXI4 master (read + write)
   output kronos_axi_req_t        axi_req_o,
   input  kronos_axi_resp_t       axi_rsp_i,
@@ -79,13 +85,16 @@ module kronos_dcache
   // ---- State machine --------------------------------------------------------
   // Subsequent tasks will add WB_AW, WB_W, AMO_RMW states.  For Task 2 we
   // only have IDLE / REFILL_AR / REFILL_R.
-  typedef enum logic [2:0] {
-    DC_IDLE       = 3'b000,
-    DC_REFILL_AR  = 3'b001,
-    DC_REFILL_R   = 3'b010,
-    DC_WB_AW      = 3'b011,
-    DC_WB_W       = 3'b100,
-    DC_AMO_RMW    = 3'b101
+  typedef enum logic [3:0] {
+    DC_IDLE       = 4'b0000,
+    DC_REFILL_AR  = 4'b0001,
+    DC_REFILL_R   = 4'b0010,
+    DC_WB_AW      = 4'b0011,
+    DC_WB_W       = 4'b0100,
+    DC_AMO_RMW    = 4'b0101,
+    DC_FLUSH_SCAN = 4'b0110,
+    DC_FLUSH_AW   = 4'b0111,
+    DC_FLUSH_W    = 4'b1000
   } dcache_state_e;
 
   dcache_state_e state_q;
@@ -202,6 +211,23 @@ module kronos_dcache
   logic                   rsrv_valid_q;
   logic                   sc_success_q;
 
+  // Flush state (FENCE.I full writeback + invalidate walk)
+  logic [SET_IDX_W-1:0]              flush_set_q;
+  logic [$clog2(NUM_WAYS)-1:0]       flush_way_q;
+  logic                              flush_done_q;
+
+  // dirty_pending_o: 1 if any (set, way) has valid && dirty.  Used by the
+  // top to short-circuit FENCE.I when no writeback is required.
+  logic dirty_pending;
+  always_comb begin
+    dirty_pending = 1'b0;
+    for (int s = 0; s < NUM_SETS; s++)
+      for (int w = 0; w < NUM_WAYS; w++)
+        dirty_pending |= valid_q[s][w] & dirty_q[s][w];
+  end
+  assign dirty_pending_o = dirty_pending;
+  assign flush_done_o    = flush_done_q;
+
   // AMO intermediate signals for DC_AMO_RMW
   logic [63:0] amo_cur_beat;
   logic [63:0] amo_result;
@@ -245,6 +271,9 @@ module kronos_dcache
       rsrv_addr_q          <= '0;
       rsrv_valid_q         <= 1'b0;
       sc_success_q         <= 1'b0;
+      flush_set_q          <= '0;
+      flush_way_q          <= '0;
+      flush_done_q         <= 1'b0;
       for (int s = 0; s < NUM_SETS; s++) begin
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
@@ -259,6 +288,7 @@ module kronos_dcache
       store_done_q   <= 1'b0;
       amo_done_q     <= 1'b0;
       sc_success_q   <= 1'b0;
+      flush_done_q   <= 1'b0;     // default: one-cycle pulse
       // Reservation tracking.
       // - LR sets it.
       // - SC clears it (regardless of success).
@@ -280,7 +310,15 @@ module kronos_dcache
       end
       unique case (state_q)
         DC_IDLE: begin
-          if (req_i & amo_req_i & ~amo_pending_q & ~amo_done_q) begin
+          // flush_done_q pulse-cycle: parent's flush_i may still be asserted
+          // for one more cycle while it tears down its hold; ignore the new
+          // request so we don't restart a second flush walk.
+          if (flush_i & ~flush_done_q) begin
+            // FENCE.I full writeback + invalidate walk.
+            flush_set_q <= '0;
+            flush_way_q <= '0;
+            state_q     <= DC_FLUSH_SCAN;
+          end else if (req_i & amo_req_i & ~amo_pending_q & ~amo_done_q) begin
             if (amo_op_i == 5'b00011) begin
               // SC: check reservation; if matched, write; else no-op.
               if (rsrv_valid_q & (rsrv_addr_q == addr_i) & hit) begin
@@ -485,6 +523,62 @@ module kronos_dcache
           amo_pending_q  <= 1'b0;
           state_q        <= DC_IDLE;
         end
+        DC_FLUSH_SCAN: begin
+          // Walk (set, way).  Dirty → writeback path; clean → just
+          // invalidate and advance.  When the walk completes, pulse
+          // flush_done_q for one cycle and return to DC_IDLE.
+          if (valid_q[flush_set_q][flush_way_q] &
+              dirty_q[flush_set_q][flush_way_q]) begin
+            // Reuse the writeback registers — no other transaction is
+            // active during a flush walk.
+            miss_set_q    <= flush_set_q;
+            victim_q      <= flush_way_q;
+            evict_tag_q   <= tag_q[flush_set_q][flush_way_q];
+            wb_beat_cnt_q <= 4'd0;
+            state_q       <= DC_FLUSH_AW;
+          end else begin
+            // Clean or invalid line: just invalidate and advance.
+            valid_q[flush_set_q][flush_way_q] <= 1'b0;
+            if (flush_way_q == ($clog2(NUM_WAYS))'(NUM_WAYS - 1)) begin
+              flush_way_q <= '0;
+              if (flush_set_q == SET_IDX_W'(NUM_SETS - 1)) begin
+                flush_done_q <= 1'b1;
+                state_q      <= DC_IDLE;
+              end else begin
+                flush_set_q <= flush_set_q + 1'b1;
+              end
+            end else begin
+              flush_way_q <= flush_way_q + 1'b1;
+            end
+          end
+        end
+        DC_FLUSH_AW: begin
+          if (axi_req_o.aw_valid & axi_rsp_i.aw_ready) state_q <= DC_FLUSH_W;
+        end
+        DC_FLUSH_W: begin
+          if (axi_req_o.w_valid & axi_rsp_i.w_ready) begin
+            wb_beat_cnt_q <= wb_beat_cnt_q + 4'd1;
+            if (axi_req_o.w.last) begin
+              // Done writing this dirty line.  Invalidate + clear dirty,
+              // then advance the (set, way) walk.
+              dirty_q[flush_set_q][flush_way_q] <= 1'b0;
+              valid_q[flush_set_q][flush_way_q] <= 1'b0;
+              if (flush_way_q == ($clog2(NUM_WAYS))'(NUM_WAYS - 1)) begin
+                flush_way_q <= '0;
+                if (flush_set_q == SET_IDX_W'(NUM_SETS - 1)) begin
+                  flush_done_q <= 1'b1;
+                  state_q      <= DC_IDLE;
+                end else begin
+                  flush_set_q <= flush_set_q + 1'b1;
+                  state_q     <= DC_FLUSH_SCAN;
+                end
+              end else begin
+                flush_way_q <= flush_way_q + 1'b1;
+                state_q     <= DC_FLUSH_SCAN;
+              end
+            end
+          end
+        end
         default: state_q <= DC_IDLE;
       endcase
     end
@@ -509,12 +603,12 @@ module kronos_dcache
     axi_req_o.aw.len   = 8'd7;
     axi_req_o.aw.burst = axi_pkg::BURST_INCR;
     axi_req_o.aw.id    = '0;
-    axi_req_o.aw_valid = (state_q == DC_WB_AW);
+    axi_req_o.aw_valid = (state_q == DC_WB_AW) | (state_q == DC_FLUSH_AW);
 
     axi_req_o.w.data   = data_q[victim_q][miss_set_q][wb_beat_cnt_q[BEAT_IDX_W-1:0]];
     axi_req_o.w.strb   = 8'hFF;
     axi_req_o.w.last   = (wb_beat_cnt_q == 4'd7);
-    axi_req_o.w_valid  = (state_q == DC_WB_W);
+    axi_req_o.w_valid  = (state_q == DC_WB_W) | (state_q == DC_FLUSH_W);
 
     axi_req_o.b_ready  = 1'b1;     // always accept B response
   end

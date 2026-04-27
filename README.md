@@ -31,6 +31,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 5d    | CRV harness (random gen + Sail diff + 144-bin coverage) | RV64IMAFDC | AXI4    | Complete    |
 | 5e    | Instruction cache (16 KB / 4-way / Tree-PLRU)   | RV64IMAFDC       | AXI4    | Complete    |
 | 5f    | Data cache (16 KB / 4-way / write-back+allocate) | RV64IMAFDC      | AXI4    | Complete    |
+| 5g    | FENCE.I → D-cache flush + LSU TB cleanup        | RV64IMAFDC       | AXI4    | Complete    |
 | 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
@@ -279,6 +280,15 @@ See `docs/superpowers/specs/2026-04-26-crv-harness-design.md`.
 master.  Tree-PLRU replacement, critical-word-first WRAP refill, FENCE.I
 full invalidate.  AXI bus widened to 64-bit (data + address) as part of
 this work.  See `docs/superpowers/specs/2026-04-26-icache-design.md`.
+
+**Data cache:** A 16 KB, 4-way set-associative write-back / write-allocate
+data cache (`rtl/stage5/kronos_dcache.sv`) replaces the LSU's role as AXI
+master.  Tree-PLRU replacement, critical-word-first WRAP refill, INCR
+writeback bursts.  AMO RMW, LR/SC reservation tracking, and `FENCE.I` →
+full writeback + invalidate (Stage 5g) all live inside the cache; the LSU
+is now a thin adapter (size mux + sign-extension + NaN-boxing).  See
+`docs/superpowers/specs/2026-04-27-dcache-design.md` and
+`docs/superpowers/specs/2026-04-27-stage5g-cleanup-design.md`.
 
 ## Continuous integration
 
