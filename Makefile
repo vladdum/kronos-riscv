@@ -16,7 +16,7 @@ _BUILD_TARGET  = $(if $(filter 0,$(STAGE)),build,build-s$(STAGE))
 #   stage 5 → "lint" (default), others → "lint-s<N>"
 _LINT_TARGET   = $(if $(filter 5,$(STAGE)),lint,lint-s$(STAGE))
 
-.PHONY: help lint build regression compliance coverage synth clean
+.PHONY: help lint build regression compliance coverage synth gls-funcsim gls-sdf clean
 
 help:
 	@echo "Usage: make <target> [STAGE=<0-5>] [JOBS=<N>]"
@@ -28,6 +28,8 @@ help:
 	@echo "  compliance  ACT4 compliance suite (uses STAGE, stages 1-5 only)"
 	@echo "  coverage    Line coverage gate (stage 5 FPU + ALU/LSU/decode)"
 	@echo "  synth       Vivado synthesis + P&R on KV260"
+	@echo "  gls-funcsim Gate-level funcsim of OOC kronos_top netlist"
+	@echo "  gls-sdf     Gate-level SDF timing sim (single smoke test)"
 	@echo "  clean       Remove build artefacts"
 	@echo ""
 	@echo "Options"
@@ -67,6 +69,14 @@ coverage:
 synth:
 	vivado -mode batch -source fpga/kv260/synth.tcl \
 	  -tclargs SYNTH_FREQ_MHZ=$(SYNTH_FREQ_MHZ)
+
+# ── Gate-level simulation ─────────────────────────────────────────────────────
+
+gls-funcsim:
+	$(MAKE) -C sim gls-funcsim
+
+gls-sdf:
+	$(MAKE) -C sim gls-sdf
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 

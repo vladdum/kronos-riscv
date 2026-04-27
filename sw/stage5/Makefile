@@ -17,6 +17,11 @@ $(BUILD_DIR)/%.hex: %.S ../stage0/common.S | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $(@:.hex=.elf) $^
 	$(OBJCOPY) -O ihex $(@:.hex=.elf) $@
 
+# Verilog memh format for SystemVerilog $readmemh (used by the GLS testbench).
+# 4-byte data width matches the 32-bit word layout of the AXI memory model.
+$(BUILD_DIR)/%.memh: $(BUILD_DIR)/%.hex
+	$(OBJCOPY) -O verilog --verilog-data-width=4 $(@:.memh=.elf) $@
+
 $(BUILD_DIR):
 	mkdir -p $@
 

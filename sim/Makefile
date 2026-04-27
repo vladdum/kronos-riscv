@@ -1357,6 +1357,58 @@ coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov s
 	  $(OBJ_DIR)/decode_fp_cov/coverage.dat
 	python3 ../tools/coverage_gate.py $(COV_DIR)/merged.info 100
 
+# ── Gate-level simulation ────────────────────────────────────────────────────
+# OOC netlist of kronos_top + xsim. See fpga/gls/synth_ooc.tcl.
+
+GLS_BUILD            := ../build/gls
+GLS_NETLIST_FUNCSIM  := $(GLS_BUILD)/.netlist_funcsim.done
+GLS_NETLIST_TIMESIM  := $(GLS_BUILD)/.netlist_timesim.done
+GLS_RTL_DEPS         := $(shell find ../rtl -name '*.sv')
+
+GLS_TESTS := test_blt64 test_csr_warl test_illegal_insn \
+             test_fp_basic test_fp_compare \
+             test_dcache_hit_loop test_icache_hit_loop \
+             test_muldiv_redirect
+
+# Per-test cycle cap for xsim. Gate-level sim is ~100× slower per cycle
+# than Verilator (~300 cycles/sec on this design), so 50K caps a TIMEOUT at
+# under 4 min — covers all stage-5 tests with margin (test_blt64 takes 153
+# cycles; the heaviest WARL/cache tests are <20K). Override via:
+# make gls-funcsim GLS_MAX_CYCLES=200000
+GLS_MAX_CYCLES ?= 50000
+
+.PHONY: gls-funcsim gls-sdf
+.PRECIOUS: ../sw/stage5/build/%.hex ../sw/stage5/build/%.memh
+
+$(GLS_NETLIST_FUNCSIM): $(GLS_RTL_DEPS) ../fpga/gls/synth_ooc.tcl
+	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=funcsim
+	@mkdir -p $(GLS_BUILD)
+	@touch $@
+
+$(GLS_NETLIST_TIMESIM): $(GLS_RTL_DEPS) ../fpga/gls/synth_ooc.tcl
+	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=timesim
+	@mkdir -p $(GLS_BUILD)
+	@touch $@
+
+# GLS uses the .memh form ($readmemh expects Verilog memh, not Intel HEX).
+gls-funcsim: $(addprefix gls-funcsim-,$(GLS_TESTS))
+
+gls-funcsim-%: $(GLS_NETLIST_FUNCSIM) ../sw/stage5/build/%.memh
+	cd .. && vivado -mode batch -source fpga/gls/run_xsim.tcl \
+	  -tclargs HEX=sw/stage5/build/$*.memh MODE=funcsim TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES)
+
+gls-sdf: gls-sdf-test_blt64
+
+gls-sdf-%: $(GLS_NETLIST_TIMESIM) ../sw/stage5/build/%.memh
+	cd .. && vivado -mode batch -source fpga/gls/run_xsim.tcl \
+	  -tclargs HEX=sw/stage5/build/$*.memh MODE=timesim TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES)
+
+../sw/stage5/build/%.hex:
+	$(MAKE) -C ../sw/stage5 build/$*.hex
+
+../sw/stage5/build/%.memh: ../sw/stage5/build/%.hex
+	$(MAKE) -C ../sw/stage5 build/$*.memh
+
 clean:
 	rm -rf $(OBJ_DIR)
 	$(MAKE) -C $(SW_DIR) clean
@@ -1364,6 +1416,7 @@ clean:
 
 clean-vivado:
 	rm -rf ../build/vivado_kv260_*
+	rm -rf ../build/gls
 	rm -f  ../*.jou ../vivado_pid*.str ../vivado_pid*.backup.jou
 	rm -rf ../.Xil
 	rm -f  ../clockInfo.txt ../iter_*_Congested*.txt
