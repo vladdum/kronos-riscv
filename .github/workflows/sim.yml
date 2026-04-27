@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [s1s2, s3s4, fp-unit, fp-top, s5-int, crv-smoke]
+        group: [s1s2, s3s4, fp-unit, fp-top, s5-int, s6-int, crv-smoke]
     name: sim-${{ matrix.group }}
 
     steps:
@@ -75,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stage: [s1, s2, s3, s4, s5]
+        stage: [s1, s2, s3, s4, s5, s6]
     timeout-minutes: 60
     name: compliance-${{ matrix.stage }}
 
@@ -191,6 +191,28 @@ jobs:
       # Stage 5h additions (test_perf_event_taxonomy, test_sdtrig).
       - name: Run sim-s5
         run: make -C sim sim-s5 PULP_AXI_ROOT=/tmp/pulp_axi
+
+  sim-s6-asm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: sim-s6-asm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      # Runs every test under sw/stage6/ on the stage-6 sim binary.
+      - name: Run sim-s6
+        run: make -C sim sim-s6 PULP_AXI_ROOT=/tmp/pulp_axi
 
   sim-diff-traced:
     runs-on: ubuntu-latest

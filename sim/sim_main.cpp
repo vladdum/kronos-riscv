@@ -416,6 +416,12 @@ int main(int argc, char** argv) {
             uint32_t ins  = top->rootp->sim_top__DOT__u_top__DOT__align_instr;
             uint8_t  redir = top->rootp->sim_top__DOT__u_top__DOT__ex_redirect;
             uint32_t epc  = top->rootp->sim_top__DOT__u_top__DOT__ex_pc_next;
+#ifdef KRONOS_HAS_S6_PRIV
+            uint8_t  priv = top->rootp->sim_top__DOT__u_top__DOT__priv_q;
+            uint8_t  cstl = top->rootp->sim_top__DOT__u_top__DOT__combined_stall;
+            uint8_t  trap = top->rootp->sim_top__DOT__u_top__DOT__trap_taken_pulse;
+            uint32_t tcse = top->rootp->sim_top__DOT__u_top__DOT__trap_cause;
+#endif
 #ifdef KRONOS_HAS_FPU
             uint8_t  fov  = top->rootp->sim_top__DOT__u_top__DOT__fpu_out_valid;
             uint8_t  fi   = top->rootp->sim_top__DOT__u_top__DOT__fp_inflight_q;
@@ -424,8 +430,14 @@ int main(int argc, char** argv) {
             uint64_t fwd  = top->rootp->sim_top__DOT__u_top__DOT__fp_wd;
             uint8_t  fwa  = top->rootp->sim_top__DOT__u_top__DOT__fp_wa;
             printf("C%05d: pc=%08x al_v=%d ins=%08x redir=%d epc=%08x"
+#ifdef KRONOS_HAS_S6_PRIV
+                   " priv=%d cstl=%d trap=%d tcause=%x"
+#endif
                    " fov=%d fi=%d fres=%016llx fwe=%d fwa=%d fwd=%016llx\n",
                    cycle, pc, al_v, ins, redir, epc,
+#ifdef KRONOS_HAS_S6_PRIV
+                   priv, cstl, trap, tcse,
+#endif
                    fov, fi, (unsigned long long)fres,
                    fwe, fwa, (unsigned long long)fwd);
 #else

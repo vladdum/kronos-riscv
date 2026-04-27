@@ -25,9 +25,9 @@ module kronos_top
 
   input  logic             irq_timer_i,
   input  logic [14:0]      irq_fast_i,
-  // Stage-6a-aligned standard RV interrupt sources.  Not consumed in stage5
-  // (the Stage-5 CSR file only knows about irq_timer_i / irq_fast_i); declared
-  // here so the shared sim_top.sv harness compiles against both stages.
+  // Stage 6a: standard RISC-V interrupt inputs (priv-spec § 3.1.9).
+  // Default-driven 0 by SoC integrations that have not yet been updated;
+  // the legacy irq_timer_i / irq_fast_i platform IRQ ports remain operational.
   input  logic             irq_msi_i,
   input  logic             irq_mei_i,
   input  logic             irq_ssi_i,
@@ -108,10 +108,29 @@ module kronos_top
   logic        ex_redirect                        /* verilator public_flat_rd */;
   logic        branch_taken;
   logic        irq_pending;
+  logic [4:0]  irq_cause;
   logic [63:0] csr_rdata;
-  logic [63:0] trap_vector, mepc;
+  logic [63:0] trap_vector, mepc, sepc;
   logic [31:0] trap_cause                        /* verilator public_flat_rd */;
   logic [63:0] jalr_target_64;
+
+  // Stage 6a: privilege state + protection wires.
+  priv_e             priv_q;
+  logic [63:0]       mstatus;
+  logic              pmp_fetch_fault;
+  logic [55:0]       pmp_fetch_fault_addr;
+  logic              pmp_data_fault;
+  logic [55:0]       pmp_data_fault_addr;
+  logic [7:0][7:0]   pmpcfg;
+  logic [7:0][53:0]  pmpaddr;
+  logic [31:0]       trap_tval;
+  logic              csr_illegal;
+  // Stage 6a: priv-checked control transfers (mret/sret) and TVM/TW gates.
+  logic              mret_priv_fail;
+  logic              sret_priv_fail;
+  logic              satp_tvm_fail;
+  // Stage 6a: PMP data-port size_i (3-bit log2 width: 0=1B,1=2B,2=4B,3=8B).
+  logic [2:0]        pmp_data_size;
 
   // STAGE2: muldiv signals (64-bit)
   logic [63:0] muldiv_result;
@@ -325,7 +344,13 @@ module kronos_top
   // the priority so a redirect flushes the wrong-path MUL without needing
   // muldiv_stall to fan in from ex_redirect/mem_redirect.
   assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
-  assign instr_fetch_stall = ~align_instr_valid | icache_stall;
+  // Stage 6a: when a PMP fetch fault is active, the alignment unit suppresses
+  // its instr_valid_o (see kronos_align.sv).  We must NOT treat this as a
+  // pipeline stall, because the same fault asserts trap_i and ex_redirect to
+  // the trap vector — gating pc_en off via instr_fetch_stall would prevent the
+  // PC from reaching mtvec, and the pipeline would resume executing at the
+  // faulting PC in M-mode instead of taking the trap.
+  assign instr_fetch_stall = (~align_instr_valid & ~pmp_fetch_fault) | icache_stall;
 
   // FENCE.I detection from raw instruction bits (decoder doesn't surface it —
   // see commit 87aac14 for why we don't change the decoder).
@@ -480,17 +505,36 @@ module kronos_top
     .valid_o       (),
     // Gate trap_i and mret_i with ~combined_stall: CSR must only update state
     // when the pipeline is actually advancing (see stage3 comment for details).
-    .trap_i        (id_ex_q.valid & ~combined_stall &
-                    (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
-                     id_ex_q.dec.illegal  | irq_pending | trig_hit)),
+    .trap_i        ((id_ex_q.valid & ~combined_stall &
+                     (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
+                      id_ex_q.dec.illegal  | csr_illegal |
+                      mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+                      irq_pending | trig_hit)) |
+                    pmp_fetch_fault | pmp_data_fault),
     .trap_pc_i     (id_ex_q.pc),
     .trap_cause_i  (trap_cause),
-    .mret_i        (id_ex_q.valid & ~combined_stall & id_ex_q.dec.is_mret),
+    .trap_tval_i   (trap_tval),
+    .mret_i        (id_ex_q.valid & ~combined_stall &
+                    id_ex_q.dec.is_mret & ~mret_priv_fail),
+    .sret_i        (id_ex_q.valid & ~combined_stall &
+                    id_ex_q.dec.is_sret & ~sret_priv_fail),
     .trap_vector_o (trap_vector),
     .mepc_o        (mepc),
+    .sepc_o        (sepc),
+    .priv_o        (priv_q),
+    .mstatus_o     (mstatus),
+    .csr_illegal_o (csr_illegal),
+    .pmpcfg_o      (pmpcfg),
+    .pmpaddr_o     (pmpaddr),
     .irq_timer_i   (irq_timer_i),
     .irq_fast_i    (irq_fast_i),
+    .irq_msi_i     (irq_msi_i),
+    .irq_mei_i     (irq_mei_i),
+    .irq_ssi_i     (irq_ssi_i),
+    .irq_sti_i     (irq_sti_i),
+    .irq_sei_i     (irq_sei_i),
     .irq_pending_o (irq_pending),
+    .irq_cause_o   (irq_cause),
     // Stage 5a: FP CSR interface
     .fflags_delta_i (fpu_out_valid ? fpu_fflags : 5'b0),
     .fflags_we_i    (fpu_out_valid),
@@ -526,12 +570,130 @@ module kronos_top
     .hit_pc_o      (trig_hit_pc)
   );
 
+  // -------------------------------------------------------------------------
+  // Stage 6a: PMP — fetch-port and data-port instances.
+  //
+  // Each kronos_pmp consumes a 56-bit physical address.  Stage 6a uses a
+  // 32-bit physical address space, so we zero-extend.  size_i is the log2
+  // byte size of the access (0=1B, 1=2B, 2=4B, 3=8B).  The fetch port always
+  // queries a 4-byte access; the data port mirrors the LSU's funct3→size
+  // translation.
+  //
+  // valid_i is gated so the fault flag is only meaningful while the access
+  // is being presented to the bus.  For data accesses we additionally gate
+  // on ~combined_stall to avoid driving fault_o while the pipeline is frozen
+  // for unrelated reasons (otherwise a multi-cycle stall would cause repeated
+  // edge-triggered traps in the trap_taken_pulse).
+  // -------------------------------------------------------------------------
+  always_comb begin
+    unique case (id_ex_q.dec.mem_funct3)
+      3'b000:  pmp_data_size = 3'd0; // LB / SB
+      3'b001:  pmp_data_size = 3'd1; // LH / SH
+      3'b010:  pmp_data_size = 3'd2; // LW / SW / FLW / FSW
+      3'b011:  pmp_data_size = 3'd3; // LD / SD / FLD / FSD
+      3'b100:  pmp_data_size = 3'd0; // LBU
+      3'b101:  pmp_data_size = 3'd1; // LHU
+      3'b110:  pmp_data_size = 3'd2; // LWU
+      default: pmp_data_size = 3'd3;
+    endcase
+  end
+
+  // PMP enforcement gate: when *no* PMP entry has cfg.A != OFF the PMP is
+  // effectively not configured.  RISC-V Priv §3.7.1 makes the number of
+  // implemented entries implementation-defined and explicitly permits zero.
+  // Treating the all-OFF state as "PMP not implemented" lets early-boot S/U
+  // code execute without first programming a wide-open region (the in-tree
+  // priv tests rely on this).  The kronos_pmp module itself stays spec-strict
+  // (S/U fault on no-match) so tb_pmp's directed cases keep their meaning;
+  // the gate lives here at integration level only.
+  logic pmp_any_active;
+  always_comb begin
+    pmp_any_active = 1'b0;
+    for (int i = 0; i < 8; i++) begin
+      if (pmpcfg[i][4:3] != 2'b00) pmp_any_active = 1'b1;
+    end
+  end
+
+  logic pmp_fetch_fault_raw;
+  logic [55:0] pmp_fetch_fault_addr_raw;
+  logic pmp_data_fault_raw;
+  logic [55:0] pmp_data_fault_addr_raw;
+
+  kronos_pmp u_pmp_fetch (
+    .pmpcfg_i     (pmpcfg),
+    .pmpaddr_i    (pmpaddr),
+    .priv_i       (priv_q),
+    // Fetch valid: any cycle the icache is presenting a fetch address.
+    .valid_i      (align_needs_fetch),
+    .addr_i       ({24'b0, icache_fetch_addr}),
+    .size_i       (3'd2),  // 4-byte fetch (lower bound; align reads upper word
+                            // when needed via icache_fetch_addr remap).
+    .is_fetch_i   (1'b1),
+    .is_load_i    (1'b0),
+    .is_store_i   (1'b0),
+    .fault_o      (pmp_fetch_fault_raw),
+    .fault_addr_o (pmp_fetch_fault_addr_raw)
+  );
+
+  assign pmp_fetch_fault      = pmp_fetch_fault_raw & pmp_any_active;
+  assign pmp_fetch_fault_addr = pmp_fetch_fault_addr_raw;
+
+  kronos_pmp u_pmp_data (
+    .pmpcfg_i     (pmpcfg),
+    .pmpaddr_i    (pmpaddr),
+    .priv_i       (priv_q),
+    // valid_i must NOT depend on combined_stall.  combined_stall includes
+    // mem_stall, which depends on lsu_mem_stall, which depends on pmp_fault_i
+    // (suppressed by lsu when pmp_fault_i is high) — gating valid_i on
+    // ~combined_stall would close a comb loop pmp_fault → mem_stall →
+    // combined_stall → valid_i → pmp_fault.  The fault flag is meaningful
+    // whenever a load/store sits in EX; the trap path gates trap_i with
+    // ~combined_stall so the trap only fires when the pipeline advances.
+    .valid_i      (id_ex_q.valid &
+                   (id_ex_q.dec.is_load | id_ex_q.dec.is_store |
+                    id_ex_q.dec.is_amo)),
+    // alu_result is the (rs1+imm) memory address before the EX/MEM register.
+    .addr_i       ({24'b0, alu_result[31:0]}),
+    .size_i       (pmp_data_size),
+    .is_fetch_i   (1'b0),
+    .is_load_i    (id_ex_q.dec.is_load |
+                   (id_ex_q.dec.is_amo & id_ex_q.dec.is_lr)),
+    .is_store_i   (id_ex_q.dec.is_store |
+                   (id_ex_q.dec.is_amo & ~id_ex_q.dec.is_lr)),
+    .fault_o      (pmp_data_fault_raw),
+    .fault_addr_o (pmp_data_fault_addr_raw)
+  );
+
+  assign pmp_data_fault      = pmp_data_fault_raw & pmp_any_active;
+  assign pmp_data_fault_addr = pmp_data_fault_addr_raw;
+
+  // -------------------------------------------------------------------------
+  // Stage 6a: priv-checked control transfers.
+  //   - mret legal only from M-mode.
+  //   - sret legal from M (any) or S (when mstatus.TSR=0).  U-mode → illegal.
+  //   - SATP CSR access from S-mode is gated by mstatus.TVM.
+  //   - WFI privilege gating (mstatus.TW) is deferred to Stage 6b alongside
+  //     the MMU; no `is_wfi` decode bit exists yet.
+  // -------------------------------------------------------------------------
+  always_comb begin
+    mret_priv_fail = id_ex_q.dec.is_mret & (priv_q != PRIV_M);
+    sret_priv_fail = id_ex_q.dec.is_sret &
+                     ( (priv_q == PRIV_U) |
+                       ((priv_q == PRIV_S) & mstatus[22]) );  // TSR
+    satp_tvm_fail  = id_ex_q.dec.is_csr &
+                     (id_ex_q.dec.csr_addr == CSR_SATP) &
+                     (priv_q == PRIV_S) & mstatus[20];       // TVM
+  end
+
   // STAGE5f: 64-bit LSU — thin adapter to kronos_dcache.
   kronos_lsu u_lsu (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
     .req_i              (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store
                          | ex_mem_q.dec.is_amo) & ~mem_done_q),
+    // Stage 6a: PMP data-port permission-violation flag.  Suppresses dcache
+    // request issue and the AMO request when high.
+    .pmp_fault_i        (pmp_data_fault),
     .we_i               (ex_mem_q.dec.is_store | ex_mem_q.dec.fp_store),
     .addr_i             (ex_mem_q.alu_result[31:0]),
     .wdata_i            (ex_mem_q.rs2_data),
@@ -709,6 +871,8 @@ module kronos_top
     .req_i        (align_needs_fetch),
     .addr_i       ({32'b0, icache_fetch_addr}),
     .flush_i      (fence_i_pulse),
+    // Stage 6a: PMP fetch-port fault input — suppresses the AXI AR phase.
+    .pmp_fault_i  (pmp_fetch_fault),
     .data_valid_o (icache_data_valid),
     .data_o       (icache_data),
     .stall_o      (icache_stall),
@@ -728,6 +892,8 @@ module kronos_top
                         : ex_redirect  ? ex_pc_next[1]
                         : pred_taken   ? pred_target[1]
                         :                pc_q[1]),
+    // Stage 6a: PMP fetch-port fault — suppresses instr_valid_o while held.
+    .pmp_fault_i         (pmp_fetch_fault),
     .instr_o             (align_instr),
     .instr_valid_o       (align_instr_valid),
     .is_16b_o            (align_is_16b),
@@ -953,11 +1119,44 @@ module kronos_top
     // Sdtrig action fires before the matched instruction commits, so a
     // trigger hit takes priority over the instruction's own illegal/ecall
     // cause (RISC-V Debug Spec §5).
-    if      (trig_hit)             trap_cause = 32'd3;  // BREAKPOINT (Sdtrig)
-    else if (irq_pending)          trap_cause = 32'h8000_0007;
-    else if (id_ex_q.dec.illegal)  trap_cause = 32'd2;
-    else if (id_ex_q.dec.is_ecall) trap_cause = 32'd11;
-    else                           trap_cause = 32'd3;  // ebreak (default)
+    if (trig_hit) begin
+      trap_cause = 32'd3;                                   // BREAKPOINT (Sdtrig)
+    end else if (pmp_fetch_fault) begin
+      trap_cause = {27'b0, CAUSE_INSTR_ACCESS_FAULT};       // 1
+    end else if (pmp_data_fault & id_ex_q.dec.is_load) begin
+      trap_cause = {27'b0, CAUSE_LOAD_ACCESS_FAULT};        // 5
+    end else if (pmp_data_fault & id_ex_q.dec.is_store) begin
+      trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};       // 7
+    end else if (pmp_data_fault & id_ex_q.dec.is_amo) begin
+      // AMO permission violation: report as STORE access fault (priv-spec).
+      trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};
+    end else if (irq_pending) begin
+      trap_cause = {1'b1, 26'b0, irq_cause};                // mcause[63]=1 (IRQ)
+    end else if (id_ex_q.dec.illegal | csr_illegal |
+                 mret_priv_fail | sret_priv_fail | satp_tvm_fail) begin
+      trap_cause = 32'd2;                                   // ILLEGAL
+    end else if (id_ex_q.dec.is_ecall) begin
+      unique case (priv_q)
+        PRIV_U:  trap_cause = {27'b0, CAUSE_ECALL_U};       // 8
+        PRIV_S:  trap_cause = {27'b0, CAUSE_ECALL_S};       // 9
+        PRIV_M:  trap_cause = {27'b0, CAUSE_ECALL_M};       // 11
+        default: trap_cause = {27'b0, CAUSE_ECALL_M};
+      endcase
+    end else begin
+      trap_cause = 32'd3;                                   // ebreak (default)
+    end
+  end
+
+  // Stage 6a: trap_tval — set to the offending PC for fetch faults, the
+  // offending data address for data PMP faults, the original instruction word
+  // for illegal-instruction (priv-spec § 3.1.16), and 0 otherwise.
+  always_comb begin
+    if      (pmp_fetch_fault) trap_tval = pmp_fetch_fault_addr[31:0];
+    else if (pmp_data_fault)  trap_tval = pmp_data_fault_addr[31:0];
+    else if (id_ex_q.dec.illegal | csr_illegal |
+             mret_priv_fail | sret_priv_fail | satp_tvm_fail)
+                              trap_tval = id_ex_q.instr;
+    else                      trap_tval = 32'd0;
   end
 
   // JALR target: 64-bit add, truncate to 32-bit PC (physical PC is 32-bit).
@@ -966,10 +1165,15 @@ module kronos_top
 
   always_comb begin
     if      ((id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
-                               id_ex_q.dec.illegal  | irq_pending)) | trig_hit)
+                               id_ex_q.dec.illegal  | csr_illegal |
+                               mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+                               irq_pending)) | trig_hit |
+              pmp_fetch_fault | pmp_data_fault)
       ex_pc_next = trap_vector[31:0];
-    else if (id_ex_q.valid & id_ex_q.dec.is_mret)
+    else if (id_ex_q.valid & id_ex_q.dec.is_mret & ~mret_priv_fail)
       ex_pc_next = mepc[31:0];
+    else if (id_ex_q.valid & id_ex_q.dec.is_sret & ~sret_priv_fail)
+      ex_pc_next = sepc[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
       ex_pc_next = jalr_target_64[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jal)
@@ -1012,8 +1216,12 @@ module kronos_top
     (id_ex_q.valid &
      (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
       (id_ex_q.dec.illegal & ~fence_i_dirty_block) |
-      irq_pending | id_ex_q.dec.is_mret)) |
-    trig_hit;
+      csr_illegal |
+      mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+      irq_pending |
+      id_ex_q.dec.is_mret | id_ex_q.dec.is_sret)) |
+    trig_hit |
+    pmp_fetch_fault | pmp_data_fault;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) ex_mem_csr_q <= 1'b0;
@@ -1174,9 +1382,14 @@ module kronos_top
 
   // Trap-taken pulse: re-derive the same expression we feed to u_csr.trap_i.
   // (This is the canonical "trap entry will fire this cycle" condition.)
-  assign trap_taken_pulse = id_ex_q.valid & ~combined_stall &
-                            (id_ex_q.dec.illegal | id_ex_q.dec.is_ecall |
-                             id_ex_q.dec.is_ebreak | irq_pending | trig_hit);
+  // Includes Stage 6a PMP faults (fetch + data) and the new illegal sources
+  // (csr_illegal, mret/sret-priv-fail, satp-TVM-fail).
+  assign trap_taken_pulse = (id_ex_q.valid & ~combined_stall &
+                             (id_ex_q.dec.illegal | id_ex_q.dec.is_ecall |
+                              id_ex_q.dec.is_ebreak | csr_illegal |
+                              mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+                              irq_pending | trig_hit)) |
+                            pmp_fetch_fault | pmp_data_fault;
 
   assign event_bus[ 0]    = 1'b0;
   assign event_bus[ 1]    = retire_advance & mem_wb_q.dec.is_branch;
@@ -1240,10 +1453,5 @@ module kronos_top
   assign retire_csr_wdata_o  = mem_wb_q.csr_wdata;
   assign retire_trap_taken_o = trap_taken_pulse;
   assign retire_trap_cause_o = trap_cause;
-
-  // Stage-6a IRQ ports declared above are not consumed by the stage-5 CSR
-  // file; tie them into a dummy XOR to keep the linter quiet.
-  logic _unused_irq;
-  assign _unused_irq = ^{irq_msi_i, irq_mei_i, irq_ssi_i, irq_sti_i, irq_sei_i};
 
 endmodule
