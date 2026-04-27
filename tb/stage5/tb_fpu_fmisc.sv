@@ -22,7 +22,7 @@ module tb_fpu_fmisc;
   kronos_fpu_fmisc u_dut (
     .clk_i(clk), .rst_ni(rst_n), .flush_i(flush),
     .in_valid_i(in_valid), .op_i(op), .fmt_d_i(fmt_d), .rm_i(rm),
-    .a_i(a), .b_i(b), .c_i(c), .tag_i(tag_in),
+    .a_i(a), .b_i(b), .tag_i(tag_in),
     .out_valid_o(out_valid), .result_o(result), .fflags_o(fflags), .tag_o(tag_out)
   );
   always #5 clk = ~clk;

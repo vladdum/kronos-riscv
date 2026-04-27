@@ -4,9 +4,16 @@
 //
 // AXI4 slave memory model for gate-level simulation.
 // Semantic peer of sim/sim_main.cpp — single-outstanding per port,
-// configurable read latency, INCR-burst support, halt-on-store to the
-// 0x4000_0000–0x7FFF_FFFF sentinel region, console writes silently
+// configurable read latency, INCR + WRAP burst support, halt-on-store to
+// the 0x4000_0000–0x7FFF_FFFF sentinel region, console writes silently
 // absorbed at 0x1000_0000.
+//
+// WRAP burst semantics (icache + dcache cache-line refills): the address
+// advances modulo (len+1)*8 bytes within the line, so beats following the
+// line boundary wrap back to the start of the same line. Without this,
+// wrapped beats return data from the next sequential line — corrupting
+// the cache and causing post-mret instruction fetches to return data from
+// the wrong line (issue #57).
 
 module axi_mem_model #(
   parameter int unsigned MEM_WORDS        = 524288,        // 2 MiB
@@ -72,16 +79,45 @@ module axi_mem_model #(
     if (HEX_FILE != "") $readmemh(HEX_FILE, mem);
   end
 
+  // Compute the byte address of beat `beat` within burst:
+  //   - INCR (0x1): base + beat*8
+  //   - WRAP (0x2): wrap within (len+1)*8-byte boundary
+  //   - FIXED (0x0) and unknown: treat as INCR
+  // beat_addr is a full 64-bit AXI address (we only use the low bits).
+  function automatic logic [63:0] beat_addr(
+    input logic [63:0] base,
+    input logic [ 7:0] len,
+    input logic [ 1:0] burst,
+    input logic [ 7:0] beat
+  );
+    logic [63:0] line_size;
+    logic [63:0] line_mask;
+    logic [63:0] line_base;
+    logic [63:0] off;
+    line_size = (64'(len) + 64'd1) * 64'd8;
+    line_mask = line_size - 64'd1;
+    line_base = base & ~line_mask;
+    off       = ((base & line_mask) + (64'(beat) * 64'd8)) & line_mask;
+    if (burst == 2'b10) begin
+      return line_base | off;
+    end else begin
+      return base + (64'(beat) * 64'd8);
+    end
+  endfunction
+
   // ── Instruction read state ───────────────────────────────────────────
   logic            i_pending_q;
   logic [63:0]     i_base_q;
   logic [ 7:0]     i_len_q;
+  logic [ 1:0]     i_burst_q;
   logic [ 7:0]     i_beat_q;
   logic [31:0]     i_lat_q;
 
+  logic [63:0]     i_addr;
   logic [WI_W-1:0] i_word_lo;
   logic [WI_W-1:0] i_word_hi;
-  assign i_word_lo = (i_base_q[WI_W+1:2]) + (WI_W'(i_beat_q) << 1);
+  assign i_addr    = beat_addr(i_base_q, i_len_q, i_burst_q, i_beat_q);
+  assign i_word_lo = i_addr[WI_W+1:2];
   assign i_word_hi = i_word_lo + 1;
 
   assign instr_ar_ready_o = !i_pending_q;
@@ -94,6 +130,7 @@ module axi_mem_model #(
       i_pending_q <= 1'b0;
       i_base_q    <= 64'h0;
       i_len_q     <= 8'h0;
+      i_burst_q   <= 2'b00;
       i_beat_q    <= 8'h0;
       i_lat_q     <= 32'h0;
     end else begin
@@ -101,6 +138,7 @@ module axi_mem_model #(
         i_pending_q <= 1'b1;
         i_base_q    <= instr_ar_addr_i;
         i_len_q     <= instr_ar_len_i;
+        i_burst_q   <= instr_ar_burst_i;
         i_beat_q    <= 8'h0;
         i_lat_q     <= 32'(INSTR_LAT);
       end else if (i_pending_q && (i_lat_q != 32'd0)) begin
@@ -122,12 +160,15 @@ module axi_mem_model #(
   logic            d_pending_q;
   logic [63:0]     d_base_q;
   logic [ 7:0]     d_len_q;
+  logic [ 1:0]     d_burst_q;
   logic [ 7:0]     d_beat_q;
   logic [31:0]     d_lat_q;
 
+  logic [63:0]     d_addr;
   logic [WI_W-1:0] d_word_lo;
   logic [WI_W-1:0] d_word_hi;
-  assign d_word_lo = (d_base_q[WI_W+1:2]) + (WI_W'(d_beat_q) << 1);
+  assign d_addr    = beat_addr(d_base_q, d_len_q, d_burst_q, d_beat_q);
+  assign d_word_lo = d_addr[WI_W+1:2];
   assign d_word_hi = d_word_lo + 1;
 
   assign data_ar_ready_o = !d_pending_q;
@@ -140,6 +181,7 @@ module axi_mem_model #(
       d_pending_q <= 1'b0;
       d_base_q    <= 64'h0;
       d_len_q     <= 8'h0;
+      d_burst_q   <= 2'b00;
       d_beat_q    <= 8'h0;
       d_lat_q     <= 32'h0;
     end else begin
@@ -147,6 +189,7 @@ module axi_mem_model #(
         d_pending_q <= 1'b1;
         d_base_q    <= data_ar_addr_i;
         d_len_q     <= data_ar_len_i;
+        d_burst_q   <= data_ar_burst_i;
         d_beat_q    <= 8'h0;
         d_lat_q     <= 32'(DATA_LAT);
       end else if (d_pending_q && (d_lat_q != 32'd0)) begin

@@ -761,9 +761,26 @@ module kronos_top
                  : align_is_16b  ? pc_q + 32'd2
                  :                 pc_q + 32'd4;
 
+  // pc_q reset semantics:
+  //   - Async reset to a constant 0 (FPGA FF primitives only support
+  //     constant async preset/clear; using `boot_addr_i` directly produced
+  //     "Set+Reset same priority" gate-level bugs — the netlist's pc_q came
+  //     out of reset with X-prop-tainted bits and the icache then returned
+  //     data from a wrong cache line, which is what surfaced in issue #57).
+  //   - On the first post-reset cycle, sync-load `boot_addr_i` so a non-zero
+  //     boot vector still works. boot_addr_i is captured before the load to
+  //     avoid synth seeing it as part of the async reset value.
+  logic boot_loaded_q;
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) pc_q <= boot_addr_i;
-    else if (pc_en) pc_q <= pc_next;
+    if (!rst_ni) begin
+      pc_q          <= 32'b0;
+      boot_loaded_q <= 1'b0;
+    end else if (!boot_loaded_q) begin
+      pc_q          <= boot_addr_i;
+      boot_loaded_q <= 1'b1;
+    end else if (pc_en) begin
+      pc_q          <= pc_next;
+    end
   end
 
   // =========================================================================

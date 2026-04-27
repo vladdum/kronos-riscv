@@ -251,6 +251,17 @@ module kronos_dcache
     end
   end
 
+  // hit_beat: full 64-bit beat from the hit way (consumed by the AMO RMW
+  // capture inside the always_ff block below). Declared here so synthesis
+  // sees it before its first use (Synth 8-6901).
+  logic [63:0] hit_beat;
+  always_comb begin
+    hit_beat = '0;
+    for (int w = 0; w < NUM_WAYS; w++) begin
+      if (hit_way_oh[w]) hit_beat = data_q[w][set_idx][beat_idx];
+    end
+  end
+
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q        <= DC_IDLE;
@@ -288,6 +299,18 @@ module kronos_dcache
           valid_q[s][w] <= 1'b0;
           dirty_q[s][w] <= 1'b0;
           tag_q[s][w]   <= '0;
+        end
+      end
+      // Explicit reset of data_q. Without this, Vivado inferred FFs with
+      // both async Set and async Reset on the byte-strobed write paths
+      // (Synth 8-7137), producing nondeterministic reset behavior in the
+      // gate-level netlist. Initializing all bytes to 0 gives every FF a
+      // deterministic Reset and eliminates the ambiguity.
+      for (int w = 0; w < NUM_WAYS; w++) begin
+        for (int s = 0; s < NUM_SETS; s++) begin
+          for (int b = 0; b < BEATS; b++) begin
+            data_q[w][s][b] <= '0;
+          end
         end
       end
     end else begin
@@ -604,9 +627,10 @@ module kronos_dcache
     axi_req_o.ar_valid = (state_q == DC_REFILL_AR);
     axi_req_o.r_ready  = (state_q == DC_REFILL_R);
 
-    // Write channel: dirty-eviction AW/W/B (line-aligned address)
-    axi_req_o.aw.addr  = {{(PHYS_ADDR_W - TAG_W - SET_IDX_W - OFFSET_W){1'b0}},
-                          evict_tag_q, miss_set_q, {OFFSET_W{1'b0}}};
+    // Write channel: dirty-eviction AW/W/B (line-aligned address).
+    // TAG_W + SET_IDX_W + OFFSET_W == PHYS_ADDR_W by construction, so no
+    // upper-pad concat is needed (Synth 8-693 zero-replication).
+    axi_req_o.aw.addr  = {evict_tag_q, miss_set_q, {OFFSET_W{1'b0}}};
     axi_req_o.aw.size  = 3'b011;
     axi_req_o.aw.len   = 8'd7;
     axi_req_o.aw.burst = axi_pkg::BURST_INCR;
@@ -633,16 +657,12 @@ module kronos_dcache
                      : amo_result;
   end
 
-  // ---- Hit data path (way-select, full 64-bit beat) -------------------------
-  logic [63:0] hit_beat;
+  // ---- Hit data path: select between cache hit and refill bypass -----------
+  // hit_beat is built earlier (top of the file) so the AMO RMW capture path
+  // can read it; here we just pick between the cached value and the
+  // critical-word-first bypass register on a refill.
   logic [63:0] beat_for_load;
-  always_comb begin
-    hit_beat = '0;
-    for (int w = 0; w < NUM_WAYS; w++) begin
-      if (hit_way_oh[w]) hit_beat = data_q[w][set_idx][beat_idx];
-    end
-    beat_for_load = bypass_valid_q ? bypass_data_q : hit_beat;
-  end
+  assign beat_for_load = bypass_valid_q ? bypass_data_q : hit_beat;
 
   // ---- Size/sign extension on loads ----------------------------------------
   logic [63:0] load_data_full;

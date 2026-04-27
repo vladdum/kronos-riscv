@@ -16,19 +16,23 @@ set GLS_DIR    [file join $REPO_ROOT build/gls]
 
 set HEX        ""
 set MODE       funcsim
+set STAGE      s5
 set TEST       unknown
 set INSTR_LAT  1
 set DATA_LAT   1
 set MAX_CYCLES 5000000
 set VCD        ""
+set TRACE      ""
 foreach arg $argv {
   if {[regexp {HEX=(.+)}         $arg -> v]} { set HEX        $v }
   if {[regexp {MODE=(\w+)}       $arg -> v]} { set MODE       $v }
+  if {[regexp {STAGE=(\w+)}      $arg -> v]} { set STAGE      $v }
   if {[regexp {TEST=(.+)}        $arg -> v]} { set TEST       $v }
   if {[regexp {INSTR_LAT=(\d+)}  $arg -> v]} { set INSTR_LAT  $v }
   if {[regexp {DATA_LAT=(\d+)}   $arg -> v]} { set DATA_LAT   $v }
   if {[regexp {MAX_CYCLES=(\d+)} $arg -> v]} { set MAX_CYCLES $v }
   if {[regexp {VCD=(.+)}         $arg -> v]} { set VCD        $v }
+  if {[regexp {TRACE=(.+)}       $arg -> v]} { set TRACE      $v }
 }
 if {$HEX eq ""} { error "HEX=<path> required" }
 
@@ -37,16 +41,30 @@ if {[file pathtype $HEX] eq "relative"} {
   set HEX [file join $REPO_ROOT $HEX]
 }
 
-set NETLIST_FUNCSIM [file join $GLS_DIR kronos_top_funcsim.v]
-set NETLIST_TIMESIM [file join $GLS_DIR kronos_top_timesim.v]
-set SDF             [file join $GLS_DIR kronos_top_timesim.sdf]
+# Stage-suffixed netlists with legacy stage-less fallback (s5).
+set NETLIST_FUNCSIM [file join $GLS_DIR kronos_top_${STAGE}_funcsim.v]
+set NETLIST_TIMESIM [file join $GLS_DIR kronos_top_${STAGE}_timesim.v]
+set SDF             [file join $GLS_DIR kronos_top_${STAGE}_timesim.sdf]
+if {![file exists $NETLIST_FUNCSIM]} {
+  set legacy [file join $GLS_DIR kronos_top_funcsim.v]
+  if {[file exists $legacy]} { set NETLIST_FUNCSIM $legacy }
+}
+if {![file exists $NETLIST_TIMESIM]} {
+  set legacy [file join $GLS_DIR kronos_top_timesim.v]
+  if {[file exists $legacy]} { set NETLIST_TIMESIM $legacy }
+}
+if {![file exists $SDF]} {
+  set legacy [file join $GLS_DIR kronos_top_timesim.sdf]
+  if {[file exists $legacy]} { set SDF $legacy }
+}
 set TB_TOP          [file join $REPO_ROOT tb/gls/tb_gls_top.sv]
 set MEM_MODEL       [file join $REPO_ROOT tb/gls/axi_mem_model.sv]
 
 set LOG_DIR [file join $GLS_DIR logs]
 file mkdir $LOG_DIR
-set LOG_PATH [file join $LOG_DIR ${TEST}.${MODE}.log]
-set XSIM_DIR [file join $GLS_DIR xsim]
+set LOG_PATH [file join $LOG_DIR ${TEST}.${STAGE}.${MODE}.log]
+# xsim snapshot is per-stage (different netlist contents).
+set XSIM_DIR [file join $GLS_DIR xsim_$STAGE]
 file mkdir $XSIM_DIR
 
 # Vivado ships glbl.v with the install — locate via $env(XILINX_VIVADO).
@@ -114,7 +132,8 @@ puts "\[GLS\] xsim — log: $LOG_PATH"
 set XSIM_PLUS [list HEX=$HEX MAX_CYCLES=$MAX_CYCLES \
                     INSTR_LAT=$INSTR_LAT DATA_LAT=$DATA_LAT \
                     TEST=$TEST]
-if {$VCD ne ""} { lappend XSIM_PLUS VCD=$VCD }
+if {$VCD ne ""}   { lappend XSIM_PLUS VCD=$VCD }
+if {$TRACE ne ""} { lappend XSIM_PLUS TRACE=$TRACE }
 set XSIM_ARGS [list xsim tb_snap --runall --onerror quit -nolog]
 foreach pa $XSIM_PLUS { lappend XSIM_ARGS --testplusarg $pa }
 set fd [open $LOG_PATH w]

@@ -24,3 +24,10 @@ riscv-arch-test/*
 !riscv-arch-test/config/
 !riscv-arch-test/work/
 .claude/
+.superpowers/
+
+# fusesoc local registry + auto-synced library checkouts.
+# Real dependency declarations live in kronos_riscv.core; fusesoc.conf is
+# per-machine, and fusesoc_libraries/ is a regenerable upstream cache.
+fusesoc.conf
+fusesoc_libraries/

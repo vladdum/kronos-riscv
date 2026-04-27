@@ -145,6 +145,14 @@ module kronos_icache
           tag_q[s][w]   <= '0;
         end
       end
+      // Explicit reset of data_q. Mirrors the dcache fix.
+      for (int w = 0; w < NUM_WAYS; w++) begin
+        for (int s = 0; s < NUM_SETS; s++) begin
+          for (int wd = 0; wd < WORDS; wd++) begin
+            data_q[w][s][wd] <= '0;
+          end
+        end
+      end
     end else begin
       miss_pulse_q   <= miss_event;
       bypass_valid_q <= 1'b0;        // default: clear bypass each cycle
