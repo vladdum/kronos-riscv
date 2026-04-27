@@ -23,6 +23,7 @@
 //   cg_fp_rm         6 bins  — FP rounding mode
 //   cg_trap          6 bins  — trap mcause
 //   cg_icache        2 bins  — I$ miss path exercise (Stage 5e)
+//   cg_dcache        2 bins  — D$ miss path exercise (Stage 5f)
 
 `timescale 1ns/1ps
 
@@ -70,6 +71,7 @@ module tb_crv_cov;
   logic        retire_mem_wen;
   logic [63:0] retire_mem_addr;
   logic [63:0] retire_mem_wdata;
+  logic [2:0]  retire_mem_funct3;
   logic        retire_csr_wen;
   logic [11:0] retire_csr_addr;
   logic [63:0] retire_csr_wdata;
@@ -101,6 +103,7 @@ module tb_crv_cov;
     .retire_mem_wen_o    (retire_mem_wen),
     .retire_mem_addr_o   (retire_mem_addr),
     .retire_mem_wdata_o  (retire_mem_wdata),
+    .retire_mem_funct3_o (retire_mem_funct3),
     .retire_csr_wen_o    (retire_csr_wen),
     .retire_csr_addr_o   (retire_csr_addr),
     .retire_csr_wdata_o  (retire_csr_wdata),
@@ -208,107 +211,138 @@ module tb_crv_cov;
   end
 
   // -------------------------------------------------------------------------
-  // AXI data port — zero-latency read/write
+  // AXI data port — multi-beat read + write (dcache issues 8-beat WRAP/INCR)
+  // Halt is detected via retire_mem_wen (store to 0x4000_0000 sentinel).
   // -------------------------------------------------------------------------
+  // Read channel
   logic        data_r_pend;
+  logic [63:0] data_ar_addr_q;
+  logic [ 7:0] data_ar_len_q;
+  logic [ 1:0] data_ar_burst_q;
+  logic [ 7:0] data_r_beat;
   logic [63:0] data_r_data_q;
-  logic        data_aw_done;
-  logic        data_w_done;
+  // Write channel
+  logic        data_aw_pend;
   logic [63:0] data_aw_addr_q;
-  logic [63:0] data_w_data_q;
-  logic [ 7:0] data_w_strb_q;
+  logic [ 7:0] data_aw_len_q;
+  logic [ 7:0] data_w_beat;
   logic        data_b_pend;
-  int          halted;
+  logic [31:0] halted;
   int          irq_countdown;  // cycles remaining for irq_timer assertion
 
   always_comb begin
     data_rsp          = '0;
-    data_rsp.ar_ready = 1'b1;
-    data_rsp.aw_ready = 1'b1;
-    data_rsp.w_ready  = 1'b1;
+    data_rsp.ar_ready = ~data_r_pend;
+    data_rsp.aw_ready = ~data_aw_pend;
+    data_rsp.w_ready  = data_aw_pend;
     data_rsp.r_valid  = data_r_pend;
     data_rsp.r.data   = data_r_data_q;
-    data_rsp.r.last   = 1'b1;
+    data_rsp.r.last   = (data_r_beat == data_ar_len_q);
     data_rsp.b_valid  = data_b_pend;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       data_r_pend    <= 1'b0;
+      data_ar_addr_q <= '0;
+      data_ar_len_q  <= '0;
+      data_ar_burst_q <= '0;
+      data_r_beat    <= '0;
       data_r_data_q  <= '0;
-      data_aw_done   <= 1'b0;
-      data_w_done    <= 1'b0;
+      data_aw_pend   <= 1'b0;
       data_aw_addr_q <= '0;
-      data_w_data_q  <= '0;
-      data_w_strb_q  <= '0;
+      data_aw_len_q  <= '0;
+      data_w_beat    <= '0;
       data_b_pend    <= 1'b0;
-      halted         <= 0;
-      irq_countdown  <= 0;
     end else begin
-      // Read
-      if (data_r_pend && data_req.r_ready) begin
-        if (data_req.ar_valid) begin
-          data_r_data_q <= {mem[wa(data_req.ar.addr)+1], mem[wa(data_req.ar.addr)]};
-        end else begin
+      // AR handshake
+      if (!data_r_pend && data_req.ar_valid) begin
+        data_ar_addr_q  <= data_req.ar.addr;
+        data_ar_len_q   <= data_req.ar.len;
+        data_ar_burst_q <= data_req.ar.burst;
+        data_r_beat     <= 8'd0;
+        data_r_data_q   <= {mem[wa(burst_addr(data_req.ar.addr, data_req.ar.len,
+                                              data_req.ar.burst, 8'd0)) + 1],
+                             mem[wa(burst_addr(data_req.ar.addr, data_req.ar.len,
+                                              data_req.ar.burst, 8'd0))]};
+        data_r_pend     <= 1'b1;
+      end else if (data_r_pend && data_req.r_ready) begin
+        if (data_r_beat == data_ar_len_q) begin
           data_r_pend <= 1'b0;
+          data_r_beat <= 8'd0;
+        end else begin
+          automatic logic [ 7:0] nb;
+          automatic logic [63:0] na;
+          nb            = data_r_beat + 8'd1;
+          na            = burst_addr(data_ar_addr_q, data_ar_len_q,
+                                     data_ar_burst_q, nb);
+          data_r_beat   <= nb;
+          data_r_data_q <= {mem[wa(na)+1], mem[wa(na)]};
         end
-      end else if (!data_r_pend && data_req.ar_valid) begin
-        data_r_data_q <= {mem[wa(data_req.ar.addr)+1], mem[wa(data_req.ar.addr)]};
-        data_r_pend   <= 1'b1;
       end
 
-      // Write AW
-      if (data_req.aw_valid) begin
+      // AW handshake
+      if (!data_aw_pend && data_req.aw_valid) begin
         data_aw_addr_q <= data_req.aw.addr;
-        data_aw_done   <= 1'b1;
-      end
-      // Write W
-      if (data_req.w_valid) begin
-        data_w_data_q <= data_req.w.data;
-        data_w_strb_q <= data_req.w.strb;
-        data_w_done   <= 1'b1;
+        data_aw_len_q  <= data_req.aw.len;
+        data_w_beat    <= 8'd0;
+        data_aw_pend   <= 1'b1;
       end
 
-      // Commit write once both AW and W received
-      if ((data_aw_done || data_req.aw_valid) &&
-          (data_w_done  || data_req.w_valid)  && !data_b_pend) begin
+      // W channel write beats
+      if (data_aw_pend && data_req.w_valid) begin
         automatic logic [63:0] waddr;
-        automatic logic [63:0] wdata;
-        automatic logic [ 7:0] wstrb;
         automatic int wi_lo, wi_hi;
-        waddr  = data_aw_done ? data_aw_addr_q : data_req.aw.addr;
-        wdata  = data_w_done  ? data_w_data_q  : data_req.w.data;
-        wstrb  = data_w_done  ? data_w_strb_q  : data_req.w.strb;
+        waddr  = data_aw_addr_q + {56'b0, data_w_beat} * 8;
         wi_lo  = int'({waddr[16:3], 1'b0});
         wi_hi  = wi_lo + 1;
-        if ((waddr & 64'hC000_0000) == 64'h4000_0000) begin
-          halted <= halted + 1;
-        end else if (waddr == 64'h8000_0000) begin
-          // IRQ trigger: assert irq_timer_i for 16 cycles (matches sim_main.cpp).
-          irq_countdown <= 16;
-        end else begin
-          if (wstrb[0]) mem[wi_lo][ 7: 0] <= wdata[ 7: 0];
-          if (wstrb[1]) mem[wi_lo][15: 8] <= wdata[15: 8];
-          if (wstrb[2]) mem[wi_lo][23:16] <= wdata[23:16];
-          if (wstrb[3]) mem[wi_lo][31:24] <= wdata[31:24];
-          if (wstrb[4]) mem[wi_hi][ 7: 0] <= wdata[39:32];
-          if (wstrb[5]) mem[wi_hi][15: 8] <= wdata[47:40];
-          if (wstrb[6]) mem[wi_hi][23:16] <= wdata[55:48];
-          if (wstrb[7]) mem[wi_hi][31:24] <= wdata[63:56];
+        if ((waddr & 64'hC000_0000) != 64'h4000_0000) begin
+          if (data_req.w.strb[0]) mem[wi_lo][ 7: 0] <= data_req.w.data[ 7: 0];
+          if (data_req.w.strb[1]) mem[wi_lo][15: 8] <= data_req.w.data[15: 8];
+          if (data_req.w.strb[2]) mem[wi_lo][23:16] <= data_req.w.data[23:16];
+          if (data_req.w.strb[3]) mem[wi_lo][31:24] <= data_req.w.data[31:24];
+          if (data_req.w.strb[4]) mem[wi_hi][ 7: 0] <= data_req.w.data[39:32];
+          if (data_req.w.strb[5]) mem[wi_hi][15: 8] <= data_req.w.data[47:40];
+          if (data_req.w.strb[6]) mem[wi_hi][23:16] <= data_req.w.data[55:48];
+          if (data_req.w.strb[7]) mem[wi_hi][31:24] <= data_req.w.data[63:56];
         end
-        data_aw_done <= 1'b0;
-        data_w_done  <= 1'b0;
-        data_b_pend  <= 1'b1;
+        data_w_beat <= data_w_beat + 8'd1;
+        if (data_req.w.last) begin
+          data_aw_pend <= 1'b0;
+          data_b_pend  <= 1'b1;
+        end
       end
 
       // B handshake
       if (data_b_pend && data_req.b_ready) begin
         data_b_pend <= 1'b0;
       end
-
-      // IRQ countdown — decrement each cycle until exhausted.
-      if (irq_countdown > 0) irq_countdown <= irq_countdown - 1;
     end
+  end
+
+  // -------------------------------------------------------------------------
+  // IRQ trigger: store to 0x80000000 from retire port (write-back D$ may
+  // never write the magic address through to AXI, so we watch retire).
+  // -------------------------------------------------------------------------
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      irq_countdown <= 0;
+    end else if (retire_mem_wen && retire_mem_addr == 64'h8000_0000) begin
+      irq_countdown <= 16;
+    end else if (irq_countdown > 0) begin
+      irq_countdown <= irq_countdown - 1;
+    end
+  end
+
+  // -------------------------------------------------------------------------
+  // Halt detection via retire port (store to 0x4000_0000 sentinel).
+  // Works with write-back dcache (halt store may never trigger AXI writeback).
+  // -------------------------------------------------------------------------
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)
+      halted <= '0;
+    else if (retire_mem_wen && (retire_mem_addr & 64'hC000_0000) == 64'h4000_0000)
+      halted <= halted + 32'd1;
   end
 
   assign irq_timer = (irq_countdown > 0);
@@ -421,6 +455,15 @@ module tb_crv_cov;
   // -------------------------------------------------------------------------
   bit cov_icache_miss_seen;    // at least one I$ miss occurred
   bit cov_icache_no_miss_seen; // at least one cycle with no miss (normal fetch)
+
+  // -------------------------------------------------------------------------
+  // cg_dcache (2 bins) — Stage 5f D-cache miss path exercise (Stage 5f)
+  // Tracks whether the D$ miss event (miss_pulse_o from kronos_dcache,
+  // mapped to event_bus[17] via dcache_miss_pulse in kronos_top) was ever
+  // asserted and whether at least one hit cycle was observed.
+  // -------------------------------------------------------------------------
+  bit cov_dcache_miss_seen;    // at least one D$ miss occurred
+  bit cov_dcache_no_miss_seen; // at least one D$ hit (no miss)
 
   // -------------------------------------------------------------------------
   // Sampling logic — combinational helpers
@@ -631,6 +674,13 @@ module tb_crv_cov;
     else                         cov_icache_no_miss_seen <= 1'b1;
   end
 
+  // -- cg_dcache (Stage 5f) --------------------------------------------------
+  // Hierarchical reference to the dcache_miss_pulse signal in kronos_top.
+  always_ff @(posedge clk) begin
+    if (u_top.dcache_miss_pulse) cov_dcache_miss_seen    <= 1'b1;
+    else                         cov_dcache_no_miss_seen <= 1'b1;
+  end
+
   // =========================================================================
   // Coverage dump at $finish
   // =========================================================================
@@ -734,6 +784,9 @@ module tb_crv_cov;
     // cg_icache
     $fwrite(fd, "cg_icache.miss_seen         %0d\n", cov_icache_miss_seen);
     $fwrite(fd, "cg_icache.no_miss_seen      %0d\n", cov_icache_no_miss_seen);
+    // cg_dcache (Stage 5f)
+    $fwrite(fd, "cg_dcache.miss_seen         %0d\n", cov_dcache_miss_seen);
+    $fwrite(fd, "cg_dcache.no_miss_seen      %0d\n", cov_dcache_no_miss_seen);
     $fclose(fd);
   endtask
 

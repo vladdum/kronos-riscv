@@ -17,6 +17,7 @@ per-stage section.
 | CRV harness         | `tools/crv/` + `tb/stage5/tb_crv_cov.sv` | Random program generator + Sail diff + functional coverage. |
 | CRV assists         | `sw/stage5/crv_assists/`              | Directed tests for residual covergroup bins random can't hit.|
 | I-cache TB          | `tb/stage5/tb_icache.sv`              | 4-way / PLRU / CWF / WRAP / FENCE.I unit tests. |
+| D-cache TB          | `tb/stage5/tb_dcache.sv`              | Load + store + dirty-eviction + AMO + LR/SC unit tests. |
 
 ## Stage 0 — Single-cycle RV32I (OBI)
 
@@ -194,6 +195,13 @@ per-stage section.
 |---------------------|------------------------------------------|
 | Unit TB             | `make sim-icache`                       |
 | Integration         | `make run-s5-test_icache_hit_loop`      |
+
+### Data cache
+
+| Test                | Make target                             |
+|---------------------|------------------------------------------|
+| Unit TB             | `make sim-dcache`                       |
+| Integration         | `make run-s5-test_dcache_hit_loop`      |
 
 ## Stage 5b — adds FDIV/FSQRT
 

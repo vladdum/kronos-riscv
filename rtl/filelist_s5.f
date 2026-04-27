@@ -17,6 +17,7 @@ stage5/kronos_regfile_fp.sv
 stage5/kronos_icache.sv
 stage5/kronos_csr.sv
 stage5/kronos_lsu.sv
+stage5/kronos_dcache.sv
 stage5/kronos_muldiv.sv
 stage5/kronos_decompress.sv
 stage5/fpu/kronos_fpu_scoreboard.sv

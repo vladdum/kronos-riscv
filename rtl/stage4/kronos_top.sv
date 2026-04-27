@@ -41,6 +41,7 @@ module kronos_top
   output logic        retire_mem_wen_o,
   output logic [63:0] retire_mem_addr_o,
   output logic [63:0] retire_mem_wdata_o,
+  output logic [2:0]  retire_mem_funct3_o,
   output logic        retire_csr_wen_o,
   output logic [11:0] retire_csr_addr_o,
   output logic [63:0] retire_csr_wdata_o,
@@ -660,9 +661,10 @@ module kronos_top
   assign retire_fp_wen_o    = 1'b0;
   assign retire_fp_rd_o     = {5{1'b0}};
   assign retire_fp_wdata_o  = {64{1'b0}};
-  assign retire_mem_wen_o   = 1'b0;
-  assign retire_mem_addr_o  = {64{1'b0}};
-  assign retire_mem_wdata_o = {64{1'b0}};
+  assign retire_mem_wen_o    = 1'b0;
+  assign retire_mem_addr_o   = {64{1'b0}};
+  assign retire_mem_wdata_o  = {64{1'b0}};
+  assign retire_mem_funct3_o = 3'b0;
   assign retire_csr_wen_o   = 1'b0;
   assign retire_csr_addr_o  = {12{1'b0}};
   assign retire_csr_wdata_o = {64{1'b0}};

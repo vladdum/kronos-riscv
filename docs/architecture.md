@@ -489,3 +489,47 @@ occupy the appropriate 32-bit lane.
 
 See `docs/superpowers/specs/2026-04-26-icache-design.md`.
 
+### Data cache (Stage 5f)
+
+A 16 KB, 4-way set-associative, write-back / write-allocate data cache
+between `kronos_lsu` and the data AXI master.  Same organization as the
+I-cache (Tree-PLRU, 8-beat AXI WRAP refill, CWF bypass) plus the write
+side: per-line dirty bit, byte-strobed store path, dirty-eviction
+writeback FSM (8-beat AXI INCR write burst), AMO read-modify-write
+inside the cache, and a single LR/SC reservation register.
+
+`kronos_lsu` was refactored from a full AXI master (~435 lines with
+embedded AMO RMW + LR/SC) to a thin ~175-line adapter; the cache owns
+the AXI master, AMO arithmetic, and reservation tracking.
+
+| Parameter        | Value                                              |
+|------------------|----------------------------------------------------|
+| Total size       | 16 KB                                              |
+| Associativity    | 4-way                                              |
+| Line size        | 64 bytes / 8 beats × 64-bit                        |
+| Sets             | 64                                                 |
+| Replacement      | Tree-PLRU                                          |
+| Write policy     | Write-back, write-allocate                         |
+| Refill           | Critical-word-first via 8-beat AXI WRAP burst      |
+| Eviction         | If victim dirty: 8-beat AXI INCR write burst       |
+| Hit latency      | 1 cycle (registered)                               |
+
+**AMO + LR/SC.** All A-extension instructions execute inside the cache.
+AMO ops (AMOSWAP / ADD / AND / OR / XOR / MIN / MAX / MINU / MAXU, both
+.W and .D) read the line, compute the new value, write it back, and
+return the old value.  LR sets a single-pair reservation register; SC
+checks the reservation and writes only on match.  The reservation is
+cleared by SC (success or fail), an intervening plain store to the same
+line, trap entry (via `rsrv_clear_i` from `trap_taken_pulse`), or reset.
+
+**Performance counter.** D$ miss → event ID `0x11`, wired through
+`event_bus[17]`.
+
+**Sail diff.** AMO writes now surface in `retire_mem_wen_o` (a new
+`is_amo_write` field in `mem_wb_reg_t`), resolving the Stage 5d gap that
+forced AMOs to be excluded from the CRV `mem_ordering` scenario.  The
+`cg_amo.*` exclusions in `tools/crv/coverage_excludes.txt` were removed
+and AMOs were re-included in random testing.
+
+See `docs/superpowers/specs/2026-04-27-dcache-design.md`.
+

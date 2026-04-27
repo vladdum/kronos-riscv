@@ -220,6 +220,7 @@ package kronos_pkg;
     logic [63:0]    csr_rdata;
     logic [31:0]    pc4;
     logic           valid;
+    logic           is_amo_write;  // AMO/SC op that wrote memory (Stage 5f)
     // Retire-trace fields (populated for differential tracing against a
     // reference model).  Not consumed by the pipeline itself; kept in the
     // same flop so the values line up with the cycle mem_wb_q advances.

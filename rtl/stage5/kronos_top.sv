@@ -44,6 +44,7 @@ module kronos_top
   output logic        retire_mem_wen_o,
   output logic [63:0] retire_mem_addr_o,
   output logic [63:0] retire_mem_wdata_o,
+  output logic [2:0]  retire_mem_funct3_o,
   output logic        retire_csr_wen_o,
   output logic [11:0] retire_csr_addr_o,
   output logic [63:0] retire_csr_wdata_o,
@@ -160,8 +161,21 @@ module kronos_top
   // frozen by instr_fetch_stall.
   logic             mem_done_q;
   logic [63:0]      lsu_rdata_latch;  // holds rdata across the stall gap
-  kronos_axi_req_t  data_req;
-  kronos_axi_resp_t data_rsp;
+  logic             amo_write_latch;  // holds is_amo_write across the stall gap
+
+  // D-cache interface (LSU ↔ dcache)
+  logic        dcache_req;
+  logic [63:0] dcache_addr;
+  logic [2:0]  dcache_size;
+  logic        dcache_we;
+  logic [63:0] dcache_wdata;
+  logic        dcache_amo_req;
+  logic [4:0]  dcache_amo_op;
+  logic        dcache_data_valid;
+  logic [63:0] dcache_rdata;
+  logic        dcache_sc_success;
+  logic        dcache_stall;
+  logic        dcache_miss_pulse;
 
   // Stage 5a: LSU FP response
   logic             lsu_fp_dest;
@@ -421,38 +435,66 @@ module kronos_top
     .event_bus_i      (event_bus)
   );
 
-  // STAGE4: 64-bit LSU with AXI4 interface and A-extension stubs.
+  // STAGE5f: 64-bit LSU — thin adapter to kronos_dcache.
   kronos_lsu u_lsu (
-    .clk_i           (clk_i),
-    .rst_ni          (rst_ni),
-    .req_i           (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store
-                      | ex_mem_q.dec.is_amo) & ~mem_done_q),
-    .we_i            (ex_mem_q.dec.is_store | ex_mem_q.dec.fp_store),
-    .addr_i          (ex_mem_q.alu_result[31:0]),
-    .wdata_i         (ex_mem_q.rs2_data),
-    .funct3_i        (ex_mem_q.dec.mem_funct3),
-    .rdata_o         (lsu_rdata),
-    .valid_o         (lsu_valid),
-    .mem_stall_o     (mem_stall),
+    .clk_i              (clk_i),
+    .rst_ni             (rst_ni),
+    .req_i              (ex_mem_q.valid & (ex_mem_q.dec.is_load | ex_mem_q.dec.is_store
+                         | ex_mem_q.dec.is_amo) & ~mem_done_q),
+    .we_i               (ex_mem_q.dec.is_store | ex_mem_q.dec.fp_store),
+    .addr_i             (ex_mem_q.alu_result[31:0]),
+    .wdata_i            (ex_mem_q.rs2_data),
+    .funct3_i           (ex_mem_q.dec.mem_funct3),
+    .rdata_o            (lsu_rdata),
+    .valid_o            (lsu_valid),
+    .mem_stall_o        (mem_stall),
     // Stage 5a: FP load/store ports
-    .fp_dest_req_i   (ex_mem_q.valid &
-                      (ex_mem_q.dec.fp_load | ex_mem_q.dec.fp_store) & ~mem_done_q),
-    .fp_store_data_i (ex_mem_q.rs2_data),
-    .fp_dest_rsp_o   (lsu_fp_dest),
-    .fp_rdata_o      (lsu_fp_rdata),
-    // A-extension stubs
-    .is_lr_i         (ex_mem_q.dec.is_lr),
-    .is_sc_i         (ex_mem_q.dec.is_sc),
-    .is_amo_i        (ex_mem_q.dec.is_amo),
-    .amo_funct5_i    (ex_mem_q.dec.amo_funct5),
-    .amo_src_i       (ex_mem_q.rs2_data),
-    .sc_success_o    (),
-    .axi_req_o       (data_req),
-    .axi_rsp_i       (data_rsp)
+    .fp_dest_req_i      (ex_mem_q.valid &
+                         (ex_mem_q.dec.fp_load | ex_mem_q.dec.fp_store) & ~mem_done_q),
+    .fp_store_data_i    (ex_mem_q.rs2_data),
+    .fp_dest_rsp_o      (lsu_fp_dest),
+    .fp_rdata_o         (lsu_fp_rdata),
+    // A-extension
+    .is_lr_i            (ex_mem_q.dec.is_lr),
+    .is_sc_i            (ex_mem_q.dec.is_sc),
+    .is_amo_i           (ex_mem_q.dec.is_amo),
+    .amo_funct5_i       (ex_mem_q.dec.amo_funct5),
+    .amo_src_i          (ex_mem_q.rs2_data),
+    .sc_success_o       (),
+    // D-cache interface
+    .dcache_req_o       (dcache_req),
+    .dcache_addr_o      (dcache_addr),
+    .dcache_size_o      (dcache_size),
+    .dcache_we_o        (dcache_we),
+    .dcache_wdata_o     (dcache_wdata),
+    .dcache_amo_req_o   (dcache_amo_req),
+    .dcache_amo_op_o    (dcache_amo_op),
+    .dcache_data_valid_i(dcache_data_valid),
+    .dcache_rdata_i     (dcache_rdata),
+    .dcache_sc_success_i(dcache_sc_success),
+    .dcache_stall_i     (dcache_stall)
   );
 
-  assign data_axi_req_o = data_req;
-  assign data_rsp       = data_axi_rsp_i;
+  // D-cache instance: owns AXI master for the data port.
+  kronos_dcache u_dcache (
+    .clk_i        (clk_i),
+    .rst_ni       (rst_ni),
+    .req_i        (dcache_req),
+    .addr_i       (dcache_addr),
+    .size_i       (dcache_size),
+    .we_i         (dcache_we),
+    .wdata_i      (dcache_wdata),
+    .amo_req_i    (dcache_amo_req),
+    .amo_op_i     (dcache_amo_op),
+    .rsrv_clear_i (trap_taken_pulse),
+    .data_valid_o (dcache_data_valid),
+    .rdata_o      (dcache_rdata),
+    .sc_success_o (dcache_sc_success),
+    .stall_o      (dcache_stall),
+    .axi_req_o    (data_axi_req_o),
+    .axi_rsp_i    (data_axi_rsp_i),
+    .miss_pulse_o (dcache_miss_pulse)
+  );
 
   // Stage 5a: FPU top
   assign fpu_tag_in = '{rd: id_ex_q.dec.rd, fp_dest: id_ex_q.dec.rd_fp};
@@ -910,10 +952,14 @@ module kronos_top
     if (!rst_ni) begin
       mem_done_q      <= 1'b0;
       lsu_rdata_latch <= {64{1'b0}};
+      amo_write_latch <= 1'b0;
     end else begin
       if (lsu_valid) begin
         mem_done_q      <= 1'b1;
         lsu_rdata_latch <= lsu_rdata;
+        // AMO write: any AMO (not LR) or a successful SC.
+        amo_write_latch <= ex_mem_q.dec.is_amo & ~ex_mem_q.dec.is_lr
+                         | ex_mem_q.dec.is_sc & dcache_sc_success;
       end
       if (mem_wb_en) begin
         mem_done_q <= 1'b0;
@@ -933,9 +979,13 @@ module kronos_top
       mem_wb_q.lsu_rdata  <= lsu_valid ? lsu_rdata : lsu_rdata_latch;
       mem_wb_q.csr_rdata  <= ex_mem_q.csr_rdata;
       mem_wb_q.pc4        <= ex_mem_q.pc + (ex_mem_q.is_16b ? 32'd2 : 32'd4);
-      mem_wb_q.valid      <= ex_mem_q.valid;
+      mem_wb_q.valid        <= ex_mem_q.valid;
+      mem_wb_q.is_amo_write <= lsu_valid
+                             ? (ex_mem_q.dec.is_amo & ~ex_mem_q.dec.is_lr
+                              | ex_mem_q.dec.is_sc & dcache_sc_success)
+                             : amo_write_latch;
       // Retire-trace field snapshots.
-      mem_wb_q.pc         <= ex_mem_q.pc;
+      mem_wb_q.pc           <= ex_mem_q.pc;
       mem_wb_q.instr      <= ex_mem_q.instr;
       mem_wb_q.mem_addr   <= ex_mem_q.alu_result;
       mem_wb_q.mem_wdata  <= ex_mem_q.rs2_data;
@@ -1019,7 +1069,8 @@ module kronos_top
   assign event_bus[ 8]    = trap_taken_pulse;
   assign event_bus[15:9]  = '0;
   assign event_bus[16]    = icache_miss_pulse;  // event ID 0x10 = I$ miss
-  assign event_bus[31:17] = '0;                 // reserved for future events
+  assign event_bus[17]    = dcache_miss_pulse;  // event ID 0x11 = D$ miss
+  assign event_bus[31:18] = '0;                 // reserved for future events
 
   assign retire_valid_o      = retire_advance;
   assign retire_pc_o         = {32'b0, mem_wb_q.pc};
@@ -1039,8 +1090,9 @@ module kronos_top
                                   : {32'hFFFF_FFFF, mem_wb_q.lsu_rdata[31:0]})
                                : mem_wb_q.alu_result;
 
-  assign retire_mem_wen_o    = retire_advance & mem_wb_q.dec.is_store;
+  assign retire_mem_wen_o    = retire_advance & (mem_wb_q.dec.is_store | mem_wb_q.is_amo_write);
   assign retire_mem_addr_o   = mem_wb_q.mem_addr;
+  assign retire_mem_funct3_o = mem_wb_q.dec.mem_funct3;
   // Mask store data to the bytes actually written (matching Sail's trace format)
   assign retire_mem_wdata_o  = mem_wb_q.mem_wdata &
                                (mem_wb_q.dec.mem_funct3[1:0] == 2'b11 ? 64'hFFFF_FFFF_FFFF_FFFF :

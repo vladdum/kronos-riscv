@@ -11,22 +11,9 @@
 cg_instr_class.op_fence
 
 # ── AMO (atomic memory operations) ─────────────────────────────────────────
-# Stage5 decodes LR/SC/AMO but uses a separate AMO execution path that does
-# not assert retire_mem_wen_o on the write-back half of the RMW operation.
-# All 12 AMO-related bins are therefore unreachable via the current coverage
-# predicates; fixing them requires extending the retire bus to also flag AMO.
-cg_instr_class.op_amo
-cg_amo.lr
-cg_amo.sc
-cg_amo.amoswap
-cg_amo.amoadd
-cg_amo.amoxor
-cg_amo.amoand
-cg_amo.amoor
-cg_amo.amomin
-cg_amo.amomax
-cg_amo.amominu
-cg_amo.amomaxu
+# Stage 5f: AMO writes now surface in retire_mem_wen_o via is_amo_write.
+# All AMO bins are covered by assist_amo.S directed test.
+# (No exclusions needed.)
 
 # ── SLT / SLTU result sign ──────────────────────────────────────────────────
 # SLT and SLTU write exactly 0 or 1 to rd.  The result is always a small
