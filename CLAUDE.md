@@ -20,7 +20,8 @@ Development follows a staged learning progression:
 | 4     | RV64I + A extension                             | RV64IMAC         | AXI4 | Complete |
 | 5a    | F/D extensions (pipelined, no FDIV/FSQRT)       | RV64IMAFD        | AXI4 | Complete |
 | 5b    | FDIV/FSQRT (iterative SRT)                      | RV64IMAFDC       | AXI4 | Complete |
-| 6     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4 | Planned  |
+| 6a    | Privileged modes (M/S/U) + trap delegation + PMP | RV64IMAFDC      | AXI4 | Complete |
+| 7     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4 | Planned  |
 
 All five completed stages pass the full `riscv-arch-test` (ACT4) compliance
 suite. See *ACT4 compliance* below.

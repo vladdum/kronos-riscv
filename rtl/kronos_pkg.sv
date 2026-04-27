@@ -61,6 +61,15 @@ package kronos_pkg;
   } muldiv_op_e;
 
   // -------------------------------------------------------------------------
+  // Stage 6a: Privilege modes (RISC-V Privileged Spec Table 1.1)
+  // -------------------------------------------------------------------------
+  typedef enum logic [1:0] {
+    PRIV_U = 2'b00,
+    PRIV_S = 2'b01,
+    PRIV_M = 2'b11
+  } priv_e;
+
+  // -------------------------------------------------------------------------
   // Stage 5a: FPU operation select (declared here so decoded_instr_t can
   // embed fp_op_e; must appear before the struct definition).
   // -------------------------------------------------------------------------
@@ -117,6 +126,7 @@ package kronos_pkg;
     logic        is_ecall;
     logic        is_ebreak;
     logic        is_mret;
+    logic        is_sret;       // Stage 6a
     // M extension
     logic        is_muldiv;
     muldiv_op_e  muldiv_op;
@@ -274,6 +284,49 @@ package kronos_pkg;
   localparam logic [4:0] EVT_INSTR_FETCH_STALL   = 5'h1D;
   localparam logic [4:0] EVT_BRANCH_MISPREDICT   = 5'h1E;
   localparam logic [4:0] EVT_EX_REDIRECT         = 5'h1F;
+
+  // -------------------------------------------------------------------------
+  // Stage 6a: New CSR addresses introduced in this stage.
+  // Using `localparam logic [11:0]` so we can index `csr_addr_i` directly.
+  // -------------------------------------------------------------------------
+  // S-mode supervisor CSRs (RISC-V Privileged Spec § 4.1)
+  localparam logic [11:0] CSR_SSTATUS    = 12'h100;
+  localparam logic [11:0] CSR_SIE        = 12'h104;
+  localparam logic [11:0] CSR_STVEC      = 12'h105;
+  localparam logic [11:0] CSR_SCOUNTEREN = 12'h106;
+  localparam logic [11:0] CSR_SENVCFG    = 12'h10A;
+  localparam logic [11:0] CSR_SSCRATCH   = 12'h140;
+  localparam logic [11:0] CSR_SEPC       = 12'h141;
+  localparam logic [11:0] CSR_SCAUSE     = 12'h142;
+  localparam logic [11:0] CSR_STVAL      = 12'h143;
+  localparam logic [11:0] CSR_SIP        = 12'h144;
+  localparam logic [11:0] CSR_SATP       = 12'h180;
+  // Delegation + counter-enable
+  localparam logic [11:0] CSR_MEDELEG    = 12'h302;
+  localparam logic [11:0] CSR_MIDELEG    = 12'h303;
+  localparam logic [11:0] CSR_MCOUNTEREN = 12'h306;
+  // PMP cfg + addr (8 active regions; pmpcfg2 + pmpaddr8..15 hardwired 0)
+  localparam logic [11:0] CSR_PMPCFG0    = 12'h3A0;
+  localparam logic [11:0] CSR_PMPCFG2    = 12'h3A2;
+  localparam logic [11:0] CSR_PMPADDR0   = 12'h3B0;
+  localparam logic [11:0] CSR_PMPADDR7   = 12'h3B7;
+  localparam logic [11:0] CSR_PMPADDR8   = 12'h3B8;
+  localparam logic [11:0] CSR_PMPADDR15  = 12'h3BF;
+
+  // -------------------------------------------------------------------------
+  // Stage 6a: synchronous trap causes used by PMP and delegation paths.
+  // Spec causes 12/13/15 (page faults) are defined here so 6b only adds
+  // the path that raises them, not new constants.
+  // -------------------------------------------------------------------------
+  localparam logic [4:0] CAUSE_INSTR_ACCESS_FAULT = 5'd1;
+  localparam logic [4:0] CAUSE_LOAD_ACCESS_FAULT  = 5'd5;
+  localparam logic [4:0] CAUSE_STORE_ACCESS_FAULT = 5'd7;
+  localparam logic [4:0] CAUSE_INSTR_PAGE_FAULT   = 5'd12;
+  localparam logic [4:0] CAUSE_LOAD_PAGE_FAULT    = 5'd13;
+  localparam logic [4:0] CAUSE_STORE_PAGE_FAULT   = 5'd15;
+  localparam logic [4:0] CAUSE_ECALL_U            = 5'd8;
+  localparam logic [4:0] CAUSE_ECALL_S            = 5'd9;
+  localparam logic [4:0] CAUSE_ECALL_M            = 5'd11;
 
   // Rounding modes (IEEE 754 / RISC-V FRM encoding).
   typedef enum logic [2:0] {

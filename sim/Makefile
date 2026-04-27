@@ -7,6 +7,7 @@ SW_DIR_S3 := ../sw/stage3
 SW_DIR_S4 := ../sw/stage4
 SW_DIR_S5  := ../sw/stage5
 SW_DIR_S5B := ../sw/stage5b
+SW_DIR_S6  := ../sw/stage6
 OBJ_DIR   := obj_dir
 
 VERILATOR := verilator
@@ -117,6 +118,10 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-decode-fp-cov \
         sim-s5b \
         sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-group-s5-int \
+        build-s6 run-s6-% sim-s6 gen-arch-tests-s6 sim-arch-test-s6 \
+        sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6 \
+        sim-pmp sim-priv-csr \
+        sim-group-s6-int \
         sim-group-s1s2 sim-group-s3s4 sim-group-fp-unit sim-group-fp-top \
         sim-group-crv-smoke \
         sim-diff-% sim-diff-all sim-diff-s5-traced \
@@ -738,6 +743,8 @@ SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
 
 SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger
 
+SIM_GROUP_S6_INT  := sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-priv-csr sim-pmp
+
 $(OBJ_DIR):
 	mkdir -p $@
 
@@ -746,6 +753,7 @@ sim-group-s3s4:    $(SIM_GROUP_S3S4)    | $(OBJ_DIR)
 sim-group-fp-unit: $(SIM_GROUP_FP_UNIT) | $(OBJ_DIR)
 sim-group-fp-top:  $(SIM_GROUP_FP_TOP)  | $(OBJ_DIR)
 sim-group-s5-int:  $(SIM_GROUP_S5_INT)  | $(OBJ_DIR)
+sim-group-s6-int:  $(SIM_GROUP_S6_INT)  | $(OBJ_DIR)
 
 SIM_REPORT_DIR := $(OBJ_DIR)/sim-results
 
@@ -992,6 +1000,119 @@ sim-arch-test-s5: gen-arch-tests-s5
 	    "$(abspath run_arch_test_s5.sh)" \
 	    work/kronos-rv64imafd/elfs/
 
+# -------------------- Stage 6 (S-mode + PMP) --------------------
+RTL_DIR_S6 := $(RTL_DIR)/stage6
+SIM_BIN_S6 := $(OBJ_DIR)/s6/V$(TOP_S5)
+
+SV_FILES_S6 := $(AXI_PKG_SV) \
+               $(RTL_DIR)/kronos_pkg.sv \
+               $(RTL_DIR_S6)/kronos_alu.sv \
+               $(RTL_DIR_S6)/kronos_decode.sv \
+               $(RTL_DIR)/stage0/kronos_regfile.sv \
+               $(RTL_DIR_S6)/kronos_icache.sv \
+               $(RTL_DIR_S6)/kronos_csr.sv \
+               $(RTL_DIR_S6)/kronos_pmp.sv \
+               $(RTL_DIR_S6)/kronos_trigger.sv \
+               $(RTL_DIR_S6)/kronos_lsu.sv \
+               $(RTL_DIR_S6)/kronos_dcache.sv \
+               $(RTL_DIR)/stage1/kronos_forward.sv \
+               $(RTL_DIR)/stage1/kronos_hazard.sv \
+               $(RTL_DIR_S6)/kronos_muldiv.sv \
+               $(RTL_DIR_S6)/kronos_decompress.sv \
+               $(RTL_DIR_S6)/kronos_align.sv \
+               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR_S6)/kronos_top.sv \
+               sim_top.sv \
+               $(RTL_DIR_S6)/kronos_regfile_fp.sv \
+               $(HARDFLOAT_V) \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_scoreboard.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fmisc.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fcvt.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fadd.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fmul.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fma.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fdiv_core.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fsqrt_core.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_iter.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_top.sv
+
+build-s6: $(SIM_BIN_S6)
+
+$(SIM_BIN_S6): $(SV_FILES_S6) $(abspath sim_main.cpp)
+	mkdir -p $(OBJ_DIR)/s6
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	  --trace --public-flat-rw \
+	  --top-module $(TOP_S5) \
+	  $(SV_FILES_S6) $(abspath sim_main.cpp) \
+	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU -DKRONOS_HAS_S6_PRIV" \
+	  -Mdir $(OBJ_DIR)/s6 \
+	  $(PULP_AXI_INC) \
+	  -o V$(TOP_S5)
+
+run-s6-%: build-s6
+	./$(SIM_BIN_S6) $(SW_DIR_S6)/build/$*.hex
+
+# ── Stage 6 full regression (assembly tests) ───────────────────────────────
+sim-s6: build-s6
+	@$(MAKE) -C $(SW_DIR_S6) all > /dev/null 2>&1; \
+	tmpdir=$$(mktemp -d); pids=""; \
+	for hex in $(SW_DIR_S6)/build/*.hex; do \
+	  [ -f "$$hex" ] || continue; \
+	  name=$$(basename $$hex .hex); \
+	  { out=$$(./$(SIM_BIN_S6) $$hex 2>&1); \
+	    x10=$$(echo "$$out" | grep -oP 'x10 = \K[0-9]+'); \
+	    echo "$$hex $$x10"; } > $$tmpdir/$$name & \
+	  pids="$$pids $$!"; \
+	done; \
+	wait $$pids; \
+	pass=0; fail=0; \
+	for f in $$tmpdir/*; do \
+	  [ -f "$$f" ] || continue; \
+	  read hex x10 < $$f; \
+	  if [ "$$x10" = "0" ]; then \
+	    pass=$$((pass+1)); \
+	  else \
+	    echo "FAIL: $$hex (x10=$$x10)"; fail=$$((fail+1)); \
+	  fi; \
+	done; \
+	rm -rf $$tmpdir; \
+	echo "Stage 6 assembly: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ] || [ $$pass -eq 0 -a $$fail -eq 0 ]
+
+.PHONY: gen-arch-tests-s6 sim-arch-test-s6
+# Stage 6 uses the rv64imafdc-priv ACT4 config: full RV64IMAFDC (Zcd) plus
+# the privileged subset (Sm/S/U) declared in extensions.txt. Excluded suites:
+#   - Zaamo,Zalrsc                : atomics covered end-to-end via M/F/D suites + assist_amo CRV
+#   - Sv,Svade,Svadu,SvaduPMP,
+#     SvPMP,SvZicbo,SvPMPZicbo,
+#     Svbare                      : no Sv MMU in stage 6 (sail config rejects Svbare)
+#   - PMPSm,PMPZca,PMPmisaligned  : WARL-config dependent; covered by directed PMP asm tests
+#   - InterruptsSm,ExceptionsZalrsc,
+#     ExceptionsZaamo             : ACT4-framework default exclusions
+#   - ExceptionsZicboS,ExceptionsZicboU,
+#     ExceptionsZc                : need Zicbo/Zcb (not implemented in s6)
+#   - ExceptionsSm                : sail reference exec-time exceeds 60 s
+#   - SmF,ZicsrF                  : test MARCH requires Zfa/Zfh (not implemented)
+#   - ZicntrS,ZicntrU,InterruptsU,
+#     U,UF                        : sail self-check mismatches under M+S+U+PMP config
+#                                   (S-mode/U-mode coverage comes from sw/stage6/ asm tests)
+gen-arch-tests-s6: build-s6
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv64imafdc-priv/test_config.yaml \
+	    --workdir work --test-dir tests \
+	    --exclude Zaamo,Zalrsc,Sv,Svade,Svadu,SvaduPMP,SvPMP,SvZicbo,SvPMPZicbo,Svbare,PMPSm,PMPZca,PMPmisaligned,InterruptsSm,ExceptionsZalrsc,ExceptionsZaamo,ExceptionsZicboS,ExceptionsZicboU,ExceptionsZc,SmF,ZicsrF,ExceptionsSm,ZicntrS,ZicntrU,InterruptsU,U,UF
+
+sim-arch-test-s6: gen-arch-tests-s6
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s6.sh)" \
+	    work/kronos-rv64imafdc-priv/elfs/
+
+# ── Stage 6 unit-TB stubs (T16 fills these in with real TBs) ───────────────
+sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6:
+	@echo "(stub) $@"
+
 TB_PKG_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv $(TB_DIR)/stage5/tb_pkg_fp.sv
 
 sim-pkg-fp:
@@ -1048,6 +1169,23 @@ sim-trigger:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/trigger -Wno-UNUSED \
 	  --top-module tb_trigger $(TB_TRIGGER_FILES)
 	$(OBJ_DIR)/trigger/Vtb_trigger
+
+TB_PMP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                $(RTL_DIR)/stage6/kronos_pmp.sv \
+                $(TB_DIR)/stage6/tb_pmp.sv
+sim-pmp:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/pmp -Wno-UNUSED \
+	  --top-module tb_pmp $(TB_PMP_FILES)
+	$(OBJ_DIR)/pmp/Vtb_pmp
+
+TB_PRIV_CSR_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                     $(RTL_DIR)/stage6/kronos_csr.sv \
+                     $(TB_DIR)/stage6/tb_priv_csr.sv
+sim-priv-csr:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  -Mdir $(OBJ_DIR)/priv_csr -Wno-UNUSED \
+	  --top-module tb_priv_csr $(TB_PRIV_CSR_FILES)
+	$(OBJ_DIR)/priv_csr/Vtb_priv_csr
 
 TB_ICACHE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/kronos_icache.sv \

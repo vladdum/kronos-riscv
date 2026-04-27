@@ -150,6 +150,14 @@ module sim_top
     .data_axi_rsp_i     (data_rsp),
     .irq_timer_i        (irq_timer_i),
     .irq_fast_i         (irq_fast_i),
+    // Stage 6a: standard RV interrupt sources — tied 0 in sim_top.  ACT4 priv
+    // tests exercise these via the platform-IRQ path (irq_fast_i / irq_timer_i)
+    // which OR into the same mip bits inside kronos_csr.
+    .irq_msi_i          (1'b0),
+    .irq_mei_i          (1'b0),
+    .irq_ssi_i          (1'b0),
+    .irq_sti_i          (1'b0),
+    .irq_sei_i          (1'b0),
     .boot_addr_i        (boot_addr_i),
     .retire_valid_o     (retire_valid_o),
     .retire_pc_o        (retire_pc_o),

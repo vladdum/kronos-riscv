@@ -29,6 +29,12 @@ module kronos_top
   // Interrupts
   input  logic        irq_timer_i,
   input  logic [14:0] irq_fast_i,
+  // Stage 6a IRQ sources — unused in stage 0; kept for sim_top wrapper compat.
+  input  logic        irq_msi_i,
+  input  logic        irq_mei_i,
+  input  logic        irq_ssi_i,
+  input  logic        irq_sti_i,
+  input  logic        irq_sei_i,
   // Boot address
   input  logic [31:0] boot_addr_i
 );

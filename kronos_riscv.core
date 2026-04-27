@@ -40,6 +40,12 @@ filesets:
     files:
       - rtl/filelist_s5.f: {file_type: f}
 
+  files_rtl_s6:
+    depend:
+      - pulp-platform.org::axi:0.39.9
+    files:
+      - rtl/filelist_s6.f: {file_type: f}
+
   files_fpga_kv260:
     depend:
       - pulp-platform.org::axi:0.39.9
@@ -114,6 +120,15 @@ targets:
 
   lint-s5:
     filesets: [files_lint_waivers, files_rtl_s5]
+    tools:
+      verilator:
+        mode: lint-only
+        verilator_options: [--Wall, --Wno-UNUSED]
+    toplevel: kronos_top
+    default_tool: verilator
+
+  lint-s6:
+    filesets: [files_lint_waivers, files_rtl_s6]
     tools:
       verilator:
         mode: lint-only
