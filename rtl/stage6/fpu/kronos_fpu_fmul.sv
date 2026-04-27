@@ -33,12 +33,10 @@ module kronos_fpu_fmul
   input  logic        rst_ni,
   input  logic        flush_i,
   input  logic        in_valid_i,
-  input  fp_op_e      op_i,
   input  logic        fmt_d_i,
   input  logic [2:0]  rm_i,
   input  logic [63:0] a_i,
   input  logic [63:0] b_i,
-  input  logic [63:0] c_i,       // unused
   input  fpu_tag_t    tag_i,
   output logic        out_valid_o,
   output logic [63:0] result_o,

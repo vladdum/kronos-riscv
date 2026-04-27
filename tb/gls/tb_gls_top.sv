@@ -17,10 +17,13 @@ module tb_gls_top;
   string  hex_path;
   longint max_cycles;
   string  vcd_path;
+  string  trace_path;
+  int     trace_fd;
   int     instr_lat_arg;
   int     data_lat_arg;
 
   initial begin
+    trace_fd = 0;
     if (!$value$plusargs("HEX=%s", hex_path)) begin
       $display("[GLS] FATAL: +HEX=<path> required");
       $finish(1);
@@ -32,6 +35,14 @@ module tb_gls_top;
       $dumpfile(vcd_path);
       $dumpvars(0, tb_gls_top);
       $display("[GLS] VCD: %s", vcd_path);
+    end
+    if ($value$plusargs("TRACE=%s", trace_path)) begin
+      trace_fd = $fopen(trace_path, "w");
+      if (trace_fd == 0) begin
+        $display("[GLS] FATAL: cannot open TRACE=%s", trace_path);
+        $finish(1);
+      end
+      $display("[GLS] TRACE: %s", trace_path);
     end
     $display("[GLS] HEX=%s MAX_CYCLES=%0d INSTR_LAT=%0d DATA_LAT=%0d",
              hex_path, max_cycles, instr_lat_arg, data_lat_arg);
@@ -297,6 +308,30 @@ module tb_gls_top;
     end
   end
 
+  // ── Per-retire trace ──────────────────────────────────────────────────
+  // Mirrors sim/sim_main.cpp's SIM_TRACE format so tools/trace_diff.py can
+  // diff GLS against RTL directly. Plain `always` (not `always_ff`) — file
+  // I/O in clocked blocks is fine in xsim, but the simpler edge-trigger
+  // keeps the intent obvious.
+  always @(posedge clk) begin
+    if (rst_n && trace_fd != 0 && retire_valid) begin
+      $fwrite(trace_fd, "%016h:%08h", retire_pc, retire_instr);
+      if (retire_rd_wen && retire_rd != 5'd0) begin
+        $fwrite(trace_fd, " x%0d=%016h", retire_rd, retire_rd_wdata);
+      end
+      if (retire_fp_wen) begin
+        $fwrite(trace_fd, " f%0d=%016h", retire_fp_rd, retire_fp_wdata);
+      end
+      if (retire_mem_wen) begin
+        $fwrite(trace_fd, " mem[%016h]=%016h", retire_mem_addr, retire_mem_wdata);
+      end
+      if (retire_csr_wen) begin
+        $fwrite(trace_fd, " csr[%03h]=%016h", retire_csr_addr, retire_csr_wdata);
+      end
+      $fwrite(trace_fd, "\n");
+    end
+  end
+
   // ── Cycle counter, timeout, finish ────────────────────────────────────
   longint cycle = 0;
   always_ff @(posedge clk) cycle <= cycle + 1;
@@ -316,16 +351,19 @@ module tb_gls_top;
       #20ns;
       if (halt_code == 32'h0) begin
         $display("[GLS] PASS at cycle %0d, halt_code=%0d", cycle, halt_code);
+        if (trace_fd != 0) $fclose(trace_fd);
         $finish(0);
       end else begin
         $display("[GLS] FAIL at cycle %0d, halt_code=%0d", cycle, halt_code);
         dump_ring();
+        if (trace_fd != 0) $fclose(trace_fd);
         $finish(1);
       end
     end else if (cycle >= max_cycles) begin
       $display("[GLS] TIMEOUT at cycle %0d, last retire pc=%016h",
                cycle, ring_pc[(ring_wp - 1 + RING_DEPTH) % RING_DEPTH]);
       dump_ring();
+      if (trace_fd != 0) $fclose(trace_fd);
       $finish(1);
     end
   end

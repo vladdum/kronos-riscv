@@ -14,7 +14,6 @@ module kronos_fpu_fmisc
   input  logic [2:0]  rm_i,
   input  logic [63:0] a_i,
   input  logic [63:0] b_i,
-  input  logic [63:0] c_i,     // unused for FMISC
   input  fpu_tag_t    tag_i,
   output logic        out_valid_o,
   output logic [63:0] result_o,

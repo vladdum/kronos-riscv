@@ -1497,49 +1497,104 @@ coverage: sim-fpu-fmisc-cov sim-fpu-fcvt-cov sim-fpu-fadd-cov sim-fpu-fmul-cov s
 
 # ── Gate-level simulation ────────────────────────────────────────────────────
 # OOC netlist of kronos_top + xsim. See fpga/gls/synth_ooc.tcl.
+# Targets are per-stage: gls-funcsim-s5, gls-funcsim-s6, gls-sdf-s5, gls-sdf-s6.
+# Bare `gls-funcsim` and `gls-sdf` retain the stage-5 default.
 
-GLS_BUILD            := ../build/gls
-GLS_NETLIST_FUNCSIM  := $(GLS_BUILD)/.netlist_funcsim.done
-GLS_NETLIST_TIMESIM  := $(GLS_BUILD)/.netlist_timesim.done
-GLS_RTL_DEPS         := $(shell find ../rtl -name '*.sv')
+GLS_BUILD := ../build/gls
 
-GLS_TESTS := test_blt64 test_csr_warl test_illegal_insn \
-             test_fp_basic test_fp_compare \
-             test_dcache_hit_loop test_icache_hit_loop \
-             test_muldiv_redirect
+GLS_NETLIST_S5_FUNCSIM := $(GLS_BUILD)/.netlist_s5_funcsim.done
+GLS_NETLIST_S5_TIMESIM := $(GLS_BUILD)/.netlist_s5_timesim.done
+GLS_NETLIST_S6_FUNCSIM := $(GLS_BUILD)/.netlist_s6_funcsim.done
+GLS_NETLIST_S6_TIMESIM := $(GLS_BUILD)/.netlist_s6_timesim.done
 
-# Per-test cycle cap for xsim. Gate-level sim is ~100× slower per cycle
-# than Verilator (~300 cycles/sec on this design), so 50K caps a TIMEOUT at
-# under 4 min — covers all stage-5 tests with margin (test_blt64 takes 153
-# cycles; the heaviest WARL/cache tests are <20K). Override via:
-# make gls-funcsim GLS_MAX_CYCLES=200000
+# Per-stage RTL-source dependencies — read each filelist (skip blanks/comments)
+# and resolve relative to ../rtl/.
+GLS_RTL_DEPS_S5 := $(addprefix ../rtl/,$(shell grep -v '^[[:space:]]*\#' ../rtl/filelist_s5.f 2>/dev/null | tr -d ' '))
+GLS_RTL_DEPS_S6 := $(addprefix ../rtl/,$(shell grep -v '^[[:space:]]*\#' ../rtl/filelist_s6.f 2>/dev/null | tr -d ' '))
+
+GLS_TESTS_S5 := test_blt64 test_csr_warl test_illegal_insn \
+                test_fp_basic test_fp_compare \
+                test_muldiv_redirect
+# Note: test_dcache_hit_loop and test_icache_hit_loop are excluded — both run
+# 1000-iteration tight loops (~14k / ~3k cycles) which at GLS's ~12 cycles/sec
+# wall take ~20 min and ~4 min respectively. They are performance checks
+# (cache miss-rate bounds), not functional. The caches are already exercised
+# by every other test through normal instruction fetches and loads/stores.
+
+# Stage 6 reuses the stage-5 smoke set — every test under sw/stage5 must keep
+# passing on the stage-6 RTL (the privileged-modes superset).
+GLS_TESTS_S6 := $(GLS_TESTS_S5)
+
+# Per-test cycle cap for xsim. Gate-level wall rate is ~12 cycles/sec on this
+# design (verified against test_blt64: 153 cycles in 13 s), so 50K caps a
+# TIMEOUT at ~70 min. Most tests halt in <2K cycles. Override via:
+# make gls-funcsim-s5 GLS_MAX_CYCLES=200000
 GLS_MAX_CYCLES ?= 50000
 
-.PHONY: gls-funcsim gls-sdf
+.PHONY: gls-funcsim gls-funcsim-s5 gls-funcsim-s6 gls-sdf gls-sdf-s5 gls-sdf-s6
 .PRECIOUS: ../sw/stage5/build/%.hex ../sw/stage5/build/%.memh
 
-$(GLS_NETLIST_FUNCSIM): $(GLS_RTL_DEPS) ../fpga/gls/synth_ooc.tcl
-	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=funcsim
+$(GLS_NETLIST_S5_FUNCSIM): $(GLS_RTL_DEPS_S5) ../fpga/gls/synth_ooc.tcl
+	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=funcsim STAGE=s5
 	@mkdir -p $(GLS_BUILD)
 	@touch $@
 
-$(GLS_NETLIST_TIMESIM): $(GLS_RTL_DEPS) ../fpga/gls/synth_ooc.tcl
-	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=timesim
+$(GLS_NETLIST_S5_TIMESIM): $(GLS_RTL_DEPS_S5) ../fpga/gls/synth_ooc.tcl
+	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=timesim STAGE=s5
+	@mkdir -p $(GLS_BUILD)
+	@touch $@
+
+$(GLS_NETLIST_S6_FUNCSIM): $(GLS_RTL_DEPS_S6) ../fpga/gls/synth_ooc.tcl
+	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=funcsim STAGE=s6
+	@mkdir -p $(GLS_BUILD)
+	@touch $@
+
+$(GLS_NETLIST_S6_TIMESIM): $(GLS_RTL_DEPS_S6) ../fpga/gls/synth_ooc.tcl
+	cd .. && vivado -mode batch -source fpga/gls/synth_ooc.tcl -tclargs MODE=timesim STAGE=s6
 	@mkdir -p $(GLS_BUILD)
 	@touch $@
 
 # GLS uses the .memh form ($readmemh expects Verilog memh, not Intel HEX).
-gls-funcsim: $(addprefix gls-funcsim-,$(GLS_TESTS))
+# Default (`gls-funcsim`, `gls-sdf`) is stage 5 — historical compatibility.
+gls-funcsim: gls-funcsim-s5
+gls-sdf:     gls-sdf-s5
 
-gls-funcsim-%: $(GLS_NETLIST_FUNCSIM) ../sw/stage5/build/%.memh
+gls-funcsim-s5: $(addprefix gls-funcsim-s5-,$(GLS_TESTS_S5))
+gls-funcsim-s6: $(addprefix gls-funcsim-s6-,$(GLS_TESTS_S6))
+
+gls-funcsim-s5-%: $(GLS_NETLIST_S5_FUNCSIM) ../sw/stage5/build/%.memh
 	cd .. && vivado -mode batch -source fpga/gls/run_xsim.tcl \
-	  -tclargs HEX=sw/stage5/build/$*.memh MODE=funcsim TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES)
+	  -tclargs HEX=sw/stage5/build/$*.memh MODE=funcsim STAGE=s5 \
+	           TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES) \
+	           $(if $(GLS_TRACE),TRACE=$(GLS_TRACE))
 
-gls-sdf: gls-sdf-test_blt64
-
-gls-sdf-%: $(GLS_NETLIST_TIMESIM) ../sw/stage5/build/%.memh
+gls-funcsim-s6-%: $(GLS_NETLIST_S6_FUNCSIM) ../sw/stage5/build/%.memh
 	cd .. && vivado -mode batch -source fpga/gls/run_xsim.tcl \
-	  -tclargs HEX=sw/stage5/build/$*.memh MODE=timesim TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES)
+	  -tclargs HEX=sw/stage5/build/$*.memh MODE=funcsim STAGE=s6 \
+	           TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES) \
+	           $(if $(GLS_TRACE),TRACE=$(GLS_TRACE))
+
+# Backward-compat: existing top-level gls-funcsim-<test> still resolves to s5.
+gls-funcsim-%: gls-funcsim-s5-%
+	@:
+
+gls-sdf-s5: gls-sdf-s5-test_blt64
+gls-sdf-s6: gls-sdf-s6-test_blt64
+
+gls-sdf-s5-%: $(GLS_NETLIST_S5_TIMESIM) ../sw/stage5/build/%.memh
+	cd .. && vivado -mode batch -source fpga/gls/run_xsim.tcl \
+	  -tclargs HEX=sw/stage5/build/$*.memh MODE=timesim STAGE=s5 \
+	           TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES) \
+	           $(if $(GLS_TRACE),TRACE=$(GLS_TRACE))
+
+gls-sdf-s6-%: $(GLS_NETLIST_S6_TIMESIM) ../sw/stage5/build/%.memh
+	cd .. && vivado -mode batch -source fpga/gls/run_xsim.tcl \
+	  -tclargs HEX=sw/stage5/build/$*.memh MODE=timesim STAGE=s6 \
+	           TEST=$* MAX_CYCLES=$(GLS_MAX_CYCLES) \
+	           $(if $(GLS_TRACE),TRACE=$(GLS_TRACE))
+
+gls-sdf-%: gls-sdf-s5-%
+	@:
 
 ../sw/stage5/build/%.hex:
 	$(MAKE) -C ../sw/stage5 build/$*.hex

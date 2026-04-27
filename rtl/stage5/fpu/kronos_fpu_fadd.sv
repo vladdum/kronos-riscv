@@ -28,17 +28,12 @@ module kronos_fpu_fadd
   input  logic [2:0]  rm_i,
   input  logic [63:0] a_i,
   input  logic [63:0] b_i,
-  input  logic [63:0] c_i,        // unused
   input  fpu_tag_t    tag_i,
   output logic        out_valid_o,
   output logic [63:0] result_o,
   output logic [4:0]  fflags_o,
   output fpu_tag_t    tag_o
 );
-
-  // Suppress unused warning for c_i.
-  logic [63:0] unused_c;
-  assign unused_c = c_i;
 
   // ---------------------------------------------------------------------------
   // Parameters

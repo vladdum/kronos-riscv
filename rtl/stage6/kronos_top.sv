@@ -927,9 +927,21 @@ module kronos_top
                  : align_is_16b  ? pc_q + 32'd2
                  :                 pc_q + 32'd4;
 
+  // pc_q reset: async to constant 0, then synchronous load of boot_addr_i
+  // on the first post-reset cycle. See stage5/kronos_top.sv for the full
+  // explanation — using boot_addr_i directly as an async reset value
+  // produced "Set+Reset same priority" GLS bugs (issue #57).
+  logic boot_loaded_q;
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) pc_q <= boot_addr_i;
-    else if (pc_en) pc_q <= pc_next;
+    if (!rst_ni) begin
+      pc_q          <= 32'b0;
+      boot_loaded_q <= 1'b0;
+    end else if (!boot_loaded_q) begin
+      pc_q          <= boot_addr_i;
+      boot_loaded_q <= 1'b1;
+    end else if (pc_en) begin
+      pc_q          <= pc_next;
+    end
   end
 
   // =========================================================================

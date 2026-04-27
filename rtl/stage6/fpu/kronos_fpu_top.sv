@@ -149,7 +149,6 @@ module kronos_fpu_top
     .rm_i       (rm_i),
     .a_i        (a_i),
     .b_i        (b_i),
-    .c_i        (c_i),
     .tag_i      (tag_i),
     .out_valid_o(fmisc_out_valid),
     .result_o   (fmisc_result),
@@ -166,8 +165,6 @@ module kronos_fpu_top
     .fmt_d_i    (fmt_d_i),
     .rm_i       (rm_i),
     .a_i        (a_i),
-    .b_i        (b_i),
-    .c_i        (c_i),
     .tag_i      (tag_i),
     .out_valid_o(fcvt_out_valid),
     .result_o   (fcvt_result),
@@ -175,6 +172,7 @@ module kronos_fpu_top
     .tag_o      (fcvt_tag)
   );
 
+  // fadd/fmul don't take a third operand — c_i is FMA-only.
   kronos_fpu_fadd u_fadd (
     .clk_i      (clk_i),
     .rst_ni     (rst_ni),
@@ -185,7 +183,6 @@ module kronos_fpu_top
     .rm_i       (rm_i),
     .a_i        (a_i),
     .b_i        (b_i),
-    .c_i        (c_i),
     .tag_i      (tag_i),
     .out_valid_o(fadd_out_valid),
     .result_o   (fadd_result),
@@ -198,12 +195,10 @@ module kronos_fpu_top
     .rst_ni     (rst_ni),
     .flush_i    (flush_i),
     .in_valid_i (dispatch_ok & sel_fmul),
-    .op_i       (op_i),
     .fmt_d_i    (fmt_d_i),
     .rm_i       (rm_i),
     .a_i        (a_i),
     .b_i        (b_i),
-    .c_i        (c_i),
     .tag_i      (tag_i),
     .out_valid_o(fmul_out_valid),
     .result_o   (fmul_result),
