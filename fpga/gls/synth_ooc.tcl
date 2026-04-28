@@ -135,6 +135,11 @@ set_property file_type SystemVerilog [get_files $RTL_FILES]
 set_property include_dirs $AXI_INC_DIRS [current_fileset]
 set_property top $TOP [current_fileset]
 
+# Stage 6d — select the XPM (RAMB) backend in rtl/common/kronos_ram.sv so
+# Vivado infers BRAMs deterministically for GLS. The Verilator/ASIC sim path
+# leaves this define unset and uses the behavioural SDP backend.
+set_property verilog_define {KRONOS_RAM_FPGA=1} [current_fileset]
+
 puts "=========================================="
 puts " Synthesising $TOP (out_of_context, MODE=$MODE)"
 puts "=========================================="
