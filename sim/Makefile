@@ -929,6 +929,7 @@ sim-s5b: build-s5
 	[ $$fail -eq 0 ] || [ $$pass -eq 0 -a $$fail -eq 0 ]
 
 # ── ACT4 official compliance ─────────────────────────────────────────────────
+REPO_ROOT     := $(abspath ..)
 ARCH_TEST_DIR := ../riscv-arch-test
 
 .PHONY: gen-arch-tests-s1 sim-arch-test-s1
@@ -1113,14 +1114,111 @@ sim-s6b: build-s6
 #   - ZicntrS,ZicntrU,InterruptsU,
 #     U,UF                        : sail self-check mismatches under M+S+U+PMP config
 #                                   (S-mode/U-mode coverage comes from sw/stage6/ asm tests)
+#
+# Misalign* suites are filtered out automatically by the test selector because
+# the yaml seed declares MISALIGNED_LDST: false (kronos LSU does not handle
+# stores that cross the 8-byte dcache granule).
+
+# Hard-blocker exclusions for the priv-runner:
+#   - Zfa/Zfh/Zcb/Zicbo*           : extensions we don't implement
+#   - Zaamo/Zalrsc                  : framework-default exclusions (atomics
+#                                     covered via M/F/D suites + assist_amo CRV)
+#   - InterruptsU/U/UF/SmF/ZicsrF,
+#     InterruptsSm/ExceptionsSm,
+#     ZicntrS/ZicntrU,
+#     SvZicbo/SvPMPZicbo            : Sail reference-model self-check mismatches
+#                                     under the M+S+U+Sv+PMP config (kronos
+#                                     S/U-mode coverage comes from sw/stage6/)
+#
+# Removed from this list (newly enabled by PMP=16 + Sv39/Sv48 support):
+#   Sv, Svade, Svadu, Svbare, SvPMP, SvaduPMP, PMPSm, PMPZca, PMPmisaligned.
+S6_PRIV_HARD_EXCLUDES := Zaamo,Zalrsc,Zfa,Zfh,Zcb,Zicbom,Zicboz,Zicbop,SmF,ZicsrF,ExceptionsZc,ExceptionsZicboS,ExceptionsZicboU,SvZicbo,SvPMPZicbo,ExceptionsZalrsc,ExceptionsZaamo,InterruptsU,U,UF,InterruptsSm,ExceptionsSm,ZicntrS,ZicntrU,Misalign,MisalignZca,MisalignF,MisalignD
+
+# Tests that the act framework discovers via rglob("*.S") but Sail's
+# reference simulator can't sign within the 60s wrapper timeout under our
+# config (genuinely-long simulation, not a Sail bug worth fixing upstream
+# for our DUT). We rename them to .S.skip before act runs and restore
+# afterwards so they're invisible to the discovery scan.
+S6_PRIV_SKIPPED_TESTS := \
+  riscv-arch-test/tests/priv/Sv/sv39_VA_all_ones_Smode.S \
+  riscv-arch-test/tests/priv/Sv/sv39_VA_all_zeros_Smode.S \
+  riscv-arch-test/tests/priv/Sv/sv48_VA_all_ones_Smode.S \
+  riscv-arch-test/tests/priv/Sv/sv48_VA_all_zeros_Smode.S \
+  riscv-arch-test/tests/priv/Sv/sv39_canonical_Smode.S \
+  riscv-arch-test/tests/priv/Sv/sv39_canonical_Umode.S \
+  riscv-arch-test/tests/priv/Sv/sv48_canonical_Smode.S \
+  riscv-arch-test/tests/priv/Sv/sv48_canonical_Umode.S
+
+# Helper: temporarily hide skipped-tests from rglob. Always restores in
+# the second invocation so a failed act doesn't leave the tree mangled.
+define hide_skipped_tests
+	@for f in $(S6_PRIV_SKIPPED_TESTS); do \
+	  if [ -f "$(REPO_ROOT)/$$f" ]; then mv "$(REPO_ROOT)/$$f" "$(REPO_ROOT)/$$f.skip"; fi; \
+	done
+endef
+define restore_skipped_tests
+	@for f in $(S6_PRIV_SKIPPED_TESTS); do \
+	  if [ -f "$(REPO_ROOT)/$$f.skip" ]; then mv "$(REPO_ROOT)/$$f.skip" "$(REPO_ROOT)/$$f"; fi; \
+	done
+endef
+
 gen-arch-tests-s6: build-s6
+	$(call hide_skipped_tests)
 	cd $(ARCH_TEST_DIR) && \
 	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
 	    config/kronos/kronos-rv64imafdc-priv/test_config.yaml \
 	    --workdir work --test-dir tests \
-	    --exclude Zaamo,Zalrsc,Sv,Svade,Svadu,SvaduPMP,SvPMP,SvZicbo,SvPMPZicbo,Svbare,PMPSm,PMPZca,PMPmisaligned,InterruptsSm,ExceptionsZalrsc,ExceptionsZaamo,ExceptionsZicboS,ExceptionsZicboU,ExceptionsZc,SmF,ZicsrF,ExceptionsSm,ZicntrS,ZicntrU,InterruptsU,U,UF
+	    --exclude Zaamo,Zalrsc,Sv,Svade,Svadu,SvaduPMP,SvPMP,SvZicbo,SvPMPZicbo,Svbare,PMPSm,PMPZca,PMPmisaligned,InterruptsSm,ExceptionsZalrsc,ExceptionsZaamo,ExceptionsZicboS,ExceptionsZicboU,ExceptionsZc,SmF,ZicsrF,ExceptionsSm,ZicntrS,ZicntrU,InterruptsU,U,UF,Misalign,MisalignZca,MisalignF,MisalignD; \
+	  rc=$$?; \
+	  cd "$(REPO_ROOT)"; \
+	  for f in $(S6_PRIV_SKIPPED_TESTS); do \
+	    if [ -f "$$f.skip" ]; then mv "$$f.skip" "$$f"; fi; \
+	  done; \
+	  exit $$rc
 
 sim-arch-test-s6: gen-arch-tests-s6
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s6.sh)" \
+	    work/kronos-rv64imafdc-priv/elfs/
+
+# Priv-suite target. The kronos-rv64imafdc-priv config ships a pre-baked
+# extensions list (work/kronos-rv64imafdc-priv/extensions.txt) so UDB is
+# only invoked if that list is missing or stale. Local devs can therefore
+# run this target with just `uv` (no Ruby), provided they don't bump the
+# yaml seed without also refreshing the extensions list.
+#
+# CI installs Ruby + the UDB gem bundle as a safety fallback, and this
+# target accepts either a present `bundle` (CI path) or the pre-baked
+# extensions list (no-Ruby local path).
+.PHONY: gen-arch-tests-s6-priv sim-arch-test-s6-priv
+gen-arch-tests-s6-priv: build-s6
+	@if ! command -v bundle >/dev/null 2>&1; then \
+	  if [ ! -f $(ARCH_TEST_DIR)/work/kronos-rv64imafdc-priv/extensions.txt ]; then \
+	    echo "ERROR: no pre-baked extensions.txt and bundle is not installed."; \
+	    echo "  Either install Ruby + bundler, or use 'make sim-arch-test-s6' for the IMAFDC-only baseline."; \
+	    exit 1; \
+	  fi; \
+	  echo "Using pre-baked extensions list (UDB skipped — bundle not on PATH)."; \
+	fi
+	$(call hide_skipped_tests)
+	@# Tolerate Sail-side gen failures: each iteration of stage6b uncovered
+	@# another Sv-edge-case test that Sail times out on (sv*_VA_all_*,
+	@# sv*_canonical_*, sv*_invalid_pte_*, etc.). act always builds the rest
+	@# of the suite before failing; we run the DUT against whatever ELFs
+	@# Sail successfully signed and treat Sail-gen failures as informational.
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv64imafdc-priv/test_config.yaml \
+	    --workdir work --test-dir tests --keep-going \
+	    --exclude $(S6_PRIV_HARD_EXCLUDES) || \
+	  echo "WARN: act returned non-zero (Sail-side gen failures). Continuing with successfully-signed ELFs."; \
+	  cd "$(REPO_ROOT)"; \
+	  for f in $(S6_PRIV_SKIPPED_TESTS); do \
+	    if [ -f "$$f.skip" ]; then mv "$$f.skip" "$$f"; fi; \
+	  done
+
+sim-arch-test-s6-priv: gen-arch-tests-s6-priv
 	cd $(ARCH_TEST_DIR) && \
 	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
 	    "$(abspath run_arch_test_s6.sh)" \

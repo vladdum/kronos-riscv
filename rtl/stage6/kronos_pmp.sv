@@ -3,14 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // kronos_pmp.sv — Stage 6a Physical Memory Protection unit.
-// 8 regions, NA4 + NAPOT. Combinational fault check for one access per cycle.
+// N regions (parameterisable, default 8), NA4 + NAPOT. Combinational fault
+// check for one access per cycle.
 // Spec: RISC-V Privileged v1.12 § 3.7.
 module kronos_pmp
   import kronos_pkg::*;
-(
+#(
+  parameter int N = 8
+) (
   // Per-region CSR snapshot from kronos_csr (combinational read).
-  input  logic [7:0][7:0]   pmpcfg_i,    // 8 regions × 8-bit cfg
-  input  logic [7:0][53:0]  pmpaddr_i,   // 8 regions × 54-bit addr (PA[55:2])
+  input  logic [N-1:0][7:0]   pmpcfg_i,    // N regions × 8-bit cfg
+  input  logic [N-1:0][53:0]  pmpaddr_i,   // N regions × 54-bit addr (PA[55:2])
 
   // Access query.
   input  priv_e             priv_i,
@@ -29,13 +32,13 @@ module kronos_pmp
   // -----------------------------------------------------------------------
   // Decode per-region cfg fields.
   // -----------------------------------------------------------------------
-  logic [7:0]       reg_l;
-  logic [7:0][1:0]  reg_a;     // 00=OFF, 10=NA4, 11=NAPOT (01=TOR not impl)
-  logic [7:0]       reg_x;
-  logic [7:0]       reg_w;
-  logic [7:0]       reg_r;
+  logic [N-1:0]       reg_l;
+  logic [N-1:0][1:0]  reg_a;     // 00=OFF, 10=NA4, 11=NAPOT (01=TOR not impl)
+  logic [N-1:0]       reg_x;
+  logic [N-1:0]       reg_w;
+  logic [N-1:0]       reg_r;
   always_comb begin
-    for (int i = 0; i < 8; i++) begin
+    for (int i = 0; i < N; i++) begin
       reg_l[i] = pmpcfg_i[i][7];
       reg_a[i] = pmpcfg_i[i][4:3];
       reg_x[i] = pmpcfg_i[i][2];
@@ -51,10 +54,10 @@ module kronos_pmp
   // The match mask is derived as ~(((pmpaddr+1) ^ pmpaddr) << 1).
   // For NA4: exact 4-byte match on PA[55:2].
   // Multi-byte access (size > region) is rejected as a fault.
-  logic [7:0]        match;
-  logic [7:0][53:0]  napot_mask;
+  logic [N-1:0]        match;
+  logic [N-1:0][53:0]  napot_mask;
   always_comb begin
-    for (int i = 0; i < 8; i++) begin
+    for (int i = 0; i < N; i++) begin
       automatic logic [54:0] inc       = {1'b0, pmpaddr_i[i]} + 55'd1;
       automatic logic [54:0] xor_v     = inc ^ {1'b0, pmpaddr_i[i]};
       automatic logic [53:0] mask      = ~xor_v[53:0];
@@ -79,9 +82,9 @@ module kronos_pmp
   end
 
   // Active = matched AND not OFF.
-  logic [7:0] active;
+  logic [N-1:0] active;
   always_comb begin
-    for (int i = 0; i < 8; i++) begin
+    for (int i = 0; i < N; i++) begin
       active[i] = match[i] & (reg_a[i] != 2'b00);
     end
   end
@@ -89,14 +92,14 @@ module kronos_pmp
   // -----------------------------------------------------------------------
   // Priority encode (lowest index wins).
   // -----------------------------------------------------------------------
-  logic [2:0] matched_idx;
-  logic       any_match;
+  logic [$clog2(N)-1:0] matched_idx;
+  logic                 any_match;
   always_comb begin
-    matched_idx = 3'd0;
+    matched_idx = '0;
     any_match   = 1'b0;
-    for (int i = 0; i < 8; i++) begin
+    for (int i = 0; i < N; i++) begin
       if (active[i] & ~any_match) begin
-        matched_idx = i[2:0];
+        matched_idx = i[$clog2(N)-1:0];
         any_match   = 1'b1;
       end
     end

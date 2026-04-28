@@ -100,8 +100,8 @@ module kronos_csr
   output logic        csr_illegal_o,
   // Stage 6a: PMP cfg/addr fan-out to the two kronos_pmp instances in
   // kronos_top.  Packed-array form mirrors the kronos_pmp port shape.
-  output logic [7:0][7:0]   pmpcfg_o,
-  output logic [7:0][53:0]  pmpaddr_o
+  output logic [15:0][7:0]  pmpcfg_o,
+  output logic [15:0][53:0] pmpaddr_o
 );
 
   // -------------------------------------------------------------------------
@@ -166,10 +166,10 @@ module kronos_csr
   logic [31:0] mcounteren;
 
   // -------------------------------------------------------------------------
-  // Stage 6a: PMP — 8 regions.  pmpcfg2 / pmpaddr8..15 are hardwired 0.
+  // Stage 6b: PMP — 16 regions (pmpcfg0/pmpcfg2 + pmpaddr0..15 active).
   // -------------------------------------------------------------------------
-  logic [7:0]  pmpcfg_q   [0:7];   // per-region cfg byte
-  logic [53:0] pmpaddr_q  [0:7];   // per-region addr (PA[55:2])
+  logic [7:0]  pmpcfg_q   [0:15];  // per-region cfg byte
+  logic [53:0] pmpaddr_q  [0:15];  // per-region addr (PA[55:2])
 
   // mhpmcounter3..10 — 8 programmable 64-bit event counters.
   // Indexed as mhpmcounter[3]..mhpmcounter[10]; entries [0..2] are unused
@@ -296,7 +296,7 @@ module kronos_csr
 
   // Stage 6a: PMP cfg/addr packed-array fan-out to kronos_pmp.
   always_comb begin
-    for (int i = 0; i < 8; i++) begin
+    for (int i = 0; i < 16; i++) begin
       pmpcfg_o[i]  = pmpcfg_q[i];
       pmpaddr_o[i] = pmpaddr_q[i];
     end
@@ -341,11 +341,11 @@ module kronos_csr
       12'h342: rdata_o = mcause;
       12'h343: rdata_o = mtval;
       12'h344: rdata_o = mip | mip_sw;
-      // Stage 6a: PMP CSRs.  pmpcfg0 packs all 8 cfg bytes; pmpcfg2 and
-      // pmpaddr8..15 are addressable but hardwired 0.
+      // Stage 6b: PMP CSRs.  pmpcfg0 packs cfg bytes 0..7; pmpcfg2 packs 8..15.
       CSR_PMPCFG0: rdata_o = {pmpcfg_q[7], pmpcfg_q[6], pmpcfg_q[5], pmpcfg_q[4],
                               pmpcfg_q[3], pmpcfg_q[2], pmpcfg_q[1], pmpcfg_q[0]};
-      CSR_PMPCFG2: rdata_o = '0;  // hardwired 0
+      CSR_PMPCFG2: rdata_o = {pmpcfg_q[15], pmpcfg_q[14], pmpcfg_q[13], pmpcfg_q[12],
+                              pmpcfg_q[11], pmpcfg_q[10], pmpcfg_q[9],  pmpcfg_q[8]};
       12'h3B0: rdata_o = {10'd0, pmpaddr_q[0]};
       12'h3B1: rdata_o = {10'd0, pmpaddr_q[1]};
       12'h3B2: rdata_o = {10'd0, pmpaddr_q[2]};
@@ -354,8 +354,14 @@ module kronos_csr
       12'h3B5: rdata_o = {10'd0, pmpaddr_q[5]};
       12'h3B6: rdata_o = {10'd0, pmpaddr_q[6]};
       12'h3B7: rdata_o = {10'd0, pmpaddr_q[7]};
-      12'h3B8, 12'h3B9, 12'h3BA, 12'h3BB,
-      12'h3BC, 12'h3BD, 12'h3BE, 12'h3BF: rdata_o = '0;
+      12'h3B8: rdata_o = {10'd0, pmpaddr_q[8]};
+      12'h3B9: rdata_o = {10'd0, pmpaddr_q[9]};
+      12'h3BA: rdata_o = {10'd0, pmpaddr_q[10]};
+      12'h3BB: rdata_o = {10'd0, pmpaddr_q[11]};
+      12'h3BC: rdata_o = {10'd0, pmpaddr_q[12]};
+      12'h3BD: rdata_o = {10'd0, pmpaddr_q[13]};
+      12'h3BE: rdata_o = {10'd0, pmpaddr_q[14]};
+      12'h3BF: rdata_o = {10'd0, pmpaddr_q[15]};
       // Zicntr (U-mode read-only views) + M-mode aliases
       12'hC00, 12'hB00: rdata_o = mcycle;                     // cycle / mcycle
       12'hC01:          rdata_o = mcycle;                     // time (mirror cycle)
@@ -485,7 +491,7 @@ module kronos_csr
         mhpmevent[i]   <= '0;
       end
       // Stage 6a: PMP reset — all regions OFF (A=00) and unlocked.
-      for (int i = 0; i < 8; i++) begin
+      for (int i = 0; i < 16; i++) begin
         pmpcfg_q[i]  <= 8'h00;
         pmpaddr_q[i] <= '0;
       end
@@ -589,11 +595,10 @@ module kronos_csr
           // the decode/illegal-instr path, so here we accept all three bits.
           12'h344: mip_sw <= (mip_sw & ~64'h0000_0000_0000_0222)
                            | (csr_new_val & 64'h0000_0000_0000_0222);
-          // Stage 6a: PMP cfg writes (pmpcfg0).  Per-byte WARL:
+          // Stage 6b: PMP cfg writes (pmpcfg0/pmpcfg2).  Per-byte WARL:
           //  - L=1 ⇒ drop write to that byte AND its paired pmpaddr.
-          //  - A=01 (TOR) collapses to A=00 (OFF) — Stage 6a supports OFF/NAPOT only.
+          //  - A=01 (TOR) collapses to A=00 (OFF) — Stage 6 supports OFF/NAPOT only.
           //  - WPRI bits [6:5] read 0.
-          // pmpcfg2 is addressable but hardwired 0 (writes ignored).
           CSR_PMPCFG0: begin
             for (int i = 0; i < 8; i++) begin
               automatic logic [7:0] new_byte = csr_new_val[i*8 +: 8];
@@ -604,8 +609,17 @@ module kronos_csr
               end
             end
           end
-          CSR_PMPCFG2: ; // hardwired 0
-          // pmpaddr0..7: 54-bit PA[55:2]; lock-aware.
+          CSR_PMPCFG2: begin
+            for (int i = 0; i < 8; i++) begin
+              automatic logic [7:0] new_byte = csr_new_val[i*8 +: 8];
+              if (~pmpcfg_q[i+8][7]) begin
+                if (new_byte[4:3] == 2'b01) new_byte[4:3] = 2'b00;  // TOR → OFF
+                new_byte[6:5] = 2'b00;  // WPRI clear
+                pmpcfg_q[i+8] <= new_byte;
+              end
+            end
+          end
+          // pmpaddr0..15: 54-bit PA[55:2]; lock-aware.
           12'h3B0: if (~pmpcfg_q[0][7]) pmpaddr_q[0] <= csr_new_val[53:0];
           12'h3B1: if (~pmpcfg_q[1][7]) pmpaddr_q[1] <= csr_new_val[53:0];
           12'h3B2: if (~pmpcfg_q[2][7]) pmpaddr_q[2] <= csr_new_val[53:0];
@@ -614,9 +628,14 @@ module kronos_csr
           12'h3B5: if (~pmpcfg_q[5][7]) pmpaddr_q[5] <= csr_new_val[53:0];
           12'h3B6: if (~pmpcfg_q[6][7]) pmpaddr_q[6] <= csr_new_val[53:0];
           12'h3B7: if (~pmpcfg_q[7][7]) pmpaddr_q[7] <= csr_new_val[53:0];
-          // pmpaddr8..15 hardwired 0 → ignore writes.
-          12'h3B8, 12'h3B9, 12'h3BA, 12'h3BB,
-          12'h3BC, 12'h3BD, 12'h3BE, 12'h3BF: ;
+          12'h3B8: if (~pmpcfg_q[8][7])  pmpaddr_q[8]  <= csr_new_val[53:0];
+          12'h3B9: if (~pmpcfg_q[9][7])  pmpaddr_q[9]  <= csr_new_val[53:0];
+          12'h3BA: if (~pmpcfg_q[10][7]) pmpaddr_q[10] <= csr_new_val[53:0];
+          12'h3BB: if (~pmpcfg_q[11][7]) pmpaddr_q[11] <= csr_new_val[53:0];
+          12'h3BC: if (~pmpcfg_q[12][7]) pmpaddr_q[12] <= csr_new_val[53:0];
+          12'h3BD: if (~pmpcfg_q[13][7]) pmpaddr_q[13] <= csr_new_val[53:0];
+          12'h3BE: if (~pmpcfg_q[14][7]) pmpaddr_q[14] <= csr_new_val[53:0];
+          12'h3BF: if (~pmpcfg_q[15][7]) pmpaddr_q[15] <= csr_new_val[53:0];
           // Counter writes — SW-write-wins precedence over default increment
           12'hB00: mcycle        <= csr_new_val;
           12'hB02: minstret      <= csr_new_val;
