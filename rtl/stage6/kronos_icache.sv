@@ -20,9 +20,11 @@ module kronos_icache
 
   // Upstream — fetch request from kronos_top
   input  logic                   req_i,
+  // Stage 6b: addr_i is the translated physical address from the iTLB.
   input  logic [PHYS_ADDR_W-1:0] addr_i,
   input  logic                   flush_i,
   input  logic                   pmp_fault_i,
+  input  logic                   tlb_miss_i,
   output logic                   data_valid_o,
   output logic [31:0]            data_o,
   output logic                   stall_o,
@@ -233,7 +235,7 @@ module kronos_icache
     axi_req_o.ar.len   = 8'd7;                  // 8 beats
     axi_req_o.ar.burst = axi_pkg::BURST_WRAP;
     axi_req_o.ar.id    = '0;
-    axi_req_o.ar_valid = (state_q == ICACHE_REFILL_AR) & ~pmp_fault_i;
+    axi_req_o.ar_valid = (state_q == ICACHE_REFILL_AR) & ~pmp_fault_i & ~tlb_miss_i;
     axi_req_o.r_ready  = (state_q == ICACHE_REFILL_R);
   end
 

@@ -70,6 +70,16 @@ package kronos_pkg;
   } priv_e;
 
   // -------------------------------------------------------------------------
+  // Stage 6b: which TLB requested a PTW walk
+  // -------------------------------------------------------------------------
+  typedef enum logic [1:0] {
+    TLB_NONE  = 2'b00,
+    TLB_FETCH = 2'b01,
+    TLB_LOAD  = 2'b10,
+    TLB_STORE = 2'b11
+  } tlb_op_e;
+
+  // -------------------------------------------------------------------------
   // Stage 5a: FPU operation select (declared here so decoded_instr_t can
   // embed fp_op_e; must appear before the struct definition).
   // -------------------------------------------------------------------------
@@ -126,7 +136,9 @@ package kronos_pkg;
     logic        is_ecall;
     logic        is_ebreak;
     logic        is_mret;
-    logic        is_sret;       // Stage 6a
+    logic        is_sret;          // Stage 6a
+    logic        is_sfence_vma;    // Stage 6b
+    logic        is_wfi;           // Stage 6b
     // M extension
     logic        is_muldiv;
     muldiv_op_e  muldiv_op;
@@ -312,6 +324,26 @@ package kronos_pkg;
   localparam logic [11:0] CSR_PMPADDR7   = 12'h3B7;
   localparam logic [11:0] CSR_PMPADDR8   = 12'h3B8;
   localparam logic [11:0] CSR_PMPADDR15  = 12'h3BF;
+
+  // -------------------------------------------------------------------------
+  // Stage 6b: Sv39/Sv48 satp.MODE values (RISC-V Privileged Spec § 4.1.11)
+  // -------------------------------------------------------------------------
+  localparam logic [3:0] SATP_MODE_BARE = 4'd0;
+  localparam logic [3:0] SATP_MODE_SV39 = 4'd8;
+  localparam logic [3:0] SATP_MODE_SV48 = 4'd9;
+
+  // -------------------------------------------------------------------------
+  // Stage 6b: RV64 PTE field positions (RISC-V Privileged Spec § 5.4)
+  // -------------------------------------------------------------------------
+  localparam int unsigned PTE_V_BIT = 0;   // valid
+  localparam int unsigned PTE_R_BIT = 1;
+  localparam int unsigned PTE_W_BIT = 2;
+  localparam int unsigned PTE_X_BIT = 3;
+  localparam int unsigned PTE_U_BIT = 4;   // user-accessible
+  localparam int unsigned PTE_G_BIT = 5;   // global
+  localparam int unsigned PTE_A_BIT = 6;   // accessed
+  localparam int unsigned PTE_D_BIT = 7;   // dirty
+  // PTE.RSW at [9:8]; PTE.PPN at [53:10]; bits [63:54] reserved (must be 0).
 
   // -------------------------------------------------------------------------
   // Stage 6a: synchronous trap causes used by PMP and delegation paths.

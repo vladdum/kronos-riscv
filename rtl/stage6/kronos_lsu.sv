@@ -26,6 +26,10 @@ module kronos_lsu
   input  logic             rst_ni,
 
   // Pipeline interface (64-bit data)
+  // Stage 6b: addr_i is the *translated physical address* coming from the
+  // dTLB (muxed into the pipeline at kronos_top).  The LSU treats it
+  // identically to the previous untranslated address; on a dTLB miss the
+  // request is suppressed via tlb_miss_i below until the refill completes.
   input  logic             req_i,
   input  logic             we_i,
   input  logic [31:0]      addr_i,
@@ -54,6 +58,13 @@ module kronos_lsu
   // not stall the pipeline — the access-fault trap is raised on the existing
   // trap path in kronos_top.
   input  logic             pmp_fault_i,
+
+  // Stage 6b: dTLB miss input (asserted by u_dtlb in kronos_top while a
+  // page-table walk is in progress).  When high, the LSU must not issue a
+  // dcache request and must hold the pipeline stalled until the dTLB refills
+  // and tlb_miss_i deasserts.  Page-fault is signalled separately and taken
+  // on the existing trap path in kronos_top.
+  input  logic             tlb_miss_i,
 
   // D-cache interface (replaces direct AXI master)
   output logic             dcache_req_o,
@@ -96,11 +107,15 @@ module kronos_lsu
   // asserted the dcache must not see a request (no AXI transaction), and the
   // AMO request must also be suppressed.  The trap is taken on the existing
   // trap path in kronos_top.
-  assign dcache_req_o     = req_i & ~pmp_fault_i;
+  //
+  // Stage 6b: a dTLB miss likewise suppresses the dcache request (and AMO
+  // request) so no cache lookup happens until the page-table walker has
+  // refilled the dTLB and produced a translated PA.
+  assign dcache_req_o     = req_i & ~pmp_fault_i & ~tlb_miss_i;
   assign dcache_addr_o    = {32'b0, addr_i};
   assign dcache_we_o      = we_i;
   assign dcache_wdata_o   = fp_dest_req_i ? fp_store_data_i : wdata_i;
-  assign dcache_amo_req_o = (is_lr_i | is_sc_i | is_amo_i) & ~pmp_fault_i;
+  assign dcache_amo_req_o = (is_lr_i | is_sc_i | is_amo_i) & ~pmp_fault_i & ~tlb_miss_i;
   assign dcache_amo_op_o  = amo_funct5_i;
 
   // -------------------------------------------------------------------------
@@ -176,7 +191,13 @@ module kronos_lsu
   // On a PMP fault we suppressed the dcache request above, so there is no
   // in-flight transaction.  The pipeline must not stall — mem_stall is
   // forced low so the trap can be taken on the same cycle the fault is seen.
-  assign mem_stall_o  = req_i & ~pmp_fault_i & (~dcache_data_valid_i | dcache_stall_i);
+  //
+  // Stage 6b: while tlb_miss_i is asserted, no dcache transaction has been
+  // issued yet, but the pipeline must remain stalled until the dTLB refills.
+  // tlb_miss_i is therefore an explicit stall source alongside the dcache
+  // not-yet-valid / stall conditions.
+  assign mem_stall_o  = req_i & ~pmp_fault_i &
+                        (tlb_miss_i | ~dcache_data_valid_i | dcache_stall_i);
   assign valid_o      = dcache_data_valid_i & ~dcache_stall_i;
   assign sc_success_o = dcache_sc_success_i;
 

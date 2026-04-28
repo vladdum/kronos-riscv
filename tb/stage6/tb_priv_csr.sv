@@ -121,7 +121,22 @@ module tb_priv_csr;
     .trig_csr_wdata_o(trig_csr_wdata_o),
     .csr_illegal_o(csr_illegal_o),
     .pmpcfg_o(pmpcfg_o),
-    .pmpaddr_o(pmpaddr_o)
+    .pmpaddr_o(pmpaddr_o),
+    // Stage 6b: SFENCE.VMA passthrough + satp fields.  Tied off / left
+    // unconnected — this TB exercises CSR semantics, not translation.
+    .sfence_vma_i        (1'b0),
+    .sfence_va_i         (64'b0),
+    .sfence_asid_i       (16'b0),
+    .sfence_va_valid_i   (1'b0),
+    .sfence_asid_valid_i (1'b0),
+    .sfence_vma_o        (),
+    .sfence_va_o         (),
+    .sfence_asid_o       (),
+    .sfence_va_valid_o   (),
+    .sfence_asid_valid_o (),
+    .satp_mode_o         (),
+    .satp_asid_o         (),
+    .satp_ppn_o          ()
   );
 
   // ------------------------------------------------------------------------

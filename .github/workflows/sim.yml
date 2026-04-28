@@ -214,6 +214,28 @@ jobs:
       - name: Run sim-s6
         run: make -C sim sim-s6 PULP_AXI_ROOT=/tmp/pulp_axi
 
+  sim-s6b-asm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: sim-s6b-asm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      # Runs every test under sw/stage6b/ on the stage-6b sim binary.
+      - name: Run sim-s6b
+        run: make -C sim sim-s6b PULP_AXI_ROOT=/tmp/pulp_axi
+
   sim-diff-traced:
     runs-on: ubuntu-latest
     timeout-minutes: 15
