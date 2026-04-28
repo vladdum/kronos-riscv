@@ -430,13 +430,18 @@ module kronos_dcache
               // SC: check reservation; if matched, write; else no-op.
               if (rsrv_valid_q & (rsrv_addr_q == eff_req_addr) & hit) begin
                 // SC success on cached line: write, set dirty.
-                for (int w = 0; w < NUM_WAYS; w++) begin
+                // Function calls hoisted to locals — Vivado xsim/Synthesis
+                // rejects "function_call(...)[bit_select]" per IEEE 1800.
+                for (int w = 0; w < NUM_WAYS; w++) begin : sc_write_loop
+                  automatic logic [7:0]  sc_strobes;
+                  automatic logic [63:0] sc_aligned;
+                  sc_strobes = store_strobes(eff_req_size, eff_req_addr[2:0]);
+                  sc_aligned = store_data_aligned(eff_req_size, eff_req_addr[2:0],
+                                                  eff_req_wdata);
                   if (hit_way_oh[w]) begin
                     for (int b = 0; b < 8; b++) begin
-                      if (store_strobes(eff_req_size, eff_req_addr[2:0])[b])
-                        data_q[w][set_idx][beat_idx][b*8 +: 8]
-                          <= store_data_aligned(eff_req_size, eff_req_addr[2:0],
-                                                eff_req_wdata)[b*8 +: 8];
+                      if (sc_strobes[b])
+                        data_q[w][set_idx][beat_idx][b*8 +: 8] <= sc_aligned[b*8 +: 8];
                     end
                     dirty_q[set_idx][w] <= 1'b1;
                   end
@@ -528,14 +533,19 @@ module kronos_dcache
             end
           end else begin
             // Store hit: write into RAM, set dirty.
+            // Function calls hoisted to locals — Vivado xsim/Synthesis
+            // rejects "function_call(...)[bit_select]" per IEEE 1800.
             if (hit & eff_req_we & eff_req_valid) begin
-              for (int w = 0; w < NUM_WAYS; w++) begin
+              for (int w = 0; w < NUM_WAYS; w++) begin : store_hit_loop
+                automatic logic [7:0]  st_strobes;
+                automatic logic [63:0] st_aligned;
+                st_strobes = store_strobes(eff_req_size, eff_req_addr[2:0]);
+                st_aligned = store_data_aligned(eff_req_size, eff_req_addr[2:0],
+                                                eff_req_wdata);
                 if (hit_way_oh[w]) begin
                   for (int b = 0; b < 8; b++) begin
-                    if (store_strobes(eff_req_size, eff_req_addr[2:0])[b])
-                      data_q[w][set_idx][beat_idx][b*8 +: 8]
-                        <= store_data_aligned(eff_req_size, eff_req_addr[2:0],
-                                              eff_req_wdata)[b*8 +: 8];
+                    if (st_strobes[b])
+                      data_q[w][set_idx][beat_idx][b*8 +: 8] <= st_aligned[b*8 +: 8];
                   end
                   dirty_q[set_idx][w] <= 1'b1;
                 end

@@ -49,6 +49,7 @@ module tb_csr_perf;
     .trig_csr_rdata_i('0),
     .trig_csr_match_i(1'b0),
     .trig_csr_we_o(),
+    .csr_new_val_o(),
     .trig_csr_wdata_o(),
     .frm_o(frm)
   );

@@ -50,6 +50,10 @@ module kronos_csr #(
   input  logic [63:0] trig_csr_rdata_i,
   input  logic        trig_csr_match_i,
   output logic        trig_csr_we_o,    // 1 = current cycle is a trigger CSR write
+  // Stage 6c: post-write CSR value (combinational, valid for any csrrs/csrrc/csrrw).
+  // Routed to retire_csr_wdata_o at top so the Sail-vs-Kronos trace diff sees
+  // the new CSR value rather than the RS1 operand.
+  output logic [63:0] csr_new_val_o,
   output logic [63:0] trig_csr_wdata_o  // CSR new value (after CSRRS/CSRRC)
 );
 
@@ -176,13 +180,21 @@ module kronos_csr #(
                           | addr_i == 12'h003);
   assign trig_csr_we_o    = req_i & trig_csr_match_i & (funct3_i[1:0] != 2'b00);
   assign trig_csr_wdata_o = csr_new_val;
+  // Stage 6c: re-derive mstatus/sstatus SD bit (bit 63) from the *new* FS so
+  // the retire trace matches Sail's post-write CSR read view. csr_new_val uses
+  // rdata_o (SD computed from old FS) OR'd with the operand — correct for the
+  // architectural write (mstatus_q discards bit 63 anyway), but the trace needs
+  // the post-write read view.
+  assign csr_new_val_o     = ((addr_i == 12'h300) || (addr_i == 12'h100))
+                             ? {(csr_new_val[14:13] == 2'b11), csr_new_val[62:0]}
+                             : csr_new_val;
 
   // -------------------------------------------------------------------------
   // Sequential logic
   // -------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      mstatus  <= 64'h0000_0000_0000_3800; // MPP=11, FS=01 (Initial) — FP enabled at boot
+      mstatus  <= 64'h0000_0000_0000_1800; // MPP=11, FS=00 (Off) — matches Sail; common.S sets FS=Dirty in prologue
       mie      <= {64{1'b0}};
       mtvec    <= {64{1'b0}};
       mscratch <= {64{1'b0}};

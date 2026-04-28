@@ -233,6 +233,15 @@ module kronos_top
   logic        trig_csr_we;
   logic [63:0] trig_csr_wdata;
 
+  // Stage 6c: post-write CSR value piped from u_csr → mem_wb pipeline → retire
+  // trace.  csr_new_val_post is the combinational output of u_csr in the EX
+  // stage; ex_mem_csr_new_val_q snapshots it at the EX→MEM boundary (same
+  // cycle the CSR commits its write), and mem_wb_csr_new_val_q propagates it
+  // to the WB stage so retire_csr_wdata_o reflects the post-write value.
+  logic [63:0] csr_new_val_post;
+  logic [63:0] ex_mem_csr_new_val_q;
+  logic [63:0] mem_wb_csr_new_val_q;
+
   // ---- Stage 5c/e performance-counter event bus ----
   logic        bpred_mispredict_pulse;
   logic        fpu_busy_any;
@@ -505,6 +514,7 @@ module kronos_top
     .trig_csr_rdata_i (trig_csr_rdata),
     .trig_csr_match_i (trig_csr_match),
     .trig_csr_we_o    (trig_csr_we),
+    .csr_new_val_o    (csr_new_val_post),
     .trig_csr_wdata_o (trig_csr_wdata)
   );
 
@@ -1037,6 +1047,21 @@ module kronos_top
     else if (ex_mem_en) ex_mem_csr_q <= (id_ex_q.dec.wb_sel == WB_CSR);
   end
 
+  // Stage 6c: capture u_csr.csr_new_val_o at the EX→MEM boundary.  The CSR's
+  // own write commits on the same posedge (req_i is gated by ~combined_stall),
+  // so this snapshot is the post-write value for the EX-stage instruction.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)        ex_mem_csr_new_val_q <= 64'b0;
+    else if (ex_mem_en) ex_mem_csr_new_val_q <= csr_new_val_post;
+  end
+
+  // Stage 6c: propagate the post-write CSR value MEM→WB, mirroring the
+  // mem_wb_q.csr_wdata pipe.  Drives retire_csr_wdata_o.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)        mem_wb_csr_new_val_q <= 64'b0;
+    else if (mem_wb_en) mem_wb_csr_new_val_q <= ex_mem_csr_new_val_q;
+  end
+
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       ex_mem_q <= '0;
@@ -1254,7 +1279,7 @@ module kronos_top
                                                                          64'h0000_0000_0000_00FF);
   assign retire_csr_wen_o    = retire_advance & mem_wb_q.dec.is_csr;
   assign retire_csr_addr_o   = mem_wb_q.dec.csr_addr;
-  assign retire_csr_wdata_o  = mem_wb_q.csr_wdata;
+  assign retire_csr_wdata_o  = mem_wb_csr_new_val_q;
   assign retire_trap_taken_o = trap_taken_pulse;
   assign retire_trap_cause_o = trap_cause;
 

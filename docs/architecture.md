@@ -1,6 +1,6 @@
 # kronos-riscv Architecture Reference
 
-**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 6b
+**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 6c
 
 kronos-riscv is a 5-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. Instructions flow through Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). The IF stage includes an alignment unit that handles variable-width compressed instructions and a bimodal branch predictor that speculatively redirects fetch before branch resolution. The EX stage contains the 64-bit ALU, a multi-cycle 64-bit multiply/divide unit, branch resolution logic, and the CSR unit. The MEM stage drives an AXI4 load/store unit supporting atomic operations (LR/SC, AMO) and floating-point loads/stores. A separate FPU with six pipelined units handles the F and D extensions; the FPU uses a scoreboard rather than the integer forwarding network for hazard management. Hazard and forwarding control modules sit outside the pipeline stages and manage stalls, flushes, and operand forwarding.
 
@@ -602,3 +602,19 @@ inspectors will not need RTL changes when they're introduced.
 
 A stub file `sim/sim_ooo_inspect.cpp` reserves the namespace
 `kronos_ooo_inspect::` for the dumper entry points that Stage 6 will define.
+
+---
+
+## Stage transition gates
+
+A "stage transition gate" is a verification activity that **must** run clean before a stage is tagged complete and merged. Gates are not part of default CI when their cost makes per-PR execution impractical; instead they are run manually before the closing PR is opened, and the result is captured in the PR description as a one-line evidence note.
+
+Current gates:
+
+| Gate | When | How | Evidence |
+|------|------|-----|----------|
+| **GLS-s6** (xsim funcsim + SDF timing-sim on the smoke subset) | Before tagging Stage 6c, 6d, 6e, … complete | `make gls-funcsim-s6 GLS_TEST=<n>` and `make gls-sdf-s6 GLS_TEST=<n>` for at least 4 programs (1 directed + 1 CRV smoke seed + 1 ACT4 priv test + the long integration program) | "GLS-s6 ran clean as of commit <SHA>: 4/4 PASS, max sim runtime <m> min" in PR body |
+
+Why GLS is gated rather than CI'd: GitHub-hosted runners do not have the disk space (~14 GB free) for a Vivado install (~10–15 GB minimum, ~30 GB full). Self-hosted runners with Vivado pre-installed would lift this restriction; until then, GLS is a manual checkpoint.
+
+Stage 5 GLS infrastructure (`gls-funcsim-s5`, `gls-sdf-s5`) operates the same way and predates this section.

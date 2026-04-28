@@ -6,7 +6,7 @@
 
 // Stage 6a unit testbench for kronos_csr — privilege & supervisor extensions.
 // Drives the CSR module standalone and verifies:
-//   1.  Reset state (priv=M, mstatus=0x3800, pmpcfg0=0)
+//   1.  Reset state (priv=M, mstatus=0x1800, pmpcfg0=0)
 //   2.  sstatus<->mstatus mirror (SUM bit)
 //   3.  medeleg WARL: bit 11 hardwired 0
 //   4.  mideleg WARL: only bits {1, 5, 9} writable
@@ -119,6 +119,8 @@ module tb_priv_csr;
     .trig_csr_match_i(trig_csr_match_i),
     .trig_csr_we_o(trig_csr_we_o),
     .trig_csr_wdata_o(trig_csr_wdata_o),
+    // Stage 6c: post-write CSR value — unused in this TB (T3 wires it at top).
+    .csr_new_val_o(),
     .csr_illegal_o(csr_illegal_o),
     .pmpcfg_o(pmpcfg_o),
     .pmpaddr_o(pmpaddr_o),
@@ -256,8 +258,8 @@ module tb_priv_csr;
       fail_count++;
     end
     csr_read(12'h300, v, illegal);
-    if (v !== 64'h0000_0000_0000_3800) begin
-      $display("FAIL case1: mstatus reset=%h expected 0x3800", v);
+    if (v !== 64'h0000_0000_0000_1800) begin
+      $display("FAIL case1: mstatus reset=%h expected 0x1800", v);
       fail_count++;
     end
     csr_read(12'h3A0, v, illegal);                     // pmpcfg0
