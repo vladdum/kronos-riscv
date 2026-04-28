@@ -1,4 +1,5 @@
-RTL_DIR   := ../rtl
+RTL_DIR        := ../rtl
+RTL_DIR_COMMON := $(RTL_DIR)/common
 TB_DIR    := ../tb
 SW_DIR    := ../sw/stage0
 SW_DIR_S1 := ../sw/stage1
@@ -745,7 +746,8 @@ SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
 
 SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger
 
-SIM_GROUP_S6_INT  := sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-priv-csr sim-pmp sim-tlb sim-ptw
+SIM_GROUP_S6_INT  := sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-priv-csr sim-pmp sim-tlb sim-ptw \
+                     sim-kronos-ram
 
 $(OBJ_DIR):
 	mkdir -p $@
@@ -805,6 +807,7 @@ sim-all: $(SF_LIB)
 # -------------------- Stage 5 (F + D floating point) --------------------
 SV_FILES_S5 := $(AXI_PKG_SV) \
                $(RTL_DIR)/kronos_pkg.sv \
+               $(RTL_DIR_COMMON)/kronos_ram.sv \
                $(RTL_DIR)/stage5/kronos_alu.sv \
                $(RTL_DIR)/stage5/kronos_decode.sv \
                $(RTL_DIR)/stage0/kronos_regfile.sv \
@@ -1009,6 +1012,7 @@ SIM_BIN_S6 := $(OBJ_DIR)/s6/V$(TOP_S5)
 
 SV_FILES_S6 := $(AXI_PKG_SV) \
                $(RTL_DIR)/kronos_pkg.sv \
+               $(RTL_DIR_COMMON)/kronos_ram.sv \
                $(RTL_DIR_S6)/kronos_alu.sv \
                $(RTL_DIR_S6)/kronos_decode.sv \
                $(RTL_DIR)/stage0/kronos_regfile.sv \
@@ -1318,6 +1322,28 @@ sim-trigger:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/trigger -Wno-UNUSED \
 	  --top-module tb_trigger $(TB_TRIGGER_FILES)
 	$(OBJ_DIR)/trigger/Vtb_trigger
+
+# ---------------------------------------------------------------------------
+# Stage 6d — kronos_ram wrapper unit TB (Verilator, ASIC backend default)
+# ---------------------------------------------------------------------------
+TB_KRONOS_RAM_FILES := $(RTL_DIR_COMMON)/kronos_ram.sv \
+                       $(TB_DIR)/common/tb_kronos_ram.sv
+
+sim-kronos-ram: | $(OBJ_DIR)
+	mkdir -p $(OBJ_DIR)/kronos_ram
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	  --Wno-PROCASSINIT \
+	  --top-module tb_kronos_ram $(TB_KRONOS_RAM_FILES) \
+	  -Mdir $(OBJ_DIR)/kronos_ram -o Vtb_kronos_ram
+	@out=$$($(OBJ_DIR)/kronos_ram/Vtb_kronos_ram 2>&1); \
+	 echo "$$out" | tail -3; \
+	 if echo "$$out" | grep -q "tb_kronos_ram: PASS"; then \
+	   echo "PASS  sim-kronos-ram"; \
+	 else \
+	   echo "FAIL  sim-kronos-ram"; exit 1; \
+	 fi
+
+.PHONY: sim-kronos-ram
 
 TB_PMP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                 $(RTL_DIR)/stage6/kronos_pmp.sv \

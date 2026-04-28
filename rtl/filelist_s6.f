@@ -6,6 +6,7 @@
 # Paths are relative to this file's directory (rtl/).
 
 kronos_pkg.sv
+common/kronos_ram.sv
 stage0/kronos_regfile.sv
 stage1/kronos_forward.sv
 stage1/kronos_hazard.sv

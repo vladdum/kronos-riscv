@@ -36,6 +36,7 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 6a    | Privileged modes (M/S/U) + trap delegation + PMP | RV64IMAFDC      | AXI4    | Complete    |
 | 6b    | Sv39/Sv48 MMU + iTLB/dTLB + HW PTW + sfence.vma | RV64IMAFDC       | AXI4    | Complete    |
 | 6c    | Closeout: dhrystone perf gate, integration program, mstatus reset, GLS-s6 docs | RV64IMAFDC | AXI4 | Complete |
+| 6d    | RAM wrapper infrastructure (`kronos_ram` SDP, FPGA `xpm` + ASIC stub) | RV64IMAFDC | AXI4 | Complete |
 | 7     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
