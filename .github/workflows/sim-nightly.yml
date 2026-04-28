@@ -79,3 +79,94 @@ jobs:
               ].join('\n'),
               labels: ['ci-failure', 'crv'],
             });
+
+  compliance-s6-priv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          curl --location https://github.com/riscv-collab/riscv-gnu-toolchain/releases/download/2025.07.16/riscv64-elf-ubuntu-22.04-gcc-nightly-2025.07.16-nightly.tar.xz \
+            | sudo tar xJ --directory=/usr/local --strip-components=1
+
+      - name: Install sail-riscv reference model
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+          # priv-runner's Sv tests exercise complex translation paths Sail
+          # simulates slowly (sv*_canonical, sv*_VA_all_*, etc.). Bump the
+          # wrapper timeout from 60s to 120s for this job only — other
+          # compliance jobs (in sim.yml per-push) keep the tighter 60s default.
+          sudo tee /usr/local/bin/sail_riscv_sim_timeout > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          exec timeout 120 sail_riscv_sim "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/sail_riscv_sim_timeout
+
+      - name: Ensure pre-baked extensions list is fresh
+        run: |
+          # parse_udb_config.py skips UDB regen when extensions.txt is newer
+          # than the yaml seed. Touch it so the mtime check passes
+          # deterministically on a fresh clone (and so we don't need Ruby +
+          # the udb gem at all — the gem's native ext downloads from GitHub
+          # releases are flaky on the CI side).
+          touch riscv-arch-test/work/kronos-rv64imafdc-priv/extensions.txt
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Build s6 sim
+        run: make -C sim build-s6 PULP_AXI_ROOT=/tmp/pulp_axi
+
+      - name: Run sim-arch-test-s6-priv
+        id: priv
+        run: make -C sim sim-arch-test-s6-priv PULP_AXI_ROOT=/tmp/pulp_axi
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-s6-priv-${{ github.run_id }}
+          path: riscv-arch-test/work/*/logs
+          if-no-files-found: ignore
+
+      - name: Open tracking issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[compliance-s6-priv nightly] failure ${date} (run ${context.runId})`,
+              body: [
+                `Nightly ACT4 priv-suite (Sv/Svadu/Svade/Svbare/PMPSm + non-priv RV64IMAFDC) regression failed.`,
+                ``,
+                `**Run:** https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                `**Artefacts:** \`compliance-s6-priv-${context.runId}\` attached to the run`,
+                ``,
+                `Reproduce locally:`,
+                '```',
+                `  cd ~/kronos-riscv`,
+                `  make -C sim sim-arch-test-s6-priv`,
+                '```',
+                ``,
+                `If a Sail-side gen fail surfaces a new sv*_*_Smode/Umode test, either bump the Sail wrapper timeout above 120s in this workflow or rename the offender into S6_PRIV_SKIPPED_TESTS in sim/Makefile.`,
+              ].join('\n'),
+              labels: ['ci-failure', 'compliance'],
+            });

@@ -116,12 +116,24 @@ cd sim && make sim-arch-test-s1   # through -s5
 The `riscv-arch-test` submodule is built and run via `sim/Makefile`:
 
 ```bash
-cd sim && make sim-arch-test-s1   # 46 tests   (RV32I)
-cd sim && make sim-arch-test-s2   # 54 tests   (RV32IM)
-cd sim && make sim-arch-test-s3   # 81 tests   (RV32IMC)
-cd sim && make sim-arch-test-s4   # 104 tests  (RV64IMAC)
-cd sim && make sim-arch-test-s5   # 303 tests  (RV64IMAFDC)
+cd sim && make sim-arch-test-s1        # 46 tests   (RV32I)
+cd sim && make sim-arch-test-s2        # 54 tests   (RV32IM)
+cd sim && make sim-arch-test-s3        # 81 tests   (RV32IMC)
+cd sim && make sim-arch-test-s4        # 104 tests  (RV64IMAC)
+cd sim && make sim-arch-test-s5        # 303 tests  (RV64IMAFDC)
+cd sim && make sim-arch-test-s6        # 307 tests  (RV64IMAFDC, no priv suite)
+cd sim && make sim-arch-test-s6-priv   # ≥333 tests (adds Sv/Svadu/PMPSm priv suites; UDB-driven)
 ```
+
+Stage 6 has two ACT4 targets: `sim-arch-test-s6` keeps the IMAFDC baseline
+(no UDB tooling needed locally; gated on every push by `compliance-s6` in
+`sim.yml`); `sim-arch-test-s6-priv` adds the privileged-spec sub-suites
+(`Sv`, `Svade`, `Svadu`, `Svbare`, `SvPMP`, `SvaduPMP`, `PMPSm`, `PMPZca`,
+`PMPmisaligned`) using a pre-baked `extensions.txt` so UDB regen is
+skipped. The priv runner is heavier (~5–10 min, Sail simulates Sv
+edge-cases slowly) and runs **nightly** via `compliance-s6-priv` in
+`sim-nightly.yml` plus `workflow_dispatch` for manual triggers. Failures
+auto-open a tracking issue.
 
 Each target calls `uv run act …` to regenerate ELFs (needs `sail_riscv_sim`
 on PATH) and then `run_tests.py` to execute them.

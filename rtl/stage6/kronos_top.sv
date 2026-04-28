@@ -121,8 +121,8 @@ module kronos_top
   logic [55:0]       pmp_fetch_fault_addr;
   logic              pmp_data_fault;
   logic [55:0]       pmp_data_fault_addr;
-  logic [7:0][7:0]   pmpcfg;
-  logic [7:0][53:0]  pmpaddr;
+  logic [15:0][7:0]  pmpcfg;
+  logic [15:0][53:0] pmpaddr;
   logic [31:0]       trap_tval;
   logic              csr_illegal;
   // Stage 6a: priv-checked control transfers (mret/sret) and TVM/TW gates.
@@ -694,7 +694,7 @@ module kronos_top
   logic pmp_any_active;
   always_comb begin
     pmp_any_active = 1'b0;
-    for (int i = 0; i < 8; i++) begin
+    for (int i = 0; i < 16; i++) begin
       if (pmpcfg[i][4:3] != 2'b00) pmp_any_active = 1'b1;
     end
   end
@@ -704,7 +704,7 @@ module kronos_top
   logic pmp_data_fault_raw;
   logic [55:0] pmp_data_fault_addr_raw;
 
-  kronos_pmp u_pmp_fetch (
+  kronos_pmp #(.N(16)) u_pmp_fetch (
     .pmpcfg_i     (pmpcfg),
     .pmpaddr_i    (pmpaddr),
     .priv_i       (priv_q),
@@ -723,7 +723,7 @@ module kronos_top
   assign pmp_fetch_fault      = pmp_fetch_fault_raw & pmp_any_active;
   assign pmp_fetch_fault_addr = pmp_fetch_fault_addr_raw;
 
-  kronos_pmp u_pmp_data (
+  kronos_pmp #(.N(16)) u_pmp_data (
     .pmpcfg_i     (pmpcfg),
     .pmpaddr_i    (pmpaddr),
     .priv_i       (priv_q),

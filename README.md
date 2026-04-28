@@ -279,16 +279,19 @@ All five completed stages pass the official
 [`riscv-arch-test`](https://github.com/riscv-non-isa/riscv-arch-test) (ACT4)
 suite, tracked as a git submodule at `riscv-arch-test/`.
 
-| Stage | Config                | Tests   |
-|-------|-----------------------|---------|
-| s1    | `kronos-rv32i`        | 46/46   |
-| s2    | `kronos-rv32im`       | 54/54   |
-| s3    | `kronos-rv32imc`      | 81/81   |
-| s4    | `kronos-rv64imac`     | 104/104 |
-| s5    | `kronos-rv64imafd`    | 303/303 |
+| Stage   | Config                       | Tests   |
+|---------|------------------------------|---------|
+| s1      | `kronos-rv32i`               | 46/46   |
+| s2      | `kronos-rv32im`              | 54/54   |
+| s3      | `kronos-rv32imc`             | 81/81   |
+| s4      | `kronos-rv64imac`            | 104/104 |
+| s5      | `kronos-rv64imafd`           | 303/303 |
+| s6      | `kronos-rv64imafdc-priv`     | 307/307 (IMAFDC subset; no priv suite) |
+| s6-priv | `kronos-rv64imafdc-priv`     | ≥333    (adds Sv/Svadu/PMPSm priv suites — UDB-driven; runs **nightly** in sim-nightly.yml, not on push) |
 
 ```bash
-cd sim && make sim-arch-test-s1    # …-s2 …-s3 …-s4 …-s5
+cd sim && make sim-arch-test-s1        # …-s2 …-s3 …-s4 …-s5 …-s6
+cd sim && make sim-arch-test-s6-priv   # priv runner (CI uses pre-baked extensions.txt; no Ruby/UDB needed)
 ```
 
 Each `sim-arch-test-s<N>` target regenerates ELFs via `uv run act …` (requires
