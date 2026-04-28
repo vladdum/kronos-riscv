@@ -17,6 +17,8 @@ stage6/kronos_regfile_fp.sv
 stage6/kronos_icache.sv
 stage6/kronos_csr.sv
 stage6/kronos_pmp.sv
+stage6/kronos_tlb.sv
+stage6/kronos_ptw.sv
 stage6/kronos_trigger.sv
 stage6/kronos_lsu.sv
 stage6/kronos_dcache.sv

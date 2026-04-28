@@ -132,6 +132,56 @@ module kronos_top
   // Stage 6a: PMP data-port size_i (3-bit log2 width: 0=1B,1=2B,2=4B,3=8B).
   logic [2:0]        pmp_data_size;
 
+  // -------------------------------------------------------------------------
+  // Stage 6b: TLB / PTW / translation-control wires.
+  //
+  // Two TLB lookups happen each cycle (fetch + data); both query the active
+  // satp.MODE and decide whether translation is enabled (Bare → no translate;
+  // Sv39/Sv48 → translate when effective priv is not M).  Translation faults
+  // (TLB-perm-fail or PTW page-fault) drive the trap chain alongside the PMP
+  // fault paths from Stage 6a.
+  // -------------------------------------------------------------------------
+  logic        itlb_hit, itlb_perm_fail, itlb_a_zero, itlb_d_zero;
+  logic [55:0] itlb_pa;
+  logic        dtlb_hit, dtlb_perm_fail, dtlb_a_zero, dtlb_d_zero;
+  logic [55:0] dtlb_pa;
+  logic        itlb_miss, dtlb_miss;
+  logic        ptw_busy, ptw_pf;
+  logic [4:0]  ptw_pf_cause;
+  logic [63:0] ptw_pf_tval;
+  tlb_op_e     ptw_pf_which;
+  logic        ptw_dc_req_valid, ptw_dc_req_we, ptw_dc_req_lr, ptw_dc_req_sc;
+  logic [55:0] ptw_dc_req_addr;
+  logic [63:0] ptw_dc_req_wdata;
+  logic [2:0]  ptw_dc_req_size;
+  logic        ptw_itlb_rfv, ptw_dtlb_rfv;
+  logic [1:0]  ptw_rf_size;
+  logic [35:0] ptw_rf_vpn;
+  logic [43:0] ptw_rf_ppn;
+  logic [15:0] ptw_rf_asid;
+  logic        ptw_rf_global;
+  logic [3:0]  ptw_rf_perm;
+  logic        ptw_rf_a, ptw_rf_d;
+  logic        ptw_dc_rsp_valid, ptw_dc_rsp_sc_ok;
+  logic [63:0] ptw_dc_rsp_rdata;
+  logic [3:0]  satp_mode;
+  logic [15:0] satp_asid;
+  logic [43:0] satp_ppn;
+  priv_e       eff_priv_data;
+  logic        translate_data, translate_fetch;
+  logic        sfence_vma, sfence_va_valid, sfence_asid_valid;
+  logic [63:0] sfence_va;
+  logic [15:0] sfence_asid;
+  logic        wfi_priv_fail_q;
+  logic        cross_page_fault;
+  logic [31:0] eff_fetch_pa, eff_data_pa;
+  // Stage 6b: aggregate page-fault routing.
+  logic        instr_page_fault, load_page_fault, store_page_fault;
+  // Stage 6b: registered data-port PA (VA→PA happens in EX, LSU consumes it
+  // one stage later in MEM).  Kept alongside ex_mem_q.alu_result so the trace
+  // continues to report the architectural VA in retire_mem_addr_o.
+  logic [31:0] ex_mem_data_pa_q;
+
   // STAGE2: muldiv signals (64-bit)
   logic [63:0] muldiv_result;
   logic        muldiv_valid, muldiv_idle;
@@ -413,7 +463,25 @@ module kronos_top
   // Non-muldiv stall sources that hazard must observe with absolute priority
   // (bus/FPU/fetch can't be abandoned mid-flight by a redirect).  muldiv_stall
   // is fed to hazard separately so redirect flush can out-rank it.
-  assign combined_stall_no_muldiv = mem_stall | instr_fetch_stall | fpu_stall;
+  //
+  // Stage 6b: a dTLB miss for an EX-stage load/store/AMO must freeze the
+  // pipeline.  The dTLB lookup happens in EX (against id_ex_q) but the LSU
+  // fires in MEM (against ex_mem_q).  Without this stall, the missing access
+  // would advance to MEM with a stale ex_mem_data_pa_q (captured before the
+  // PTW completed) and complete via the dcache before ptw_pf could fire.
+  //
+  // Qualifications:
+  //   - id_ex_q.valid          -> ignore phantom misses on bubbles
+  //   - ~load/store_page_fault -> let the PTW's page-fault pulse take the
+  //     trap on the same cycle (otherwise dtlb_miss stays high through the
+  //     fault cycle and combined_stall blocks the redirect).
+  //
+  // itlb_miss is already covered by instr_fetch_stall (the icache refuses
+  // to issue the AR while tlb_miss_i is high, so align_instr_valid stays
+  // low until the PTW refills).
+  assign combined_stall_no_muldiv = mem_stall | instr_fetch_stall | fpu_stall
+                                  | (id_ex_q.valid & dtlb_miss &
+                                     ~load_page_fault & ~store_page_fault);
   assign combined_stall    = combined_stall_no_muldiv | muldiv_stall;
 
   // FRM/FCSR RAW hazard: a CSR write to FRM/FCSR in EX will update fcsr_q at
@@ -509,8 +577,10 @@ module kronos_top
                      (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
                       id_ex_q.dec.illegal  | csr_illegal |
                       mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+                      wfi_priv_fail_q |
                       irq_pending | trig_hit)) |
-                    pmp_fetch_fault | pmp_data_fault),
+                    pmp_fetch_fault | pmp_data_fault |
+                    instr_page_fault | load_page_fault | store_page_fault),
     .trap_pc_i     (id_ex_q.pc),
     .trap_cause_i  (trap_cause),
     .trap_tval_i   (trap_tval),
@@ -549,7 +619,22 @@ module kronos_top
     .trig_csr_rdata_i (trig_csr_rdata),
     .trig_csr_match_i (trig_csr_match),
     .trig_csr_we_o    (trig_csr_we),
-    .trig_csr_wdata_o (trig_csr_wdata)
+    .trig_csr_wdata_o (trig_csr_wdata),
+    // Stage 6b: SFENCE.VMA passthrough (decode → CSR → both TLBs).
+    .sfence_vma_i        (sfence_vma),
+    .sfence_va_i         (sfence_va),
+    .sfence_asid_i       (sfence_asid),
+    .sfence_va_valid_i   (sfence_va_valid),
+    .sfence_asid_valid_i (sfence_asid_valid),
+    .sfence_vma_o        (),  // mirrored into local sfence_vma; unused here
+    .sfence_va_o         (),
+    .sfence_asid_o       (),
+    .sfence_va_valid_o   (),
+    .sfence_asid_valid_o (),
+    // Stage 6b: satp fields broken out for the address-translation engine.
+    .satp_mode_o         (satp_mode),
+    .satp_asid_o         (satp_asid),
+    .satp_ppn_o          (satp_ppn)
   );
 
   kronos_trigger u_trigger (
@@ -685,6 +770,80 @@ module kronos_top
                      (priv_q == PRIV_S) & mstatus[20];       // TVM
   end
 
+  // -------------------------------------------------------------------------
+  // Stage 6b: translation-enable + sfence pulse + wfi priv-fail.
+  //
+  // Per priv-spec § 4.4 (Sv39 / Sv48 translation):
+  //   - Translation is active when satp.MODE != Bare AND effective_priv != M.
+  //   - For data accesses, mstatus.MPRV (bit 17) replaces priv_q with
+  //     mstatus.MPP (bits 12:11) when in M-mode.
+  //   - For fetch, MPRV does not apply — always use priv_q.
+  //
+  // SFENCE.VMA pulses for one cycle when a SFENCE.VMA retires (id_ex_q.valid
+  // & is_sfence_vma & ~combined_stall).  rs1==x0 sweeps all VAs; rs2==x0
+  // sweeps all ASIDs.  fwd_rs1_data / fwd_rs2_data are the EX-stage forwarded
+  // operands so a producer one stage ahead is bypassed correctly.
+  //
+  // WFI traps to illegal-instruction when mstatus.TW (bit 21) is set and the
+  // current priv is not M (priv-spec § 3.1.6.5).  Stage 6b implements WFI as
+  // a NOP in M-mode and as a priv-fail trap otherwise; no actual sleep.
+  // -------------------------------------------------------------------------
+  assign eff_priv_data    = (priv_q == PRIV_M & mstatus[17] /*MPRV*/)
+                            ? priv_e'(mstatus[12:11]) : priv_q;
+  assign translate_data   = (satp_mode != SATP_MODE_BARE) & (eff_priv_data != PRIV_M);
+  assign translate_fetch  = (satp_mode != SATP_MODE_BARE) & (priv_q != PRIV_M);
+
+  assign sfence_vma         = id_ex_q.valid & id_ex_q.dec.is_sfence_vma & ~combined_stall;
+  assign sfence_va          = fwd_rs1_data;
+  assign sfence_asid        = fwd_rs2_data[15:0];
+  assign sfence_va_valid    = (id_ex_q.dec.rs1 != 5'd0);
+  assign sfence_asid_valid  = (id_ex_q.dec.rs2 != 5'd0);
+
+  assign wfi_priv_fail_q    = id_ex_q.valid & id_ex_q.dec.is_wfi &
+                              (priv_q != PRIV_M) & mstatus[21] /*TW*/ & ~combined_stall;
+
+  // -------------------------------------------------------------------------
+  // Stage 6b: TLB-miss qualifiers.
+  //
+  // A miss is reported only when translation is active AND the lookup is being
+  // presented to the TLB this cycle AND the TLB neither hit nor reported a
+  // permission fault.  When a miss is asserted the LSU / I-cache stall their
+  // own AXI activity (tlb_miss_i input), and the PTW kicks off a walk to fill
+  // the TLB before the access is replayed.
+  // -------------------------------------------------------------------------
+  assign itlb_miss = translate_fetch & align_needs_fetch & ~itlb_hit & ~itlb_perm_fail;
+  // Stage 6b: A/D-bit driven re-walks.  An entry that hits with A=0, or a
+  // store whose entry hits with D=0, must trigger the PTW to atomically set
+  // the missing bit before the access completes.  Folded into dtlb_miss so
+  // the same stall + replay machinery is reused — the PTW re-walks the page
+  // table, performs an LR/SC on the leaf PTE to set A (and D for stores),
+  // and refills the dTLB with the updated entry.  kronos_tlb invalidates
+  // matching entries on refill so the stale A=1/D=0 line cannot keep
+  // answering lookups at a lower index.
+  assign dtlb_miss = translate_data & id_ex_q.valid &
+                     (id_ex_q.dec.is_load | id_ex_q.dec.is_store | id_ex_q.dec.is_amo) &
+                     ((~dtlb_hit & ~dtlb_perm_fail) | dtlb_a_zero | dtlb_d_zero);
+
+  // PA muxes — when translation is off (Bare or M-mode), forward the original
+  // virtual address as-is (the architectural PA == VA).  Otherwise use the
+  // TLB lookup output.  Stage 6b keeps a 32-bit physical address space, so
+  // we slice the low 32 bits off the 56-bit TLB output.
+  assign eff_fetch_pa = translate_fetch ? itlb_pa[31:0] : icache_fetch_addr;
+  assign eff_data_pa  = translate_data  ? dtlb_pa[31:0] : alu_result[31:0];
+
+  // Aggregate page-fault flags (TLB perm-fail OR PTW page-fault on the matching
+  // tlb_op_e).  cross_page_fault is treated as an instruction page-fault.
+  // kronos_align gates cross_page_fault_o on translate_fetch_i, so this signal
+  // is automatically zero in M-mode / Bare and only fires under active
+  // translation.
+  assign instr_page_fault = itlb_perm_fail |
+                            (ptw_pf & (ptw_pf_which == TLB_FETCH)) |
+                            cross_page_fault;
+  assign load_page_fault  = (dtlb_perm_fail | (ptw_pf & (ptw_pf_which == TLB_LOAD))) &
+                            id_ex_q.dec.is_load;
+  assign store_page_fault = (dtlb_perm_fail | (ptw_pf & (ptw_pf_which == TLB_STORE))) &
+                            (id_ex_q.dec.is_store | id_ex_q.dec.is_amo);
+
   // STAGE5f: 64-bit LSU — thin adapter to kronos_dcache.
   kronos_lsu u_lsu (
     .clk_i              (clk_i),
@@ -694,8 +853,14 @@ module kronos_top
     // Stage 6a: PMP data-port permission-violation flag.  Suppresses dcache
     // request issue and the AMO request when high.
     .pmp_fault_i        (pmp_data_fault),
+    // Stage 6b: dTLB miss indicator — LSU stalls and suppresses dcache issue
+    // until the PTW refills the dTLB and the access is replayed.
+    .tlb_miss_i         (dtlb_miss),
     .we_i               (ex_mem_q.dec.is_store | ex_mem_q.dec.fp_store),
-    .addr_i             (ex_mem_q.alu_result[31:0]),
+    // Stage 6b: addr_i is the translated PA when satp.MODE != Bare and the
+    // effective priv is not M; otherwise PA == VA (alu_result).  Captured at
+    // the EX→MEM boundary by ex_mem_data_pa_q.
+    .addr_i             (ex_mem_data_pa_q),
     .wdata_i            (ex_mem_q.rs2_data),
     .funct3_i           (ex_mem_q.dec.mem_funct3),
     .rdata_o            (lsu_rdata),
@@ -753,12 +918,159 @@ module kronos_top
     .rdata_o         (dcache_rdata),
     .sc_success_o    (dcache_sc_success),
     .stall_o         (dcache_stall),
+    // Stage 6b: PTW priority port — page-table walks bypass the LSU pipe.
+    .ptw_req_valid_i (ptw_dc_req_valid),
+    .ptw_req_addr_i  (ptw_dc_req_addr),
+    .ptw_req_we_i    (ptw_dc_req_we),
+    .ptw_req_wdata_i (ptw_dc_req_wdata),
+    .ptw_req_is_lr_i (ptw_dc_req_lr),
+    .ptw_req_is_sc_i (ptw_dc_req_sc),
+    .ptw_rsp_valid_o (ptw_dc_rsp_valid),
+    .ptw_rsp_rdata_o (ptw_dc_rsp_rdata),
+    .ptw_rsp_sc_ok_o (ptw_dc_rsp_sc_ok),
     .flush_i         (fence_i_active_q),
     .flush_done_o    (dcache_flush_done),
     .dirty_pending_o (dcache_dirty_pending),
     .axi_req_o       (data_axi_req_o),
     .axi_rsp_i       (data_axi_rsp_i),
     .miss_pulse_o    (dcache_miss_pulse)
+  );
+
+  // -------------------------------------------------------------------------
+  // Stage 6b: Instruction TLB.
+  //
+  // Looks up the current fetch VA every cycle the alignment unit asks for a
+  // word (align_needs_fetch=1).  When translation is disabled (Bare or M-mode)
+  // lookup_valid_i is held low so the TLB neither claims a hit nor a perm-fail.
+  // SUM/MXR are M-mode bypass bits: SUM lets S read U pages, MXR lets X→R also
+  // satisfy a load.  Both come from mstatus[18] (SUM) and mstatus[19] (MXR).
+  // -------------------------------------------------------------------------
+  kronos_tlb #(.N(8)) u_itlb (
+    .clk_i              (clk_i),
+    .rst_ni             (rst_ni),
+    .lookup_valid_i     (translate_fetch & align_needs_fetch),
+    .lookup_va_i        ({32'b0, icache_fetch_addr}),
+    .lookup_asid_i      (satp_asid),
+    .lookup_priv_i      (priv_q),
+    .is_load_i          (1'b0),
+    .is_store_i         (1'b0),
+    .is_fetch_i         (1'b1),
+    .sum_i              (mstatus[18]),
+    .mxr_i              (mstatus[19]),
+    .lookup_hit_o       (itlb_hit),
+    .lookup_pa_o        (itlb_pa),
+    .lookup_perm_fail_o (itlb_perm_fail),
+    .lookup_a_zero_o    (itlb_a_zero),
+    .lookup_d_zero_o    (itlb_d_zero),
+    .refill_valid_i     (ptw_itlb_rfv),
+    .refill_size_i      (ptw_rf_size),
+    .refill_vpn_i       (ptw_rf_vpn),
+    .refill_ppn_i       (ptw_rf_ppn),
+    .refill_asid_i      (ptw_rf_asid),
+    .refill_global_i    (ptw_rf_global),
+    .refill_perm_i      (ptw_rf_perm),
+    .refill_a_i         (ptw_rf_a),
+    .refill_d_i         (ptw_rf_d),
+    .flush_valid_i      (sfence_vma),
+    .flush_va_valid_i   (sfence_va_valid),
+    .flush_asid_valid_i (sfence_asid_valid),
+    .flush_va_i         (sfence_va),
+    .flush_asid_i       (sfence_asid)
+  );
+
+  // -------------------------------------------------------------------------
+  // Stage 6b: Data TLB.  Symmetric to u_itlb but on the LSU data port.  The VA
+  // is alu_result (rs1 + imm computed in EX) so the lookup happens in the same
+  // cycle as the ALU compute, before the EX→MEM register captures the PA.
+  // -------------------------------------------------------------------------
+  kronos_tlb #(.N(8)) u_dtlb (
+    .clk_i              (clk_i),
+    .rst_ni             (rst_ni),
+    .lookup_valid_i     (translate_data & id_ex_q.valid &
+                         (id_ex_q.dec.is_load | id_ex_q.dec.is_store |
+                          id_ex_q.dec.is_amo)),
+    .lookup_va_i        (alu_result),
+    .lookup_asid_i      (satp_asid),
+    .lookup_priv_i      (eff_priv_data),
+    .is_load_i          (id_ex_q.dec.is_load |
+                         (id_ex_q.dec.is_amo & id_ex_q.dec.is_lr)),
+    .is_store_i         (id_ex_q.dec.is_store |
+                         (id_ex_q.dec.is_amo & ~id_ex_q.dec.is_lr)),
+    .is_fetch_i         (1'b0),
+    .sum_i              (mstatus[18]),
+    .mxr_i              (mstatus[19]),
+    .lookup_hit_o       (dtlb_hit),
+    .lookup_pa_o        (dtlb_pa),
+    .lookup_perm_fail_o (dtlb_perm_fail),
+    .lookup_a_zero_o    (dtlb_a_zero),
+    .lookup_d_zero_o    (dtlb_d_zero),
+    .refill_valid_i     (ptw_dtlb_rfv),
+    .refill_size_i      (ptw_rf_size),
+    .refill_vpn_i       (ptw_rf_vpn),
+    .refill_ppn_i       (ptw_rf_ppn),
+    .refill_asid_i      (ptw_rf_asid),
+    .refill_global_i    (ptw_rf_global),
+    .refill_perm_i      (ptw_rf_perm),
+    .refill_a_i         (ptw_rf_a),
+    .refill_d_i         (ptw_rf_d),
+    .flush_valid_i      (sfence_vma),
+    .flush_va_valid_i   (sfence_va_valid),
+    .flush_asid_valid_i (sfence_asid_valid),
+    .flush_va_i         (sfence_va),
+    .flush_asid_i       (sfence_asid)
+  );
+
+  // -------------------------------------------------------------------------
+  // Stage 6b: Page-Table Walker.
+  //
+  // Activated by an iTLB or dTLB miss (priority order: dtlb > itlb, since the
+  // PTW itself is a single-port walker).  Talks to the D-cache via the PTW
+  // priority port so it bypasses the LSU pipe.  Refills both TLBs through the
+  // shared refill_* outputs (the *_rfv valid pulses select which TLB consumes
+  // the refill bundle this cycle).
+  // -------------------------------------------------------------------------
+  kronos_ptw u_ptw (
+    .clk_i                (clk_i),
+    .rst_ni               (rst_ni),
+    .satp_mode_i          (satp_mode),
+    .satp_asid_i          (satp_asid),
+    .satp_ppn_i           (satp_ppn),
+    .itlb_miss_i          (itlb_miss),
+    .itlb_miss_va_i       ({32'b0, icache_fetch_addr}),
+    .dtlb_miss_i          (dtlb_miss),
+    .dtlb_miss_va_i       (alu_result),
+    .dtlb_miss_is_load_i  (id_ex_q.dec.is_load |
+                           (id_ex_q.dec.is_amo & id_ex_q.dec.is_lr)),
+    .dtlb_miss_is_store_i (id_ex_q.dec.is_store |
+                           (id_ex_q.dec.is_amo & ~id_ex_q.dec.is_lr)),
+    .miss_priv_i          (eff_priv_data),
+    .sum_i                (mstatus[18]),
+    .mxr_i                (mstatus[19]),
+    .itlb_refill_valid_o  (ptw_itlb_rfv),
+    .dtlb_refill_valid_o  (ptw_dtlb_rfv),
+    .refill_size_o        (ptw_rf_size),
+    .refill_vpn_o         (ptw_rf_vpn),
+    .refill_ppn_o         (ptw_rf_ppn),
+    .refill_asid_o        (ptw_rf_asid),
+    .refill_global_o      (ptw_rf_global),
+    .refill_perm_o        (ptw_rf_perm),
+    .refill_a_o           (ptw_rf_a),
+    .refill_d_o           (ptw_rf_d),
+    .page_fault_o         (ptw_pf),
+    .page_fault_cause_o   (ptw_pf_cause),
+    .page_fault_tval_o    (ptw_pf_tval),
+    .page_fault_which_o   (ptw_pf_which),
+    .dcache_req_valid_o   (ptw_dc_req_valid),
+    .dcache_req_addr_o    (ptw_dc_req_addr),
+    .dcache_req_we_o      (ptw_dc_req_we),
+    .dcache_req_wdata_o   (ptw_dc_req_wdata),
+    .dcache_req_size_o    (ptw_dc_req_size),
+    .dcache_req_is_lr_o   (ptw_dc_req_lr),
+    .dcache_req_is_sc_o   (ptw_dc_req_sc),
+    .dcache_rsp_valid_i   (ptw_dc_rsp_valid),
+    .dcache_rsp_rdata_i   (ptw_dc_rsp_rdata),
+    .dcache_rsp_sc_ok_i   (ptw_dc_rsp_sc_ok),
+    .busy_o               (ptw_busy)
   );
 
   // Stage 5a: FPU top
@@ -869,10 +1181,14 @@ module kronos_top
     .clk_i        (clk_i),
     .rst_ni       (rst_ni),
     .req_i        (align_needs_fetch),
-    .addr_i       ({32'b0, icache_fetch_addr}),
+    // Stage 6b: addr_i is the translated PA when satp.MODE != Bare and priv != M;
+    // otherwise PA == VA (icache_fetch_addr).
+    .addr_i       ({32'b0, eff_fetch_pa}),
     .flush_i      (fence_i_pulse),
     // Stage 6a: PMP fetch-port fault input — suppresses the AXI AR phase.
     .pmp_fault_i  (pmp_fetch_fault),
+    // Stage 6b: iTLB miss — suppresses the AXI AR phase until the PTW refills.
+    .tlb_miss_i   (itlb_miss),
     .data_valid_o (icache_data_valid),
     .data_o       (icache_data),
     .stall_o      (icache_stall),
@@ -884,6 +1200,10 @@ module kronos_top
   kronos_align u_align (
     .clk_i               (clk_i),
     .rst_ni              (rst_ni),
+    // Stage 6b: pc_i used to detect a 32-bit fetch that straddles a 4 KiB page
+    // boundary — the upper half lives on a different (potentially unmapped)
+    // page, so the upper word must be re-translated through the iTLB.
+    .pc_i                (pc_q),
     .rdata_i             (icache_data),
     .rvalid_i            (icache_data_valid),
     .stall_i             (align_instr_valid & ~if_id_en),
@@ -894,12 +1214,20 @@ module kronos_top
                         :                pc_q[1]),
     // Stage 6a: PMP fetch-port fault — suppresses instr_valid_o while held.
     .pmp_fault_i         (pmp_fetch_fault),
+    // Stage 6b: gate cross-page fetch faulting on translate_fetch.  Cross-page
+    // 32-bit fetches are only architecturally a fault under translation; in
+    // M-mode / Bare they're legal and must NOT suppress instr_valid_o.
+    .translate_fetch_i   (translate_fetch),
     .instr_o             (align_instr),
     .instr_valid_o       (align_instr_valid),
     .is_16b_o            (align_is_16b),
     .align_stall_o       (align_stall),
     .align_need_upper_o  (align_need_upper),
-    .align_needs_fetch_o (align_needs_fetch)
+    .align_needs_fetch_o (align_needs_fetch),
+    // Stage 6b: cross-page 32-bit fetch — pulses one cycle when the upper half
+    // of a misaligned 32-bit instruction crosses into a different page.  The
+    // top routes this into the trap chain as an instruction page-fault.
+    .cross_page_fault_o  (cross_page_fault)
   );
 
   kronos_bpred u_bpred (
@@ -1131,12 +1459,23 @@ module kronos_top
     // Sdtrig action fires before the matched instruction commits, so a
     // trigger hit takes priority over the instruction's own illegal/ecall
     // cause (RISC-V Debug Spec §5).
+    //
+    // Stage 6b ordering: page-fault arms come BEFORE the matching pmp arms
+    // because the priv-spec defines the access-vs-translate decision as
+    // "translate first, then access-check" — a missing/perm-failed translation
+    // produces a page-fault even if the translated PA would also fail PMP.
     if (trig_hit) begin
       trap_cause = 32'd3;                                   // BREAKPOINT (Sdtrig)
+    end else if (instr_page_fault) begin
+      trap_cause = {27'b0, CAUSE_INSTR_PAGE_FAULT};         // 12
     end else if (pmp_fetch_fault) begin
       trap_cause = {27'b0, CAUSE_INSTR_ACCESS_FAULT};       // 1
+    end else if (load_page_fault) begin
+      trap_cause = {27'b0, CAUSE_LOAD_PAGE_FAULT};          // 13
     end else if (pmp_data_fault & id_ex_q.dec.is_load) begin
       trap_cause = {27'b0, CAUSE_LOAD_ACCESS_FAULT};        // 5
+    end else if (store_page_fault) begin
+      trap_cause = {27'b0, CAUSE_STORE_PAGE_FAULT};         // 15
     end else if (pmp_data_fault & id_ex_q.dec.is_store) begin
       trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};       // 7
     end else if (pmp_data_fault & id_ex_q.dec.is_amo) begin
@@ -1145,7 +1484,8 @@ module kronos_top
     end else if (irq_pending) begin
       trap_cause = {1'b1, 26'b0, irq_cause};                // mcause[63]=1 (IRQ)
     end else if (id_ex_q.dec.illegal | csr_illegal |
-                 mret_priv_fail | sret_priv_fail | satp_tvm_fail) begin
+                 mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+                 wfi_priv_fail_q) begin
       trap_cause = 32'd2;                                   // ILLEGAL
     end else if (id_ex_q.dec.is_ecall) begin
       unique case (priv_q)
@@ -1159,16 +1499,21 @@ module kronos_top
     end
   end
 
-  // Stage 6a: trap_tval — set to the offending PC for fetch faults, the
-  // offending data address for data PMP faults, the original instruction word
-  // for illegal-instruction (priv-spec § 3.1.16), and 0 otherwise.
+  // Stage 6a/6b: trap_tval — set to the offending PC for fetch faults, the
+  // offending data address for data PMP / page faults, the original
+  // instruction word for illegal-instruction (priv-spec § 3.1.16), and 0
+  // otherwise.  Page-fault tval matches the spec: the faulting VA.
   always_comb begin
-    if      (pmp_fetch_fault) trap_tval = pmp_fetch_fault_addr[31:0];
-    else if (pmp_data_fault)  trap_tval = pmp_data_fault_addr[31:0];
+    if      (instr_page_fault) trap_tval = pc_q;
+    else if (pmp_fetch_fault)  trap_tval = pmp_fetch_fault_addr[31:0];
+    else if (load_page_fault | store_page_fault)
+                               trap_tval = alu_result[31:0];
+    else if (pmp_data_fault)   trap_tval = pmp_data_fault_addr[31:0];
     else if (id_ex_q.dec.illegal | csr_illegal |
-             mret_priv_fail | sret_priv_fail | satp_tvm_fail)
-                              trap_tval = id_ex_q.instr;
-    else                      trap_tval = 32'd0;
+             mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+             wfi_priv_fail_q)
+                               trap_tval = id_ex_q.instr;
+    else                       trap_tval = 32'd0;
   end
 
   // JALR target: 64-bit add, truncate to 32-bit PC (physical PC is 32-bit).
@@ -1179,8 +1524,10 @@ module kronos_top
     if      ((id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
                                id_ex_q.dec.illegal  | csr_illegal |
                                mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+                               wfi_priv_fail_q |
                                irq_pending)) | trig_hit |
-              pmp_fetch_fault | pmp_data_fault)
+              pmp_fetch_fault | pmp_data_fault |
+              instr_page_fault | load_page_fault | store_page_fault)
       ex_pc_next = trap_vector[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_mret & ~mret_priv_fail)
       ex_pc_next = mepc[31:0];
@@ -1230,10 +1577,12 @@ module kronos_top
       (id_ex_q.dec.illegal & ~fence_i_dirty_block) |
       csr_illegal |
       mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+      wfi_priv_fail_q |
       irq_pending |
       id_ex_q.dec.is_mret | id_ex_q.dec.is_sret)) |
     trig_hit |
-    pmp_fetch_fault | pmp_data_fault;
+    pmp_fetch_fault | pmp_data_fault |
+    instr_page_fault | load_page_fault | store_page_fault;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) ex_mem_csr_q <= 1'b0;
@@ -1271,6 +1620,15 @@ module kronos_top
       // snapshot for trace purposes).
       ex_mem_q.csr_wdata   <= fwd_rs1_data;
     end
+  end
+
+  // Stage 6b: register the translated data-port PA at the EX→MEM boundary so
+  // the LSU (which sits in MEM) consumes the PA produced by the dTLB lookup
+  // in EX.  When translation is off (Bare or M-mode) eff_data_pa == alu_result
+  // so this register is a noop relative to the pre-stage-6b behaviour.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)         ex_mem_data_pa_q <= 32'b0;
+    else if (ex_mem_en)  ex_mem_data_pa_q <= eff_data_pa;
   end
 
   // MEM-stage target misprediction: predictor predicted taken with the right
@@ -1394,14 +1752,17 @@ module kronos_top
 
   // Trap-taken pulse: re-derive the same expression we feed to u_csr.trap_i.
   // (This is the canonical "trap entry will fire this cycle" condition.)
-  // Includes Stage 6a PMP faults (fetch + data) and the new illegal sources
-  // (csr_illegal, mret/sret-priv-fail, satp-TVM-fail).
+  // Includes Stage 6a PMP faults (fetch + data), the Stage 6a illegal sources
+  // (csr_illegal, mret/sret-priv-fail, satp-TVM-fail), and the Stage 6b page
+  // faults + wfi-priv-fail.
   assign trap_taken_pulse = (id_ex_q.valid & ~combined_stall &
                              (id_ex_q.dec.illegal | id_ex_q.dec.is_ecall |
                               id_ex_q.dec.is_ebreak | csr_illegal |
                               mret_priv_fail | sret_priv_fail | satp_tvm_fail |
+                              wfi_priv_fail_q |
                               irq_pending | trig_hit)) |
-                            pmp_fetch_fault | pmp_data_fault;
+                            pmp_fetch_fault | pmp_data_fault |
+                            instr_page_fault | load_page_fault | store_page_fault;
 
   assign event_bus[ 0]    = 1'b0;
   assign event_bus[ 1]    = retire_advance & mem_wb_q.dec.is_branch;

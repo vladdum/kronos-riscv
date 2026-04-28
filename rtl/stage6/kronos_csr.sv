@@ -30,6 +30,25 @@ module kronos_csr
   input  logic [31:0] trap_tval_i,
   input  logic        mret_i,
   input  logic        sret_i,
+  // Stage 6b: SFENCE.VMA passthrough.  Decode asserts sfence_vma_i for one cycle
+  // when an SFENCE.VMA retires; the CSR module forwards the pulse + operands to
+  // both TLBs (I-TLB and D-TLB) via the matching *_o ports.  Pure combinational
+  // passthrough — no architectural state involved.
+  input  logic              sfence_vma_i,
+  input  logic [63:0]       sfence_va_i,
+  input  logic [15:0]       sfence_asid_i,
+  input  logic              sfence_va_valid_i,
+  input  logic              sfence_asid_valid_i,
+  output logic              sfence_vma_o,
+  output logic [63:0]       sfence_va_o,
+  output logic [15:0]       sfence_asid_o,
+  output logic              sfence_va_valid_o,
+  output logic              sfence_asid_valid_o,
+  // Stage 6b: satp.MODE / ASID / PPN broken out for the address-translation
+  // engine (PTW, TLBs).  Driven combinationally from the satp register.
+  output logic [3:0]        satp_mode_o,
+  output logic [15:0]       satp_asid_o,
+  output logic [43:0]       satp_ppn_o,
   output logic [63:0] trap_vector_o,
   output logic [63:0] mepc_o,
   // Stage 6a: sepc output for sret target redirection (kronos_top reads this
@@ -222,6 +241,18 @@ module kronos_csr
   assign priv_o        = priv_q;
   assign mstatus_o     = mstatus;
 
+  // Stage 6b: SFENCE.VMA pulse passthrough (decode → both TLBs).
+  assign sfence_vma_o        = sfence_vma_i;
+  assign sfence_va_o         = sfence_va_i;
+  assign sfence_asid_o       = sfence_asid_i;
+  assign sfence_va_valid_o   = sfence_va_valid_i;
+  assign sfence_asid_valid_o = sfence_asid_valid_i;
+
+  // Stage 6b: satp fields broken out for the translation engine.
+  assign satp_mode_o = satp[63:60];
+  assign satp_asid_o = satp[59:44];
+  assign satp_ppn_o  = satp[43:0];
+
   // -------------------------------------------------------------------------
   // Stage 6a: interrupt priority encoder.
   //
@@ -344,7 +375,7 @@ module kronos_csr
       CSR_SEPC:       rdata_o = {sepc[63:1], 1'b0};
       CSR_SCAUSE:     rdata_o = scause;
       CSR_STVAL:      rdata_o = stval;
-      CSR_SATP:       rdata_o = {4'd0, satp[59:0]};                       // MODE=0
+      CSR_SATP:       rdata_o = satp;
       CSR_SCOUNTEREN: rdata_o = {32'd0, scounteren};
       CSR_SENVCFG:    rdata_o = senvcfg;
       // SSTATUS: S-visible bits + SD computed from FS (mstatus[63] is never
@@ -603,7 +634,17 @@ module kronos_csr
           CSR_SEPC:       sepc        <= {csr_new_val[63:1], 1'b0};
           CSR_SCAUSE:     scause      <= csr_new_val;
           CSR_STVAL:      stval       <= csr_new_val;
-          CSR_SATP:       satp        <= csr_new_val;
+          CSR_SATP: begin
+            // Stage 6b: WARL on MODE.  Only Bare/Sv39/Sv48 are supported; on
+            // any other MODE the *entire* write is dropped (per priv-spec WARL
+            // rules — we choose to keep the legal previous value rather than
+            // accept a partially-modified satp).
+            if (csr_new_val[63:60] == SATP_MODE_BARE |
+                csr_new_val[63:60] == SATP_MODE_SV39 |
+                csr_new_val[63:60] == SATP_MODE_SV48) begin
+              satp <= csr_new_val;
+            end
+          end
           CSR_SCOUNTEREN: scounteren  <= csr_new_val[31:0];
           CSR_SENVCFG:    /* WARL=0 in 6a; ignore writes */ ;
           CSR_SSTATUS: begin

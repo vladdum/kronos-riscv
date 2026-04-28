@@ -289,16 +289,18 @@ module kronos_decode
 
       SYSTEM: begin
         unique case (funct3)
-          3'b000: begin  // ECALL, EBREAK, MRET, SRET, SFENCE.VMA
-            // SFENCE.VMA — opcode SYSTEM, funct7 = 0x09. Stage 6a treats as illegal.
+          3'b000: begin  // ECALL, EBREAK, MRET, SRET, SFENCE.VMA, WFI
+            // SFENCE.VMA — funct7 = 0x09 (Stage 6b: real op)
             if (instr_i[31:25] == 7'b000_1001) begin
-              illegal = 1'b1;
+              decoded_o.is_sfence_vma = 1'b1;
+              illegal                 = 1'b0;
             end else begin
               unique case (instr_i[31:20])
                 12'h000: decoded_o.is_ecall  = 1'b1;
                 12'h001: decoded_o.is_ebreak = 1'b1;
                 12'h302: decoded_o.is_mret   = 1'b1;
                 12'h102: decoded_o.is_sret   = 1'b1;  // Stage 6a
+                12'h105: decoded_o.is_wfi    = 1'b1;  // Stage 6b
                 default: illegal             = 1'b1;
               endcase
             end

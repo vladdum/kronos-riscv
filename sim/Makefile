@@ -8,6 +8,7 @@ SW_DIR_S4 := ../sw/stage4
 SW_DIR_S5  := ../sw/stage5
 SW_DIR_S5B := ../sw/stage5b
 SW_DIR_S6  := ../sw/stage6
+SW_DIR_S6B := ../sw/stage6b
 OBJ_DIR   := obj_dir
 
 VERILATOR := verilator
@@ -120,7 +121,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-group-s5-int \
         build-s6 run-s6-% sim-s6 gen-arch-tests-s6 sim-arch-test-s6 \
         sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6 \
-        sim-pmp sim-priv-csr \
+        sim-pmp sim-priv-csr sim-tlb sim-ptw \
         sim-group-s6-int \
         sim-group-s1s2 sim-group-s3s4 sim-group-fp-unit sim-group-fp-top \
         sim-group-crv-smoke \
@@ -743,7 +744,7 @@ SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
 
 SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger
 
-SIM_GROUP_S6_INT  := sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-priv-csr sim-pmp
+SIM_GROUP_S6_INT  := sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-priv-csr sim-pmp sim-tlb sim-ptw
 
 $(OBJ_DIR):
 	mkdir -p $@
@@ -1012,6 +1013,8 @@ SV_FILES_S6 := $(AXI_PKG_SV) \
                $(RTL_DIR_S6)/kronos_icache.sv \
                $(RTL_DIR_S6)/kronos_csr.sv \
                $(RTL_DIR_S6)/kronos_pmp.sv \
+               $(RTL_DIR_S6)/kronos_tlb.sv \
+               $(RTL_DIR_S6)/kronos_ptw.sv \
                $(RTL_DIR_S6)/kronos_trigger.sv \
                $(RTL_DIR_S6)/kronos_lsu.sv \
                $(RTL_DIR_S6)/kronos_dcache.sv \
@@ -1040,7 +1043,7 @@ build-s6: $(SIM_BIN_S6)
 
 $(SIM_BIN_S6): $(SV_FILES_S6) $(abspath sim_main.cpp)
 	mkdir -p $(OBJ_DIR)/s6
-	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY --Wno-UNOPTFLAT \
 	  --trace --public-flat-rw \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S6) $(abspath sim_main.cpp) \
@@ -1079,6 +1082,20 @@ sim-s6: build-s6
 	echo "Stage 6 assembly: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ] || [ $$pass -eq 0 -a $$fail -eq 0 ]
 
+# ── Stage 6b directed asm tests (Sv39 MMU) ────────────────────────────────
+run-s6b-%: build-s6
+	$(MAKE) -C $(SW_DIR_S6B) build/$*.hex
+	./$(SIM_BIN_S6) $(SW_DIR_S6B)/build/$*.hex
+
+sim-s6b: build-s6
+	$(MAKE) -C $(SW_DIR_S6B) all
+	@for h in $(SW_DIR_S6B)/build/*.hex; do \
+	  echo "──────── $$h ────────"; \
+	  ./$(SIM_BIN_S6) $$h | tail -1; \
+	done
+
+.PHONY: sim-s6b run-s6b-%
+
 .PHONY: gen-arch-tests-s6 sim-arch-test-s6
 # Stage 6 uses the rv64imafdc-priv ACT4 config: full RV64IMAFDC (Zcd) plus
 # the privileged subset (Sm/S/U) declared in extensions.txt. Excluded suites:
@@ -1112,6 +1129,24 @@ sim-arch-test-s6: gen-arch-tests-s6
 # ── Stage 6 unit-TB stubs (T16 fills these in with real TBs) ───────────────
 sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6:
 	@echo "(stub) $@"
+
+TB_TLB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                 $(RTL_DIR)/stage6/kronos_tlb.sv \
+                 $(TB_DIR)/stage6/tb_tlb.sv
+sim-tlb:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  -Mdir $(OBJ_DIR)/tlb -Wno-UNUSED \
+	  --top-module tb_tlb $(TB_TLB_FILES)
+	$(OBJ_DIR)/tlb/Vtb_tlb
+
+TB_PTW_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                 $(RTL_DIR)/stage6/kronos_ptw.sv \
+                 $(TB_DIR)/stage6/tb_ptw.sv
+sim-ptw:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  -Mdir $(OBJ_DIR)/ptw -Wno-UNUSED \
+	  --top-module tb_ptw $(TB_PTW_FILES)
+	$(OBJ_DIR)/ptw/Vtb_ptw
 
 TB_PKG_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv $(TB_DIR)/stage5/tb_pkg_fp.sv
 

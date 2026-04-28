@@ -19,18 +19,35 @@
 module kronos_align (
   input  logic        clk_i,
   input  logic        rst_ni,
+  input  logic [31:0] pc_i,           // current fetch PC (used for cross-page detection)
   input  logic [31:0] rdata_i,
   input  logic        rvalid_i,
   input  logic        stall_i,        // hold state when pipeline can't accept output
   input  logic        flush_i,
   input  logic        pc_offset_i,    // ex_pc_next[1]: skip lower half of next fetch
   input  logic        pmp_fault_i,    // suppress instr_valid_o while PMP fault is held
+  // Stage 6b: when translation is OFF (Bare or M-mode without MPRV-data), a
+  // 32-bit instruction whose halves straddle a 4 KB boundary is perfectly
+  // legal (no per-page permissions exist).  align must NOT raise a cross-page
+  // fault in that case — otherwise M-mode RV64C tests that happen to land a
+  // 32-bit instruction at pc[11:0]==0xFFE would spuriously trap on every such
+  // fetch.  When translate_fetch_i=1 the cross-page fetch is conservatively
+  // converted to an instruction-page fault.
+  input  logic        translate_fetch_i,
   output logic [31:0] instr_o,
   output logic        instr_valid_o,
   output logic        is_16b_o,
   output logic        align_stall_o,
   output logic        align_need_upper_o,
-  output logic        align_needs_fetch_o
+  output logic        align_needs_fetch_o,
+  // Stage 6b: cross-page 32-bit fetch fault.  Asserted only when translation
+  // is active and the alignment unit is about to emit (or buffer the lo half
+  // of) a 32-bit instruction whose PC straddles a 4 KB page boundary
+  // (pc[11:1]==11'h7FF, so lo half at offset 0xFFE and hi half at offset
+  // 0x1000 of the next page).  Conservative first cut: any such fetch under
+  // translation is treated as an instruction-page fault.  A future refinement
+  // can issue an independent translation for the hi half instead of faulting.
+  output logic        cross_page_fault_o
 );
   // -------------------------------------------------------------------------
   // State registers
@@ -49,6 +66,10 @@ module kronos_align (
   // Combinational from decompress instances
   logic [31:0] decomp_lower, decomp_upper, decomp_buf;
   logic        decomp_lower_ill, decomp_upper_ill, decomp_buf_ill;
+
+  // Stage 6b: cross-page 32-bit fetch detection
+  logic [15:0] lo_half;
+  logic        cross_page_32b;
 
   kronos_decompress u_decomp_lower (
     .instr16_i (rdata_i[15:0]),
@@ -121,10 +142,30 @@ module kronos_align (
     if (pmp_fault_i) begin
       instr_valid_o = 1'b0;
     end
+
+    // Stage 6b: cross-page 32-bit fetch.  Suppress instr_valid_o so we never
+    // emit a half-translated instruction; T13 will route cross_page_fault_o
+    // into the trap chain alongside pmp_fetch_fault.
+    if (cross_page_fault_o) begin
+      instr_valid_o = 1'b0;
+    end
   end
 
   // align_needs_fetch_o: deasserted only in BUFFERED state (buffer has instruction ready)
   assign align_needs_fetch_o = ~buf_valid_q | need_upper_q;
+
+  // -------------------------------------------------------------------------
+  // Stage 6b: cross-page 32-bit fetch detection
+  // -------------------------------------------------------------------------
+  // pc[11:1]==11'h7FF marks the last halfword of a 4 KB page (pc[11:0]==0xFFE,
+  // so pc[1]==1).  In that case, the halfword at pc lives in the upper 16 bits
+  // of the fetched word (rdata_i[31:16]) — and once it has been buffered, in
+  // buf_data_q.  A 32-bit instruction lo half has lo[1:0]==2'b11 (RV-C
+  // compressed instructions have lo[1:0]!=2'b11, so they can never cross a
+  // page in this sense).
+  assign lo_half            = buf_valid_q ? buf_data_q : rdata_i[31:16];
+  assign cross_page_32b     = (pc_i[11:1] == 11'h7FF) & (lo_half[1:0] == 2'b11);
+  assign cross_page_fault_o = translate_fetch_i & cross_page_32b;
 
   // -------------------------------------------------------------------------
   // State update (sequential)

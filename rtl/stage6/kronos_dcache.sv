@@ -35,6 +35,17 @@ module kronos_dcache
   output logic                   sc_success_o,
   output logic                   stall_o,
 
+  // Stage 6b: PTW priority request port (preempts LSU when ptw_req_valid_i=1)
+  input  logic                   ptw_req_valid_i,
+  input  logic [55:0]            ptw_req_addr_i,
+  input  logic                   ptw_req_we_i,
+  input  logic [63:0]            ptw_req_wdata_i,
+  input  logic                   ptw_req_is_lr_i,
+  input  logic                   ptw_req_is_sc_i,
+  output logic                   ptw_rsp_valid_o,
+  output logic [63:0]            ptw_rsp_rdata_o,
+  output logic                   ptw_rsp_sc_ok_o,
+
   // FENCE.I full flush: writeback every dirty line and invalidate.  Hold
   // flush_i high until flush_done_o pulses for one cycle.
   input  logic                   flush_i,
@@ -64,20 +75,77 @@ module kronos_dcache
   logic [2:0]       plru_q  [NUM_SETS];
   logic [63:0]      data_q  [NUM_WAYS][NUM_SETS][BEATS];
 
+  // ---- Stage 6b: PTW vs LSU request arbitration -----------------------------
+  // PTW always wins.  When ptw_req_valid_i is high, the dcache services the
+  // PTW request; otherwise it falls through to the LSU port unchanged.  The
+  // FSM, hit logic, and reservation tracking all read eff_* signals instead
+  // of the raw LSU inputs.  PTW issues 8B accesses (size=3'd3) and uses
+  // is_lr/is_sc for atomic A/D updates; non-LR/SC PTW requests go through
+  // the normal load/store path (amo_req=0).
+  logic                   eff_req_valid;
+  logic [PHYS_ADDR_W-1:0] eff_req_addr;
+  logic                   eff_req_we;
+  logic [63:0]            eff_req_wdata;
+  logic                   eff_req_is_lr;
+  logic                   eff_req_is_sc;
+  logic [2:0]             eff_req_size;
+  logic                   eff_amo_req;
+  logic [4:0]             eff_amo_op;
+  logic                   ptw_active;
+
+  assign ptw_active = ptw_req_valid_i;
+
+  always_comb begin
+    if (ptw_active) begin
+      eff_req_valid = 1'b1;
+      // PTW addresses are 56b (Sv39 PA); zero-extend to PHYS_ADDR_W.
+      eff_req_addr  = {{(PHYS_ADDR_W-56){1'b0}}, ptw_req_addr_i};
+      eff_req_we    = ptw_req_we_i;
+      eff_req_wdata = ptw_req_wdata_i;
+      eff_req_is_lr = ptw_req_is_lr_i;
+      eff_req_is_sc = ptw_req_is_sc_i;
+      eff_req_size  = 3'd3;
+    end else begin
+      eff_req_valid = req_i;
+      eff_req_addr  = addr_i;
+      eff_req_we    = we_i;
+      eff_req_wdata = wdata_i;
+      // LSU uses amo_op_i directly; LR=5'b00010, SC=5'b00011.
+      eff_req_is_lr = amo_req_i & (amo_op_i == 5'b00010);
+      eff_req_is_sc = amo_req_i & (amo_op_i == 5'b00011);
+      eff_req_size  = size_i;
+    end
+  end
+
+  // Synthesise an effective amo_req / amo_op for the FSM.  PTW only issues
+  // plain D/W requests or LR/SC; never the wider funct5 AMO ops.  The LSU
+  // uses amo_req_i / amo_op_i directly when ptw_active is low.
+  always_comb begin
+    if (ptw_active) begin
+      eff_amo_req = ptw_req_is_lr_i | ptw_req_is_sc_i;
+      eff_amo_op  = ptw_req_is_lr_i ? 5'b00010
+                  : ptw_req_is_sc_i ? 5'b00011
+                                    : 5'b0;
+    end else begin
+      eff_amo_req = amo_req_i;
+      eff_amo_op  = amo_op_i;
+    end
+  end
+
   // ---- Address breakdown ----------------------------------------------------
   logic [SET_IDX_W-1:0]  set_idx;
   logic [TAG_W-1:0]      tag_in;
   logic [BEAT_IDX_W-1:0] beat_idx;
-  assign set_idx  = addr_i[SET_IDX_W + OFFSET_W - 1 : OFFSET_W];
-  assign tag_in   = addr_i[PHYS_ADDR_W-1 : SET_IDX_W + OFFSET_W];
-  assign beat_idx = addr_i[OFFSET_W-1 : 3];
+  assign set_idx  = eff_req_addr[SET_IDX_W + OFFSET_W - 1 : OFFSET_W];
+  assign tag_in   = eff_req_addr[PHYS_ADDR_W-1 : SET_IDX_W + OFFSET_W];
+  assign beat_idx = eff_req_addr[OFFSET_W-1 : 3];
 
   // ---- Hit logic ------------------------------------------------------------
   logic [NUM_WAYS-1:0] hit_way_oh;
   logic                hit;
   always_comb begin
     for (int w = 0; w < NUM_WAYS; w++) begin
-      hit_way_oh[w] = req_i & valid_q[set_idx][w] & (tag_q[set_idx][w] == tag_in);
+      hit_way_oh[w] = eff_req_valid & valid_q[set_idx][w] & (tag_q[set_idx][w] == tag_in);
     end
     hit = |hit_way_oh;
   end
@@ -101,7 +169,7 @@ module kronos_dcache
 
   logic miss_pulse_q;
   logic miss_event;
-  assign miss_event = req_i & ~hit & (state_q == DC_IDLE);
+  assign miss_event = eff_req_valid & ~hit & (state_q == DC_IDLE);
 
   // Tree-PLRU victim selection (same as I$).
   logic [$clog2(NUM_WAYS)-1:0] victim_pick;
@@ -216,6 +284,14 @@ module kronos_dcache
   logic [$clog2(NUM_WAYS)-1:0]       flush_way_q;
   logic                              flush_done_q;
 
+  // Stage 6b: track which port owns the in-flight (multi-cycle) request so
+  // responses produced after the request cycle (refill bypass, store_done,
+  // amo_done, sc_success) can be routed back to the originator.  For
+  // same-cycle hits the response routing uses ptw_active directly; for
+  // delayed responses (state_q != IDLE during request acceptance) we use
+  // the latched bit.
+  logic in_flight_is_ptw_q;
+
   // dirty_pending_o: 1 if any (set, way) has valid && dirty.  Used by the
   // top to short-circuit FENCE.I when no writeback is required.
   logic dirty_pending;
@@ -285,6 +361,7 @@ module kronos_dcache
       flush_set_q          <= '0;
       flush_way_q          <= '0;
       flush_done_q         <= 1'b0;
+      in_flight_is_ptw_q   <= 1'b0;
       for (int s = 0; s < NUM_SETS; s++) begin
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
@@ -311,6 +388,13 @@ module kronos_dcache
       amo_done_q     <= 1'b0;
       sc_success_q   <= 1'b0;
       flush_done_q   <= 1'b0;     // default: one-cycle pulse
+      // Latch the originator of any request that enters service (whether it
+      // hits same-cycle or transitions to a multi-cycle path).  The latched
+      // value drives delayed responses (refill bypass, store_done, amo_done,
+      // sc_success) that fire in cycles after the request was sampled.
+      if ((state_q == DC_IDLE) & eff_req_valid & ~(flush_i & ~flush_done_q)) begin
+        in_flight_is_ptw_q <= ptw_active;
+      end
       // Reservation tracking.
       // - LR sets it.
       // - SC clears it (regardless of success).
@@ -318,15 +402,16 @@ module kronos_dcache
       // - rsrv_clear_i (trap) clears it.
       if (rsrv_clear_i) begin
         rsrv_valid_q <= 1'b0;
-      end else if (req_i & amo_req_i & (amo_op_i == 5'b00010)) begin
+      end else if (eff_req_valid & eff_amo_req & (eff_amo_op == 5'b00010)) begin
         // LR: set reservation on the LR request.
-        rsrv_addr_q  <= addr_i;
+        rsrv_addr_q  <= eff_req_addr;
         rsrv_valid_q <= 1'b1;
-      end else if (req_i & amo_req_i & (amo_op_i == 5'b00011)) begin
+      end else if (eff_req_valid & eff_amo_req & (eff_amo_op == 5'b00011)) begin
         // SC: clear reservation regardless of success.
         rsrv_valid_q <= 1'b0;
-      end else if (req_i & we_i & ~amo_req_i & rsrv_valid_q
-                   & (rsrv_addr_q[PHYS_ADDR_W-1:OFFSET_W] == addr_i[PHYS_ADDR_W-1:OFFSET_W])) begin
+      end else if (eff_req_valid & eff_req_we & ~eff_amo_req & rsrv_valid_q
+                   & (rsrv_addr_q[PHYS_ADDR_W-1:OFFSET_W]
+                      == eff_req_addr[PHYS_ADDR_W-1:OFFSET_W])) begin
         // Plain store to the same cache line clears reservation.
         rsrv_valid_q <= 1'b0;
       end
@@ -340,17 +425,18 @@ module kronos_dcache
             flush_set_q <= '0;
             flush_way_q <= '0;
             state_q     <= DC_FLUSH_SCAN;
-          end else if (req_i & amo_req_i & ~amo_pending_q & ~amo_done_q) begin
-            if (amo_op_i == 5'b00011) begin
+          end else if (eff_req_valid & eff_amo_req & ~amo_pending_q & ~amo_done_q) begin
+            if (eff_amo_op == 5'b00011) begin
               // SC: check reservation; if matched, write; else no-op.
-              if (rsrv_valid_q & (rsrv_addr_q == addr_i) & hit) begin
+              if (rsrv_valid_q & (rsrv_addr_q == eff_req_addr) & hit) begin
                 // SC success on cached line: write, set dirty.
                 for (int w = 0; w < NUM_WAYS; w++) begin
                   if (hit_way_oh[w]) begin
                     for (int b = 0; b < 8; b++) begin
-                      if (store_strobes(size_i, addr_i[2:0])[b])
+                      if (store_strobes(eff_req_size, eff_req_addr[2:0])[b])
                         data_q[w][set_idx][beat_idx][b*8 +: 8]
-                          <= store_data_aligned(size_i, addr_i[2:0], wdata_i)[b*8 +: 8];
+                          <= store_data_aligned(eff_req_size, eff_req_addr[2:0],
+                                                eff_req_wdata)[b*8 +: 8];
                     end
                     dirty_q[set_idx][w] <= 1'b1;
                   end
@@ -358,7 +444,7 @@ module kronos_dcache
                 plru_q[set_idx] <= plru_update(plru_q[set_idx], hit_way_idx);
                 sc_success_q    <= 1'b1;
                 store_done_q    <= 1'b1;
-              end else if (rsrv_valid_q & (rsrv_addr_q == addr_i) & ~hit) begin
+              end else if (rsrv_valid_q & (rsrv_addr_q == eff_req_addr) & ~hit) begin
                 // SC miss + match: write-allocate.
                 miss_set_q           <= set_idx;
                 miss_tag_q           <= tag_in;
@@ -366,9 +452,10 @@ module kronos_dcache
                 victim_q             <= victim_pick;
                 beat_cnt_q           <= 4'd0;
                 miss_was_store_q     <= 1'b1;
-                miss_store_data_q    <= store_data_aligned(size_i, addr_i[2:0], wdata_i);
-                miss_store_strobes_q <= store_strobes(size_i, addr_i[2:0]);
-                miss_store_off_q     <= addr_i[2:0];
+                miss_store_data_q    <= store_data_aligned(eff_req_size, eff_req_addr[2:0],
+                                                           eff_req_wdata);
+                miss_store_strobes_q <= store_strobes(eff_req_size, eff_req_addr[2:0]);
+                miss_store_off_q     <= eff_req_addr[2:0];
                 evict_tag_q          <= tag_q[set_idx][victim_pick];
                 wb_beat_cnt_q        <= 4'd0;
                 sc_success_q         <= 1'b1;
@@ -381,7 +468,7 @@ module kronos_dcache
                 // SC fail: don't write; ack via store_done.
                 store_done_q <= 1'b1;
               end
-            end else if (amo_op_i == 5'b00010) begin
+            end else if (eff_amo_op == 5'b00010) begin
               // LR: treat as a plain load.  Reservation set by tracking above.
               // Just ack via hit or let a miss refill.
               if (hit) begin
@@ -406,11 +493,11 @@ module kronos_dcache
               if (hit) begin
                 // Capture for the AMO RMW state.
                 amo_pending_q  <= 1'b1;
-                amo_op_q       <= amo_op_i;
-                amo_src_q      <= wdata_i;
+                amo_op_q       <= eff_amo_op;
+                amo_src_q      <= eff_req_wdata;
                 amo_old_val_q  <= hit_beat;
-                amo_is_word_q  <= (size_i == 3'd2);
-                amo_addr_off_q <= addr_i[2:0];
+                amo_is_word_q  <= (eff_req_size == 3'd2);
+                amo_addr_off_q <= eff_req_addr[2:0];
                 miss_set_q     <= set_idx;
                 miss_beat_q    <= beat_idx;
                 victim_q       <= hit_way_idx;
@@ -426,10 +513,10 @@ module kronos_dcache
                 victim_q       <= victim_pick;
                 beat_cnt_q     <= 4'd0;
                 amo_pending_q  <= 1'b1;
-                amo_op_q       <= amo_op_i;
-                amo_src_q      <= wdata_i;
-                amo_is_word_q  <= (size_i == 3'd2);
-                amo_addr_off_q <= addr_i[2:0];
+                amo_op_q       <= eff_amo_op;
+                amo_src_q      <= eff_req_wdata;
+                amo_is_word_q  <= (eff_req_size == 3'd2);
+                amo_addr_off_q <= eff_req_addr[2:0];
                 evict_tag_q    <= tag_q[set_idx][victim_pick];
                 wb_beat_cnt_q  <= 4'd0;
                 if (valid_q[set_idx][victim_pick] & dirty_q[set_idx][victim_pick]) begin
@@ -441,13 +528,14 @@ module kronos_dcache
             end
           end else begin
             // Store hit: write into RAM, set dirty.
-            if (hit & we_i & req_i) begin
+            if (hit & eff_req_we & eff_req_valid) begin
               for (int w = 0; w < NUM_WAYS; w++) begin
                 if (hit_way_oh[w]) begin
                   for (int b = 0; b < 8; b++) begin
-                    if (store_strobes(size_i, addr_i[2:0])[b])
+                    if (store_strobes(eff_req_size, eff_req_addr[2:0])[b])
                       data_q[w][set_idx][beat_idx][b*8 +: 8]
-                        <= store_data_aligned(size_i, addr_i[2:0], wdata_i)[b*8 +: 8];
+                        <= store_data_aligned(eff_req_size, eff_req_addr[2:0],
+                                              eff_req_wdata)[b*8 +: 8];
                   end
                   dirty_q[set_idx][w] <= 1'b1;
                 end
@@ -466,10 +554,11 @@ module kronos_dcache
               miss_beat_q          <= beat_idx;
               victim_q             <= victim_pick;
               beat_cnt_q           <= 4'd0;
-              miss_was_store_q     <= we_i;
-              miss_store_data_q    <= store_data_aligned(size_i, addr_i[2:0], wdata_i);
-              miss_store_strobes_q <= store_strobes(size_i, addr_i[2:0]);
-              miss_store_off_q     <= addr_i[2:0];
+              miss_was_store_q     <= eff_req_we;
+              miss_store_data_q    <= store_data_aligned(eff_req_size, eff_req_addr[2:0],
+                                                         eff_req_wdata);
+              miss_store_strobes_q <= store_strobes(eff_req_size, eff_req_addr[2:0]);
+              miss_store_off_q     <= eff_req_addr[2:0];
               evict_tag_q          <= tag_q[set_idx][victim_pick];
               wb_beat_cnt_q        <= 4'd0;
               if (valid_q[set_idx][victim_pick] & dirty_q[set_idx][victim_pick]) begin
@@ -659,9 +748,9 @@ module kronos_dcache
   logic [63:0] load_data_full;
   always_comb begin
     load_data_full = beat_for_load;
-    unique case (size_i)
+    unique case (eff_req_size)
       3'd0: begin     // byte (zero-extended)
-        unique case (addr_i[2:0])
+        unique case (eff_req_addr[2:0])
           3'd0: load_data_full = {56'b0, beat_for_load[ 7: 0]};
           3'd1: load_data_full = {56'b0, beat_for_load[15: 8]};
           3'd2: load_data_full = {56'b0, beat_for_load[23:16]};
@@ -674,7 +763,7 @@ module kronos_dcache
         endcase
       end
       3'd1: begin     // halfword (zero-extended)
-        unique case (addr_i[2:1])
+        unique case (eff_req_addr[2:1])
           2'd0: load_data_full = {48'b0, beat_for_load[15: 0]};
           2'd1: load_data_full = {48'b0, beat_for_load[31:16]};
           2'd2: load_data_full = {48'b0, beat_for_load[47:32]};
@@ -683,21 +772,45 @@ module kronos_dcache
         endcase
       end
       3'd2: begin     // word (zero-extended)
-        load_data_full = addr_i[2] ? {32'b0, beat_for_load[63:32]}
-                                    : {32'b0, beat_for_load[31: 0]};
+        load_data_full = eff_req_addr[2] ? {32'b0, beat_for_load[63:32]}
+                                          : {32'b0, beat_for_load[31: 0]};
       end
       default: load_data_full = beat_for_load;     // double
     endcase
   end
 
   // ---- Outputs --------------------------------------------------------------
-  assign data_valid_o = hit | bypass_valid_q | store_done_q | amo_done_q;
-  assign rdata_o      = amo_done_q ? amo_old_val_q : load_data_full;
-  assign sc_success_o = sc_success_q;
+  // Aggregate response signal (before LSU/PTW demux).
+  logic        rsp_valid_int;
+  logic [63:0] rsp_rdata_int;
+  logic        sc_success_int;
+  assign rsp_valid_int  = hit | bypass_valid_q | store_done_q | amo_done_q;
+  assign rsp_rdata_int  = amo_done_q ? amo_old_val_q : load_data_full;
+  assign sc_success_int = sc_success_q;
+
+  // Stage 6b: route the response to either LSU or PTW.
+  // - Same-cycle hits (state_q == DC_IDLE) are owned by the current arbiter
+  //   winner (ptw_active).
+  // - Delayed responses (bypass / store_done / amo_done / sc_success after
+  //   refill or RMW) are owned by the latched in_flight_is_ptw_q bit, since
+  //   ptw_active may have de-asserted by the time the response fires.
+  logic rsp_to_ptw;
+  assign rsp_to_ptw = (state_q == DC_IDLE) ? ptw_active : in_flight_is_ptw_q;
+
+  // LSU response: gate by ~rsp_to_ptw.
+  assign data_valid_o = rsp_valid_int  & ~rsp_to_ptw;
+  assign rdata_o      = rsp_rdata_int;
+  assign sc_success_o = sc_success_int & ~rsp_to_ptw;
+
+  // PTW response: gate by rsp_to_ptw.
+  assign ptw_rsp_valid_o = rsp_valid_int  &  rsp_to_ptw;
+  assign ptw_rsp_rdata_o = rsp_rdata_int;
+  assign ptw_rsp_sc_ok_o = sc_success_int &  rsp_to_ptw;
+
   assign stall_o      = (state_q != DC_IDLE);
   assign miss_pulse_o = miss_pulse_q;
 
   logic _unused;
-  assign _unused = ^{miss_store_off_q};
+  assign _unused = ^{miss_store_off_q, eff_req_is_lr, eff_req_is_sc};
 
 endmodule
