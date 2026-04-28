@@ -9,6 +9,7 @@ SW_DIR_S5  := ../sw/stage5
 SW_DIR_S5B := ../sw/stage5b
 SW_DIR_S6  := ../sw/stage6
 SW_DIR_S6B := ../sw/stage6b
+SW_DIR_PERF := ../sw/perf
 OBJ_DIR   := obj_dir
 
 VERILATOR := verilator
@@ -119,7 +120,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-decode-fp-cov \
         sim-s5b \
         sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-group-s5-int \
-        build-s6 run-s6-% sim-s6 gen-arch-tests-s6 sim-arch-test-s6 \
+        build-s6 run-s6-% sim-s6 sim-s6b sim-perf-baseline-s6 gen-arch-tests-s6 sim-arch-test-s6 \
         sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6 \
         sim-pmp sim-priv-csr sim-tlb sim-ptw \
         sim-group-s6-int \
@@ -1097,6 +1098,21 @@ sim-s6b: build-s6
 
 .PHONY: sim-s6b run-s6b-%
 
+# ---------------------------------------------------------------------------
+# Stage 6c — perf baseline (dhrystone, ±2% gate, main-only via mcycle markers)
+# ---------------------------------------------------------------------------
+sim-perf-baseline-s6: build-s6
+	@$(MAKE) -C $(SW_DIR_PERF)/dhrystone all
+	@out=$$($(SIM_BIN_S6) $(SW_DIR_PERF)/dhrystone/build/dhrystone.hex 2>&1); \
+	 echo "$$out" | tail -5; \
+	 if echo "$$out" | grep -q "x10 = 0"; then \
+	   echo "PASS  sim-perf-baseline-s6"; \
+	 else \
+	   echo "FAIL  sim-perf-baseline-s6"; exit 1; \
+	 fi
+
+.PHONY: sim-perf-baseline-s6
+
 .PHONY: gen-arch-tests-s6 sim-arch-test-s6
 # Stage 6 uses the rv64imafdc-priv ACT4 config: full RV64IMAFDC (Zcd) plus
 # the privileged subset (Sm/S/U) declared in extensions.txt. Excluded suites:
@@ -1664,6 +1680,22 @@ GLS_TESTS_S6 := $(GLS_TESTS_S5)
 # make gls-funcsim-s5 GLS_MAX_CYCLES=200000
 GLS_MAX_CYCLES ?= 50000
 
+# ---------------------------------------------------------------------------
+# Stage transition gate — GLS-s6 must be run clean before tagging Stage 6c
+# (and any subsequent Stage 6.x or pre-OoO stage) complete. NOT in CI: Vivado
+# install does not fit on GitHub-hosted runners (~14 GB free vs. ~10–15 GB
+# Vivado footprint). Run locally before merging the closing PR.
+#
+# Smoke subset (~4 programs, ~60 min wall):
+#   make gls-funcsim-s6 GLS_TEST=test_sv39_basic
+#   make gls-funcsim-s6 GLS_TEST=test_integration_long
+#   make gls-sdf-s6     GLS_TEST=test_sv39_basic
+#   make gls-sdf-s6     GLS_TEST=test_integration_long
+# Plus one CRV smoke seed and one ACT4 priv test if time permits.
+#
+# Capture pass/fail + cycle count in the closing PR description as evidence.
+# Policy detail: docs/architecture.md § Stage transition gates.
+# ---------------------------------------------------------------------------
 .PHONY: gls-funcsim gls-funcsim-s5 gls-funcsim-s6 gls-sdf gls-sdf-s5 gls-sdf-s6
 .PRECIOUS: ../sw/stage5/build/%.hex ../sw/stage5/build/%.memh
 

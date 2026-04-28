@@ -2,13 +2,11 @@
 """Diff two normalized retire traces (Kronos vs Sail).
 
 Strips halt-region and ACT4-signature-region memory writes before comparing,
-truncates both traces at the first halt-sentinel write (mem[40000000]), and
-drops CSR fields before comparison.
+and truncates both traces at the first halt-sentinel write (mem[40000000]).
 
-CSR fields are excluded because Kronos traces the RS1 operand (the value
-being written) while Sail traces the post-write CSR value, and mstatus.SD
-differs due to the Dirty tracking model.  Register and memory effects are
-compared faithfully.
+CSR, register, and memory effects are compared faithfully. As of stage 6c,
+Kronos's retire_csr_wdata_o emits the post-write CSR value (matching Sail),
+so csr[...] writes are diffed directly.
 
 Reports the first mismatching line (or length mismatch) to stdout and exits
 non-zero. Identical traces exit 0 silently.
@@ -23,13 +21,54 @@ SIG_HI = 0x0000000080004000
 
 MEM_RE = re.compile(r"mem\[([0-9a-fA-F]{16})\]=[0-9a-fA-F]{16}")
 CSR_RE = re.compile(r"\s*csr\[[0-9a-fA-F]{3}\]=[0-9a-fA-F]{16}")
+INSTR_RE = re.compile(r"^[0-9a-fA-F]{16}:([0-9a-fA-F]{1,8})\b")
 EFFECT_RE = re.compile(r"(?:x\d+=|f\d+=|mem\[)")
 
 HALT_SENTINEL = f"mem[{HALT_ADDR:016x}]="
 
 
+def _csr_write_visible(line: str) -> bool:
+    """True iff the instr is a Zicsr op that actually writes the CSR per priv-spec.
+
+    Filters two classes of csr[...] mismatch between Kronos and Sail:
+      1. Sail emits implicit csr[...] for FP ops (fflags/fcsr/mstatus.FS),
+         trap entry (mcause/mepc/mtval/mstatus), and mret/sret (mstatus restore).
+         Kronos's retire trace doesn't surface these.
+      2. csrrs/csrrc with rs1=x0 (or csrrsi/csrrci with uimm=0) are read-only
+         per priv-spec § 9.1: Sail emits no CSR write, but Kronos's
+         retire_csr_wen_o asserts unconditionally on any Zicsr instruction.
+
+    Returning False causes csr[...] to be stripped from the trace line.
+    """
+    m = INSTR_RE.match(line)
+    if not m:
+        return False
+    instr = int(m.group(1), 16)
+    # RVC (lo two bits != 11) is never a CSR instruction.
+    if (instr & 0x3) != 0x3:
+        return False
+    # 32-bit SYSTEM (opcode 0x73) with funct3 in {1,2,3,5,6,7} = csrrw/s/c (immediate or not).
+    # funct3 == 0 covers ECALL/EBREAK/MRET/SRET/WFI/SFENCE — all implicit effects.
+    if (instr & 0x7F) != 0x73:
+        return False
+    funct3 = (instr >> 12) & 0x7
+    if funct3 == 0 or funct3 == 4:
+        return False
+    # csrrw / csrrwi (funct3[1:0] == 01) always writes regardless of operand.
+    if (funct3 & 0x3) == 0x1:
+        return True
+    # csrrs / csrrc (and immediate variants): writes iff rs1 specifier != 0
+    # (for immediate variants, the "rs1" field encodes the uimm — same gate).
+    rs1 = (instr >> 15) & 0x1F
+    return rs1 != 0
+
+
 def strip_ignored(line: str) -> str:
-    """Remove mem[...] effects in halt/sig regions and all CSR fields.
+    """Remove mem[...] effects in halt/sig regions and csr[...] effects on
+    non-CSR instructions (implicit FS/fflags/trap-CSR writes that Kronos's
+    retire trace doesn't surface).
+
+    Explicit csr[...] writes on Zicsr instructions are kept and diffed.
 
     Returns cleaned line, or empty string if all observable effects are gone.
     """
@@ -41,7 +80,8 @@ def strip_ignored(line: str) -> str:
             return ""
         return m.group(0)
     cleaned = MEM_RE.sub(_repl, line)
-    cleaned = CSR_RE.sub("", cleaned)
+    if not _csr_write_visible(cleaned):
+        cleaned = CSR_RE.sub("", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if had_mem and not EFFECT_RE.search(cleaned):
         return ""
