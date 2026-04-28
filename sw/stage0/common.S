@@ -10,6 +10,11 @@ _start:
   # Sail reference model (which initialises FS=Off).
   li   t0, 0x6000
   csrrs zero, mstatus, t0
+  # Sail's boot ABI puts the hart ID in a0 and the DTB address in a1;
+  # Kronos resets all GPRs to 0. Zero them so the CRV Sail-vs-Kronos
+  # diff sees identical pre-main state regardless of which model is run.
+  mv   a0, zero
+  mv   a1, zero
   call main
   # Halt: write failure count (a0 = x10) to 0x40000000 (sim_main.cpp halts on this)
 _halt:
