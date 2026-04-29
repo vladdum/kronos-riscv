@@ -383,4 +383,40 @@ package kronos_pkg;
     logic                fp_dest;  // 1 = FP regfile, 0 = integer regfile
   } fpu_tag_t;
 
+  // -------------------------------------------------------------------------
+  // Stage 7a: Reorder Buffer types
+  // -------------------------------------------------------------------------
+  localparam int unsigned ROB_DEPTH   = 16;
+  localparam int unsigned ROB_IDX_W   = 4;  // $clog2(ROB_DEPTH)
+  localparam int unsigned ROB_COUNT_W = 5;  // distinguishes empty vs full when head==tail
+
+  typedef logic [ROB_IDX_W-1:0] rob_idx_t;
+
+  // Per-arch-reg busy entry (used by kronos_busy.sv).
+  typedef struct packed {
+    logic     busy;
+    rob_idx_t prod_idx;  // youngest in-flight ROB index that writes this arch reg
+  } busy_entry_t;
+
+  // Reorder buffer entry. ~24 bytes; 16 entries = ~3 Kbit register array.
+  typedef struct packed {
+    logic           valid;
+    logic           complete;
+    logic [31:0]    pc;
+    logic [31:0]    instr;
+    decoded_instr_t dec;
+    logic [63:0]    result;
+    logic [4:0]     fflags;
+    logic [63:0]    csr_new_val;
+    logic           trap_taken;
+    logic [4:0]     trap_cause;
+    logic [63:0]    tval;
+    logic           actual_taken;
+    logic [31:0]    actual_target;
+    logic           mispredict;
+    logic [63:0]    mem_addr;
+    logic [63:0]    mem_wdata;
+    logic [2:0]     mem_funct3;
+  } rob_entry_t;
+
 endpackage

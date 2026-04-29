@@ -88,15 +88,15 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   // State registers
   // -----------------------------------------------------------------------
-  state_e    state_q;
+  state_e    state_q /* verilator public_flat_rd */;
   logic      iter_busy_q;  // look-ahead flop of (state_d != IDLE); breaks deep busy_o cone
 
   // Latched raw inputs (IDLE -> UNPACK1)
   fp_op_e    op_q;
-  logic      fmt_d_q;
+  logic      fmt_d_q /* verilator public_flat_rd */;
   logic [2:0] rm_q;
   fpu_tag_t  tag_q;
-  logic [63:0] a_raw_q, b_raw_q;
+  logic [63:0] a_raw_q /* verilator public_flat_rd */, b_raw_q /* verilator public_flat_rd */;
 
   // Classified operands (registered in UNPACK1 -> UNPACK2 transition)
   fp_class_t a_class_q, b_class_q;
@@ -109,8 +109,8 @@ module kronos_fpu_iter
   logic signed [12:0] a_true_exp_q, b_true_exp_q;
 
   // Specials result/flags latched in UNPACK1, consumed in UNPACK2
-  logic               is_special_q;
-  logic [63:0]        special_result_q;
+  logic               is_special_q /* verilator public_flat_rd */;
+  logic [63:0]        special_result_q /* verilator public_flat_rd */;
   logic [4:0]         special_fflags_q;
 
   // Final biased result exponent + sign (computed in UNPACK2 combinationally,

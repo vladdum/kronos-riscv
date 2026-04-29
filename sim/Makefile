@@ -10,6 +10,7 @@ SW_DIR_S5  := ../sw/stage5
 SW_DIR_S5B := ../sw/stage5b
 SW_DIR_S6  := ../sw/stage6
 SW_DIR_S6B := ../sw/stage6b
+SW_DIR_S7  := ../sw/stage7
 SW_DIR_PERF := ../sw/perf
 OBJ_DIR   := obj_dir
 
@@ -1117,6 +1118,21 @@ sim-perf-baseline-s6: build-s6
 
 .PHONY: sim-perf-baseline-s6
 
+# ---------------------------------------------------------------------------
+# Stage 7a — perf baseline (dhrystone, ±2% gate inherited from S6c=698761)
+# ---------------------------------------------------------------------------
+sim-perf-baseline-s7: build-s7
+	@$(MAKE) -C $(SW_DIR_PERF)/dhrystone all
+	@out=$$($(SIM_BIN_S7) $(SW_DIR_PERF)/dhrystone/build/dhrystone.hex 2>&1); \
+	 echo "$$out" | tail -5; \
+	 if echo "$$out" | grep -q "x10 = 0"; then \
+	   echo "PASS  sim-perf-baseline-s7"; \
+	 else \
+	   echo "FAIL  sim-perf-baseline-s7"; exit 1; \
+	 fi
+
+.PHONY: sim-perf-baseline-s7
+
 .PHONY: gen-arch-tests-s6 sim-arch-test-s6
 # Stage 6 uses the rv64imafdc-priv ACT4 config: full RV64IMAFDC (Zcd) plus
 # the privileged subset (Sm/S/U) declared in extensions.txt. Excluded suites:
@@ -1244,6 +1260,104 @@ sim-arch-test-s6-priv: gen-arch-tests-s6-priv
 	    "$(abspath run_arch_test_s6.sh)" \
 	    work/kronos-rv64imafdc-priv/elfs/
 
+# Stage 7a inherits the S6 priv-suite skip list (same Sv* tests that the
+# Sail reference simulates too slowly to fit in run_tests.py's 5-minute
+# bound; not a Kronos correctness issue). Reuse S6_PRIV_SKIPPED_TESTS.
+.PHONY: gen-arch-tests-s7 sim-arch-test-s7 gen-arch-tests-s7-priv sim-arch-test-s7-priv
+
+gen-arch-tests-s7: build-s7
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv64imafdc-priv/test_config.yaml \
+	    --workdir work --test-dir tests \
+	    --exclude Zaamo,Zalrsc,Sv,Svade,Svadu,SvaduPMP,SvPMP,SvZicbo,SvPMPZicbo,Svbare,PMPSm,PMPZca,PMPmisaligned,InterruptsSm,ExceptionsZalrsc,ExceptionsZaamo,ExceptionsZicboS,ExceptionsZicboU,ExceptionsZc,SmF,ZicsrF,ExceptionsSm,ZicntrS,ZicntrU,InterruptsU,U,UF,Misalign,MisalignZca,MisalignF,MisalignD
+
+sim-arch-test-s7: gen-arch-tests-s7
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s7.sh)" \
+	    work/kronos-rv64imafdc-priv/elfs/
+
+gen-arch-tests-s7-priv: build-s7
+	$(call hide_skipped_tests)
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" uv run act \
+	    config/kronos/kronos-rv64imafdc-priv/test_config.yaml \
+	    --workdir work --test-dir tests; \
+	  rc=$$?; \
+	  cd "$(REPO_ROOT)"; \
+	  for f in $(S6_PRIV_SKIPPED_TESTS); do \
+	    if [ -f "$$f.skip" ]; then mv "$$f.skip" "$$f"; fi; \
+	  done; \
+	  exit $$rc
+
+sim-arch-test-s7-priv: gen-arch-tests-s7-priv
+	cd $(ARCH_TEST_DIR) && \
+	  PATH="$$HOME/.local/bin:$$PATH" python3 run_tests.py \
+	    "$(abspath run_arch_test_s7.sh)" \
+	    work/kronos-rv64imafdc-priv/elfs/
+
+# -------------------- Stage 7a (Reorder Buffer / OoO completion) -----------
+RTL_DIR_S7 := $(RTL_DIR)/stage7
+SIM_BIN_S7 := $(OBJ_DIR)/s7/V$(TOP_S5)
+
+# Mirrors SV_FILES_S6, with the stage7 substitutions:
+#   - kronos_csr / kronos_lsu / kronos_muldiv / fpu/kronos_fpu_top → stage7
+#   - kronos_top → stage7
+#   - new modules: kronos_busy, kronos_rob
+#   - DROPPED: stage1/kronos_forward, stage1/kronos_hazard (ROB-keyed bypass
+#     replaces forwarding; remaining hazard logic folded into stage7 top).
+SV_FILES_S7 := $(AXI_PKG_SV) \
+               $(RTL_DIR)/kronos_pkg.sv \
+               $(RTL_DIR_COMMON)/kronos_ram.sv \
+               $(RTL_DIR_S6)/kronos_alu.sv \
+               $(RTL_DIR_S6)/kronos_decode.sv \
+               $(RTL_DIR)/stage0/kronos_regfile.sv \
+               $(RTL_DIR_S6)/kronos_icache.sv \
+               $(RTL_DIR_S7)/kronos_csr.sv \
+               $(RTL_DIR_S6)/kronos_pmp.sv \
+               $(RTL_DIR_S6)/kronos_tlb.sv \
+               $(RTL_DIR_S6)/kronos_ptw.sv \
+               $(RTL_DIR_S6)/kronos_trigger.sv \
+               $(RTL_DIR_S7)/kronos_lsu.sv \
+               $(RTL_DIR_S6)/kronos_dcache.sv \
+               $(RTL_DIR_S7)/kronos_muldiv.sv \
+               $(RTL_DIR_S6)/kronos_decompress.sv \
+               $(RTL_DIR_S6)/kronos_align.sv \
+               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR_S7)/kronos_busy.sv \
+               $(RTL_DIR_S7)/kronos_rob.sv \
+               $(RTL_DIR_S7)/kronos_top.sv \
+               sim_top.sv \
+               $(RTL_DIR_S6)/kronos_regfile_fp.sv \
+               $(HARDFLOAT_V) \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_scoreboard.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fmisc.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fcvt.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fadd.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fmul.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fma.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fdiv_core.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_fsqrt_core.sv \
+               $(RTL_DIR_S6)/fpu/kronos_fpu_iter.sv \
+               $(RTL_DIR_S7)/fpu/kronos_fpu_top.sv
+
+build-s7: $(SIM_BIN_S7)
+
+$(SIM_BIN_S7): $(SV_FILES_S7) $(abspath sim_main.cpp)
+	mkdir -p $(OBJ_DIR)/s7
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY --Wno-UNOPTFLAT \
+	  --trace --public-flat-rw \
+	  --top-module $(TOP_S5) \
+	  $(SV_FILES_S7) $(abspath sim_main.cpp) \
+	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU -DKRONOS_HAS_S6_PRIV" \
+	  -Mdir $(OBJ_DIR)/s7 \
+	  $(PULP_AXI_INC) \
+	  -o V$(TOP_S5)
+
+run-s7-%: build-s7
+	./$(SIM_BIN_S7) $(SW_DIR_S7)/build/$*.hex
+
 # ── Stage 6 unit-TB stubs (T16 fills these in with real TBs) ───────────────
 sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6:
 	@echo "(stub) $@"
@@ -1280,6 +1394,25 @@ sim-regfile-fp:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/regfile_fp \
 	  --top-module tb_regfile_fp $(TB_REGFILE_FP_FILES)
 	$(OBJ_DIR)/regfile_fp/Vtb_regfile_fp
+
+# ── Stage 7a unit testbenches (ROB + busy table) ───────────────────────────
+TB_BUSY_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                 $(RTL_DIR)/stage7/kronos_busy.sv \
+                 $(TB_DIR)/stage7/tb_busy.sv
+sim-busy:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
+	  -Mdir $(OBJ_DIR)/busy \
+	  --top-module tb_busy $(TB_BUSY_FILES)
+	$(OBJ_DIR)/busy/Vtb_busy
+
+TB_ROB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                $(RTL_DIR)/stage7/kronos_rob.sv \
+                $(TB_DIR)/stage7/tb_rob.sv
+sim-rob:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
+	  -Mdir $(OBJ_DIR)/rob \
+	  --top-module tb_rob $(TB_ROB_FILES)
+	$(OBJ_DIR)/rob/Vtb_rob
 
 include $(RTL_DIR)/../vendor/hardfloat/file_list.mk
 TB_HF_SMOKE_FILES := $(HARDFLOAT_V) $(TB_DIR)/stage5/tb_hardfloat_smoke.sv

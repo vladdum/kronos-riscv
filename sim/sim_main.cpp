@@ -429,17 +429,49 @@ int main(int argc, char** argv) {
             uint8_t  fwe  = top->rootp->sim_top__DOT__u_top__DOT__fp_we;
             uint64_t fwd  = top->rootp->sim_top__DOT__u_top__DOT__fp_wd;
             uint8_t  fwa  = top->rootp->sim_top__DOT__u_top__DOT__fp_wa;
-            printf("C%05d: pc=%08x al_v=%d ins=%08x redir=%d epc=%08x"
+            // Stage 7a extra debug signals
+            uint8_t  dsp  = top->rootp->sim_top__DOT__u_top__DOT__dispatch_fire;
+            uint8_t  drn  = top->rootp->sim_top__DOT__u_top__DOT__drain_mode_q;
+            uint8_t  rfll = top->rootp->sim_top__DOT__u_top__DOT__rob_full;
+            uint8_t  ostl = top->rootp->sim_top__DOT__u_top__DOT__operand_stall;
+            uint8_t  bpm  = top->rootp->sim_top__DOT__u_top__DOT__bpred_mispredict;
+            uint8_t  mrdr = top->rootp->sim_top__DOT__u_top__DOT__mem_redirect;
+            uint8_t  exv  = top->rootp->sim_top__DOT__u_top__DOT__dbg_ex_valid;
+            uint8_t  expt = top->rootp->sim_top__DOT__u_top__DOT__dbg_ex_pred_taken;
+            uint8_t  is16 = top->rootp->sim_top__DOT__u_top__DOT__dbg_align_is_16b;
+            uint64_t fpa  = top->rootp->sim_top__DOT__u_top__DOT__fpu_a_i;
+            uint64_t fpb  = top->rootp->sim_top__DOT__u_top__DOT__fpu_b_i;
+            uint64_t fprd1 = top->rootp->sim_top__DOT__u_top__DOT__fp_rd1;
+            uint64_t fprd2 = top->rootp->sim_top__DOT__u_top__DOT__fp_rd2;
+            uint8_t  fpiv = top->rootp->sim_top__DOT__u_top__DOT__fpu_in_valid;
+            uint8_t  fpfd = top->rootp->sim_top__DOT__u_top__DOT__fpu_fmt_d;
+            uint8_t  iter_st = top->rootp->sim_top__DOT__u_top__DOT__u_fpu__DOT__u_iter__DOT__state_q;
+            uint8_t  iter_fd = top->rootp->sim_top__DOT__u_top__DOT__u_fpu__DOT__u_iter__DOT__fmt_d_q;
+            uint8_t  iter_sp = top->rootp->sim_top__DOT__u_top__DOT__u_fpu__DOT__u_iter__DOT__is_special_q;
+            uint64_t iter_ar = top->rootp->sim_top__DOT__u_top__DOT__u_fpu__DOT__u_iter__DOT__a_raw_q;
+            uint64_t iter_br = top->rootp->sim_top__DOT__u_top__DOT__u_fpu__DOT__u_iter__DOT__b_raw_q;
+            uint64_t iter_sr = top->rootp->sim_top__DOT__u_top__DOT__u_fpu__DOT__u_iter__DOT__special_result_q;
+            printf("C%05d: pc=%08x al_v=%d ins=%08x is16=%d redir=%d mrdr=%d epc=%08x"
 #ifdef KRONOS_HAS_S6_PRIV
                    " priv=%d cstl=%d trap=%d tcause=%x"
 #endif
-                   " fov=%d fi=%d fres=%016llx fwe=%d fwa=%d fwd=%016llx\n",
-                   cycle, pc, al_v, ins, redir, epc,
+                   " fov=%d fi=%d fres=%016llx fwe=%d fwa=%d fwd=%016llx"
+                   " dsp=%d drn=%d rfll=%d ostl=%d bpm=%d exv=%d expt=%d"
+                   " fpiv=%d fpfd=%d fpa=%016llx fpb=%016llx fprd1=%016llx fprd2=%016llx"
+                   " ist=%d ifd=%d isp=%d iar=%016llx ibr=%016llx isr=%016llx\n",
+                   cycle, pc, al_v, ins, is16, redir, mrdr, epc,
 #ifdef KRONOS_HAS_S6_PRIV
                    priv, cstl, trap, tcse,
 #endif
                    fov, fi, (unsigned long long)fres,
-                   fwe, fwa, (unsigned long long)fwd);
+                   fwe, fwa, (unsigned long long)fwd,
+                   dsp, drn, rfll, ostl, bpm, exv, expt,
+                   fpiv, fpfd,
+                   (unsigned long long)fpa, (unsigned long long)fpb,
+                   (unsigned long long)fprd1, (unsigned long long)fprd2,
+                   iter_st, iter_fd, iter_sp,
+                   (unsigned long long)iter_ar, (unsigned long long)iter_br,
+                   (unsigned long long)iter_sr);
 #else
             printf("C%05d: pc=%08x al_v=%d ins=%08x redir=%d epc=%08x\n",
                    cycle, pc, al_v, ins, redir, epc);
