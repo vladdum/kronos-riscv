@@ -38,13 +38,72 @@ filesets:
     depend:
       - pulp-platform.org::axi:0.39.9
     files:
-      - rtl/filelist_s5.f: {file_type: f}
+      - rtl/kronos_pkg.sv
+      - rtl/common/kronos_ram.sv
+      - rtl/stage0/kronos_regfile.sv
+      - rtl/stage1/kronos_forward.sv
+      - rtl/stage1/kronos_hazard.sv
+      - rtl/stage3/kronos_align.sv
+      - rtl/stage3/kronos_bpred.sv
+      - rtl/stage5/kronos_alu.sv
+      - rtl/stage5/kronos_decode.sv
+      - rtl/stage5/kronos_regfile_fp.sv
+      - rtl/stage5/kronos_icache.sv
+      - rtl/stage5/kronos_csr.sv
+      - rtl/stage5/kronos_trigger.sv
+      - rtl/stage5/kronos_lsu.sv
+      - rtl/stage5/kronos_dcache.sv
+      - rtl/stage5/kronos_muldiv.sv
+      - rtl/stage5/kronos_decompress.sv
+      - rtl/stage5/fpu/kronos_fpu_scoreboard.sv
+      - rtl/stage5/fpu/kronos_fpu_fmisc.sv
+      - rtl/stage5/fpu/kronos_fpu_fcvt.sv
+      - rtl/stage5/fpu/kronos_fpu_fadd.sv
+      - rtl/stage5/fpu/kronos_fpu_fmul.sv
+      - rtl/stage5/fpu/kronos_fpu_fma.sv
+      - rtl/stage5/fpu/kronos_fpu_fdiv_core.sv
+      - rtl/stage5/fpu/kronos_fpu_fsqrt_core.sv
+      - rtl/stage5/fpu/kronos_fpu_iter.sv
+      - rtl/stage5/fpu/kronos_fpu_top.sv
+      - rtl/stage5/kronos_top.sv
+    file_type: systemVerilogSource
 
   files_rtl_s6:
     depend:
       - pulp-platform.org::axi:0.39.9
     files:
-      - rtl/filelist_s6.f: {file_type: f}
+      - rtl/kronos_pkg.sv
+      - rtl/common/kronos_ram.sv
+      - rtl/stage0/kronos_regfile.sv
+      - rtl/stage1/kronos_forward.sv
+      - rtl/stage1/kronos_hazard.sv
+      - rtl/stage6/kronos_align.sv
+      - rtl/stage3/kronos_bpred.sv
+      - rtl/stage6/kronos_alu.sv
+      - rtl/stage6/kronos_decode.sv
+      - rtl/stage6/kronos_regfile_fp.sv
+      - rtl/stage6/kronos_icache.sv
+      - rtl/stage6/kronos_csr.sv
+      - rtl/stage6/kronos_pmp.sv
+      - rtl/stage6/kronos_tlb.sv
+      - rtl/stage6/kronos_ptw.sv
+      - rtl/stage6/kronos_trigger.sv
+      - rtl/stage6/kronos_lsu.sv
+      - rtl/stage6/kronos_dcache.sv
+      - rtl/stage6/kronos_muldiv.sv
+      - rtl/stage6/kronos_decompress.sv
+      - rtl/stage6/fpu/kronos_fpu_scoreboard.sv
+      - rtl/stage6/fpu/kronos_fpu_fmisc.sv
+      - rtl/stage6/fpu/kronos_fpu_fcvt.sv
+      - rtl/stage6/fpu/kronos_fpu_fadd.sv
+      - rtl/stage6/fpu/kronos_fpu_fmul.sv
+      - rtl/stage6/fpu/kronos_fpu_fma.sv
+      - rtl/stage6/fpu/kronos_fpu_fdiv_core.sv
+      - rtl/stage6/fpu/kronos_fpu_fsqrt_core.sv
+      - rtl/stage6/fpu/kronos_fpu_iter.sv
+      - rtl/stage6/fpu/kronos_fpu_top.sv
+      - rtl/stage6/kronos_top.sv
+    file_type: systemVerilogSource
 
   files_fpga_kv260:
     depend:
@@ -70,11 +129,11 @@ filesets:
 
 targets:
   default:
-    filesets: [files_rtl_s5]
+    filesets: [files_rtl_s6]
     toplevel: kronos_top
 
   lint:
-    filesets: [files_lint_waivers, files_rtl_s5]
+    filesets: [files_lint_waivers, files_rtl_s6]
     tools:
       verilator:
         mode: lint-only
