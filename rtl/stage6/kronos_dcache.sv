@@ -16,7 +16,11 @@ module kronos_dcache
   parameter int unsigned CACHE_BYTES = 16*1024,
   parameter int unsigned NUM_WAYS    = 4,
   parameter int unsigned LINE_BYTES  = 64,
-  parameter int unsigned PHYS_ADDR_W = 64
+  parameter int unsigned PHYS_ADDR_W = 64,
+  // PMA: non-cacheable region list. Default matches issue #67 (0x4000_0000-0x4FFF_FFFF).
+  parameter int unsigned NUM_NC_REGIONS = 1,
+  parameter logic [63:0] NC_REGION_BASE  [NUM_NC_REGIONS] = '{64'h0000_0000_4000_0000},
+  parameter logic [63:0] NC_REGION_LIMIT [NUM_NC_REGIONS] = '{64'h0000_0000_4FFF_FFFF}
 ) (
   input  logic                   clk_i,
   input  logic                   rst_ni,
@@ -56,6 +60,9 @@ module kronos_dcache
   output kronos_axi_req_t        axi_req_o,
   input  kronos_axi_resp_t       axi_rsp_i,
 
+  // Stage 6e: PMA fault outputs — routed to access-fault trap path in kronos_top.
+  output logic                   amo_nc_fault_o,
+  output logic                   bus_err_fault_o,
   // Performance counter pulse — wired to event_bus[0x11]
   output logic                   miss_pulse_o
 );
@@ -117,6 +124,18 @@ module kronos_dcache
     end
   end
 
+  // ---- Stage 6e: PMA decoder ------------------------------------------------
+  // Combinational classifier — runs on eff_req_addr so it works for both LSU
+  // and PTW paths. Cost: 2 * NUM_NC_REGIONS magnitude compares + OR-tree.
+  logic is_uncacheable;
+  always_comb begin
+    is_uncacheable = 1'b0;
+    for (int r = 0; r < NUM_NC_REGIONS; r++) begin
+      if ((eff_req_addr >= NC_REGION_BASE[r]) &&
+          (eff_req_addr <= NC_REGION_LIMIT[r])) is_uncacheable = 1'b1;
+    end
+  end
+
   // Synthesise an effective amo_req / amo_op for the FSM.  PTW only issues
   // plain D/W requests or LR/SC; never the wider funct5 AMO ops.  The LSU
   // uses amo_req_i / amo_op_i directly when ptw_active is low.
@@ -151,8 +170,6 @@ module kronos_dcache
   end
 
   // ---- State machine --------------------------------------------------------
-  // Subsequent tasks will add WB_AW, WB_W, AMO_RMW states.  For Task 2 we
-  // only have IDLE / REFILL_AR / REFILL_R.
   typedef enum logic [3:0] {
     DC_IDLE       = 4'b0000,
     DC_REFILL_AR  = 4'b0001,
@@ -162,7 +179,13 @@ module kronos_dcache
     DC_AMO_RMW    = 4'b0101,
     DC_FLUSH_SCAN = 4'b0110,
     DC_FLUSH_AW   = 4'b0111,
-    DC_FLUSH_W    = 4'b1000
+    DC_FLUSH_W    = 4'b1000,
+    // Stage 6e: non-cacheable bypass path
+    DC_NC_AR      = 4'b1001,
+    DC_NC_R       = 4'b1010,
+    DC_NC_AW      = 4'b1011,
+    DC_NC_W       = 4'b1100,
+    DC_NC_B       = 4'b1101
   } dcache_state_e;
 
   dcache_state_e state_q;
@@ -265,6 +288,24 @@ module kronos_dcache
   logic [3:0]                      wb_beat_cnt_q;
   logic [TAG_W-1:0]                evict_tag_q;
 
+  // Stage 6e: NC bypass — captured at IDLE entry; used to drive AR/AW/W and
+  // the load extension on R.
+  logic [PHYS_ADDR_W-1:0] nc_addr_q;
+  logic [2:0]             nc_size_q;
+  logic                   nc_we_q;
+  logic [63:0]            nc_wdata_q;
+  logic                   nc_is_ptw_q;     // routes the response back to PTW
+
+  // Stage 6e: NC read response — captured one cycle in DC_NC_R; used by the
+  // load-extension mux for one cycle.
+  logic         nc_rsp_valid_q;
+  logic [63:0]  nc_rsp_data_q;
+  logic         nc_rsp_err_q;     // r.resp != OKAY captured at the same time
+
+  // Stage 6e: NC write completion — pulses for one cycle when B arrives.
+  logic nc_b_done_q;
+  logic nc_b_err_q;
+
   // AMO state registers
   logic        amo_pending_q;
   logic [4:0]  amo_op_q;
@@ -362,6 +403,16 @@ module kronos_dcache
       flush_way_q          <= '0;
       flush_done_q         <= 1'b0;
       in_flight_is_ptw_q   <= 1'b0;
+      nc_addr_q            <= '0;
+      nc_size_q            <= '0;
+      nc_we_q              <= 1'b0;
+      nc_wdata_q           <= '0;
+      nc_is_ptw_q          <= 1'b0;
+      nc_rsp_valid_q       <= 1'b0;
+      nc_rsp_data_q        <= '0;
+      nc_rsp_err_q         <= 1'b0;
+      nc_b_done_q          <= 1'b0;
+      nc_b_err_q           <= 1'b0;
       for (int s = 0; s < NUM_SETS; s++) begin
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
@@ -388,6 +439,11 @@ module kronos_dcache
       amo_done_q     <= 1'b0;
       sc_success_q   <= 1'b0;
       flush_done_q   <= 1'b0;     // default: one-cycle pulse
+      // Stage 6e: NC response/completion pulses — default-clear each cycle.
+      nc_rsp_valid_q <= 1'b0;
+      nc_b_done_q    <= 1'b0;
+      nc_rsp_err_q   <= 1'b0;
+      nc_b_err_q     <= 1'b0;
       // Latch the originator of any request that enters service (whether it
       // hits same-cycle or transitions to a multi-cycle path).  The latched
       // value drives delayed responses (refill bypass, store_done, amo_done,
@@ -425,6 +481,34 @@ module kronos_dcache
             flush_set_q <= '0;
             flush_way_q <= '0;
             state_q     <= DC_FLUSH_SCAN;
+          end else if (eff_req_valid & is_uncacheable) begin
+            // Stage 6e: PMA bypass — non-cacheable address; single-beat AXI.
+            // Important: this arm fully owns the request when is_uncacheable
+            // is high. The cacheable hit/miss path below is only reached when
+            // ~is_uncacheable; otherwise an NC access whose completion is
+            // being drained (nc_rsp_valid_q | nc_b_done_q high) would fall
+            // through to the cacheable refill state and incorrectly start an
+            // 8-beat WRAP burst against an MMIO address.
+            if (~nc_rsp_valid_q & ~nc_b_done_q) begin
+              // Fresh NC request: capture and transition.
+              nc_addr_q   <= eff_req_addr;
+              nc_size_q   <= eff_req_size;
+              nc_we_q     <= eff_req_we;
+              nc_wdata_q  <= eff_req_wdata;
+              nc_is_ptw_q <= ptw_active;
+              if (eff_amo_req | eff_req_is_lr | eff_req_is_sc) begin
+                // AMO/LR/SC on NC → trap (amo_nc_fault_o fires combinationally).
+                state_q <= DC_IDLE;
+              end else if (eff_req_we) begin
+                state_q <= DC_NC_AW;
+              end else begin
+                state_q <= DC_NC_AR;
+              end
+            end
+            // else: stay in DC_IDLE while the previous NC completion drains.
+            // The LSU's mem_stall drops the cycle data_valid_o pulses, so
+            // the pipeline advances and req_i for this access deasserts on
+            // the next cycle. No re-entry needed.
           end else if (eff_req_valid & eff_amo_req & ~amo_pending_q & ~amo_done_q) begin
             if (eff_amo_op == 5'b00011) begin
               // SC: check reservation; if matched, write; else no-op.
@@ -700,6 +784,33 @@ module kronos_dcache
             end
           end
         end
+        // Stage 6e: NC bypass FSM arms
+        DC_NC_AR: begin
+          if (axi_req_o.ar_valid & axi_rsp_i.ar_ready) state_q <= DC_NC_R;
+        end
+        DC_NC_R: begin
+          if (axi_rsp_i.r_valid) begin
+            nc_rsp_valid_q <= ~|axi_rsp_i.r.resp;        // valid only on OKAY
+            nc_rsp_data_q  <= axi_rsp_i.r.data;
+            nc_rsp_err_q   <= |axi_rsp_i.r.resp;
+            state_q        <= DC_IDLE;
+          end
+        end
+        DC_NC_AW: begin
+          if (axi_req_o.aw_valid & axi_rsp_i.aw_ready) state_q <= DC_NC_W;
+        end
+        DC_NC_W: begin
+          if (axi_req_o.w_valid & axi_rsp_i.w_ready) begin
+            state_q <= DC_NC_B;
+          end
+        end
+        DC_NC_B: begin
+          if (axi_rsp_i.b_valid) begin
+            nc_b_done_q <= ~|axi_rsp_i.b.resp;
+            nc_b_err_q  <=  |axi_rsp_i.b.resp;
+            state_q <= DC_IDLE;
+          end
+        end
         default: state_q <= DC_IDLE;
       endcase
     end
@@ -708,15 +819,34 @@ module kronos_dcache
   // ---- AXI request driver (combinational) -----------------------------------
   always_comb begin
     axi_req_o = '0;
-    // Read channel: refill AR/R
+
+    // ---- AR channel ----
+    // Cacheable refill (default path).
     axi_req_o.ar.addr  = {miss_tag_q, miss_set_q, miss_beat_q, 3'b000};
     axi_req_o.ar.size  = 3'b011;
     axi_req_o.ar.len   = 8'd7;
     axi_req_o.ar.burst = axi_pkg::BURST_WRAP;
+    axi_req_o.ar.cache = 4'b1110;          // write-back, R+W allocate
     axi_req_o.ar.id    = '0;
     axi_req_o.ar_valid = (state_q == DC_REFILL_AR);
     axi_req_o.r_ready  = (state_q == DC_REFILL_R);
 
+    // Stage 6e: NC bypass overrides AR/R when active.
+    if (state_q == DC_NC_AR) begin
+      axi_req_o.ar.addr  = nc_addr_q;
+      axi_req_o.ar.size  = nc_size_q;
+      axi_req_o.ar.len   = 8'd0;
+      axi_req_o.ar.burst = axi_pkg::BURST_INCR;
+      axi_req_o.ar.cache = 4'b0000;
+      axi_req_o.ar.id    = '0;
+      axi_req_o.ar_valid = 1'b1;
+      axi_req_o.r_ready  = 1'b0;
+    end else if (state_q == DC_NC_R) begin
+      axi_req_o.ar_valid = 1'b0;
+      axi_req_o.r_ready  = 1'b1;
+    end
+
+    // ---- AW / W / B channel ----
     // Write channel: dirty-eviction AW/W/B (line-aligned address)
     // TAG_W + SET_IDX_W + OFFSET_W == PHYS_ADDR_W by construction, so no
     // upper-pad concat is needed (Synth 8-693 zero-replication).
@@ -724,6 +854,7 @@ module kronos_dcache
     axi_req_o.aw.size  = 3'b011;
     axi_req_o.aw.len   = 8'd7;
     axi_req_o.aw.burst = axi_pkg::BURST_INCR;
+    axi_req_o.aw.cache = 4'b1110;          // write-back, R+W allocate
     axi_req_o.aw.id    = '0;
     axi_req_o.aw_valid = (state_q == DC_WB_AW) | (state_q == DC_FLUSH_AW);
 
@@ -731,6 +862,27 @@ module kronos_dcache
     axi_req_o.w.strb   = 8'hFF;
     axi_req_o.w.last   = (wb_beat_cnt_q == 4'd7);
     axi_req_o.w_valid  = (state_q == DC_WB_W) | (state_q == DC_FLUSH_W);
+
+    // Stage 6e: NC bypass overrides AW/W for non-cacheable stores.
+    if (state_q == DC_NC_AW) begin
+      axi_req_o.aw.addr  = nc_addr_q;
+      axi_req_o.aw.size  = nc_size_q;
+      axi_req_o.aw.len   = 8'd0;
+      axi_req_o.aw.burst = axi_pkg::BURST_INCR;
+      axi_req_o.aw.cache = 4'b0000;
+      axi_req_o.aw.id    = '0;
+      axi_req_o.aw_valid = 1'b1;
+      axi_req_o.w_valid  = 1'b0;
+    end else if (state_q == DC_NC_W) begin
+      axi_req_o.aw_valid = 1'b0;
+      axi_req_o.w.data   = store_data_aligned(nc_size_q, nc_addr_q[2:0], nc_wdata_q);
+      axi_req_o.w.strb   = store_strobes(nc_size_q, nc_addr_q[2:0]);
+      axi_req_o.w.last   = 1'b1;
+      axi_req_o.w_valid  = 1'b1;
+    end else if (state_q == DC_NC_B) begin
+      axi_req_o.aw_valid = 1'b0;
+      axi_req_o.w_valid  = 1'b0;
+    end
 
     axi_req_o.b_ready  = 1'b1;     // always accept B response
   end
@@ -752,15 +904,30 @@ module kronos_dcache
   // can read it; here we just pick between the cached value and the
   // critical-word-first bypass register on a refill.
   logic [63:0] beat_for_load;
-  assign beat_for_load = bypass_valid_q ? bypass_data_q : hit_beat;
+  assign beat_for_load = nc_rsp_valid_q  ? nc_rsp_data_q
+                       : bypass_valid_q  ? bypass_data_q
+                       : hit_beat;
+
+  // Inputs to load_data_full: prefer the in-flight NC request when active.
+  logic [2:0] eff_size_for_load;
+  logic [2:0] eff_off_for_load;
+  always_comb begin
+    if (nc_rsp_valid_q) begin
+      eff_size_for_load = nc_size_q;
+      eff_off_for_load  = nc_addr_q[2:0];
+    end else begin
+      eff_size_for_load = eff_req_size;
+      eff_off_for_load  = eff_req_addr[2:0];
+    end
+  end
 
   // ---- Size/sign extension on loads ----------------------------------------
   logic [63:0] load_data_full;
   always_comb begin
     load_data_full = beat_for_load;
-    unique case (eff_req_size)
+    unique case (eff_size_for_load)
       3'd0: begin     // byte (zero-extended)
-        unique case (eff_req_addr[2:0])
+        unique case (eff_off_for_load)
           3'd0: load_data_full = {56'b0, beat_for_load[ 7: 0]};
           3'd1: load_data_full = {56'b0, beat_for_load[15: 8]};
           3'd2: load_data_full = {56'b0, beat_for_load[23:16]};
@@ -773,7 +940,7 @@ module kronos_dcache
         endcase
       end
       3'd1: begin     // halfword (zero-extended)
-        unique case (eff_req_addr[2:1])
+        unique case (eff_off_for_load[2:1])
           2'd0: load_data_full = {48'b0, beat_for_load[15: 0]};
           2'd1: load_data_full = {48'b0, beat_for_load[31:16]};
           2'd2: load_data_full = {48'b0, beat_for_load[47:32]};
@@ -782,8 +949,8 @@ module kronos_dcache
         endcase
       end
       3'd2: begin     // word (zero-extended)
-        load_data_full = eff_req_addr[2] ? {32'b0, beat_for_load[63:32]}
-                                          : {32'b0, beat_for_load[31: 0]};
+        load_data_full = eff_off_for_load[2] ? {32'b0, beat_for_load[63:32]}
+                                              : {32'b0, beat_for_load[31: 0]};
       end
       default: load_data_full = beat_for_load;     // double
     endcase
@@ -794,7 +961,8 @@ module kronos_dcache
   logic        rsp_valid_int;
   logic [63:0] rsp_rdata_int;
   logic        sc_success_int;
-  assign rsp_valid_int  = hit | bypass_valid_q | store_done_q | amo_done_q;
+  assign rsp_valid_int  = hit | bypass_valid_q | store_done_q | amo_done_q
+                        | nc_rsp_valid_q | nc_b_done_q;
   assign rsp_rdata_int  = amo_done_q ? amo_old_val_q : load_data_full;
   assign sc_success_int = sc_success_q;
 
@@ -805,7 +973,9 @@ module kronos_dcache
   //   refill or RMW) are owned by the latched in_flight_is_ptw_q bit, since
   //   ptw_active may have de-asserted by the time the response fires.
   logic rsp_to_ptw;
-  assign rsp_to_ptw = (state_q == DC_IDLE) ? ptw_active : in_flight_is_ptw_q;
+  assign rsp_to_ptw = (state_q == DC_IDLE)
+                       ? ((nc_rsp_valid_q | nc_b_done_q) ? nc_is_ptw_q : ptw_active)
+                       : in_flight_is_ptw_q;
 
   // LSU response: gate by ~rsp_to_ptw.
   assign data_valid_o = rsp_valid_int  & ~rsp_to_ptw;
@@ -820,7 +990,21 @@ module kronos_dcache
   assign stall_o      = (state_q != DC_IDLE);
   assign miss_pulse_o = miss_pulse_q;
 
+  // Stage 6e: AMO/LR/SC on non-cacheable address -> raise access-fault. The
+  // signal is combinational so the trap is taken on the same cycle as the
+  // EX-stage memory request, mirroring how pmp_data_fault is handled.
+  assign amo_nc_fault_o = (state_q == DC_IDLE)
+                        & eff_req_valid
+                        & is_uncacheable
+                        & ~(flush_i & ~flush_done_q)
+                        & (eff_amo_req | eff_req_is_lr | eff_req_is_sc);
+
+  // Stage 6e: NC bus error -> raise access-fault. nc_rsp_err_q (R.resp != OKAY)
+  // is the load-side error; nc_b_err_q (B.resp != OKAY) is the store-side.
+  // Pulses high for one cycle, same shape as amo_nc_fault_o.
+  assign bus_err_fault_o = nc_rsp_err_q | nc_b_err_q;
+
   logic _unused;
-  assign _unused = ^{miss_store_off_q, eff_req_is_lr, eff_req_is_sc};
+  assign _unused = ^{miss_store_off_q};
 
 endmodule
