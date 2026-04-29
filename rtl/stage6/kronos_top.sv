@@ -11,7 +11,12 @@
 //   * FP stall: entire pipeline stalls while FPU computes
 module kronos_top
   import kronos_pkg::*;
-(
+#(
+  // Stage 6e: PMA non-cacheable region list — exposed for SoC integrators.
+  parameter int unsigned NUM_NC_REGIONS = 1,
+  parameter logic [63:0] NC_REGION_BASE  [NUM_NC_REGIONS] = '{64'h0000_0000_4000_0000},
+  parameter logic [63:0] NC_REGION_LIMIT [NUM_NC_REGIONS] = '{64'h0000_0000_4FFF_FFFF}
+) (
   input  logic             clk_i,
   input  logic             rst_ni,
 
@@ -258,6 +263,12 @@ module kronos_top
   logic        dcache_sc_success;
   logic        dcache_stall                      /* verilator public_flat_rd */;
   logic        dcache_miss_pulse                 /* verilator public_flat_rd */;
+  // Stage 6e: PMA fault wires from dcache (routed to trap path).
+  // dcache_amo_nc_fault is retained for the LSU mem_stall exemption only;
+  // the trap-path uses the EX-stage ex_amo_nc_fault below for correct
+  // trap_cause/mepc sourcing while id_ex_q still holds the offending op.
+  logic        dcache_amo_nc_fault;
+  logic        dcache_bus_err_fault;
 
   // Stage 5a: LSU FP response
   logic             lsu_fp_dest;
@@ -589,6 +600,7 @@ module kronos_top
                       wfi_priv_fail_q |
                       irq_pending | trig_hit)) |
                     pmp_fetch_fault | pmp_data_fault |
+                    ex_amo_nc_fault | dcache_bus_err_fault |
                     instr_page_fault | load_page_fault | store_page_fault),
     .trap_pc_i     (id_ex_q.pc),
     .trap_cause_i  (trap_cause),
@@ -762,6 +774,27 @@ module kronos_top
   assign pmp_data_fault      = pmp_data_fault_raw & pmp_any_active;
   assign pmp_data_fault_addr = pmp_data_fault_addr_raw;
 
+  // Stage 6e: PMA AMO-on-NC trap detection at EX stage (PMP-style).
+  // The dcache also exports amo_nc_fault_o, but that fires at MEM stage —
+  // by then id_ex_q has advanced to the next instruction, so trap_cause /
+  // mepc would be sourced from the wrong pipeline register. Detecting here
+  // at EX (id_ex_q + alu_result) ensures the offending instruction is in
+  // id_ex_q at trap time, matching how pmp_data_fault is wired.
+  logic ex_amo_nc_fault;
+  logic ex_addr_uncacheable;
+  always_comb begin
+    ex_addr_uncacheable = 1'b0;
+    for (int r = 0; r < NUM_NC_REGIONS; r++) begin
+      if (({32'b0, alu_result[31:0]} >= NC_REGION_BASE[r]) &&
+          ({32'b0, alu_result[31:0]} <= NC_REGION_LIMIT[r]))
+        ex_addr_uncacheable = 1'b1;
+    end
+  end
+  assign ex_amo_nc_fault = id_ex_q.valid &
+                           (id_ex_q.dec.is_amo | id_ex_q.dec.is_lr | id_ex_q.dec.is_sc) &
+                           ex_addr_uncacheable;
+
+
   // -------------------------------------------------------------------------
   // Stage 6a: priv-checked control transfers.
   //   - mret legal only from M-mode.
@@ -863,6 +896,11 @@ module kronos_top
     // Stage 6a: PMP data-port permission-violation flag.  Suppresses dcache
     // request issue and the AMO request when high.
     .pmp_fault_i        (pmp_data_fault),
+    // Stage 6e: dcache-raised faults — AMO to non-cacheable region and AXI
+    // bus error.  Both suppress the dcache request and unstall the pipeline
+    // so the trap can be taken immediately (mirrors the PMP-fault pattern).
+    .amo_nc_fault_i     (dcache_amo_nc_fault),
+    .bus_err_fault_i    (dcache_bus_err_fault),
     // Stage 6b: dTLB miss indicator — LSU stalls and suppresses dcache issue
     // until the PTW refills the dTLB and the access is replayed.
     .tlb_miss_i         (dtlb_miss),
@@ -913,7 +951,11 @@ module kronos_top
                      (fence_i_pulse_raw & dcache_dirty_pending);
 
   // D-cache instance: owns AXI master for the data port.
-  kronos_dcache u_dcache (
+  kronos_dcache #(
+    .NUM_NC_REGIONS  (NUM_NC_REGIONS),
+    .NC_REGION_BASE  (NC_REGION_BASE),
+    .NC_REGION_LIMIT (NC_REGION_LIMIT)
+  ) u_dcache (
     .clk_i           (clk_i),
     .rst_ni          (rst_ni),
     .req_i           (dcache_req),
@@ -943,6 +985,8 @@ module kronos_top
     .dirty_pending_o (dcache_dirty_pending),
     .axi_req_o       (data_axi_req_o),
     .axi_rsp_i       (data_axi_rsp_i),
+    .amo_nc_fault_o  (dcache_amo_nc_fault),
+    .bus_err_fault_o (dcache_bus_err_fault),
     .miss_pulse_o    (dcache_miss_pulse)
   );
 
@@ -1482,15 +1526,23 @@ module kronos_top
       trap_cause = {27'b0, CAUSE_INSTR_ACCESS_FAULT};       // 1
     end else if (load_page_fault) begin
       trap_cause = {27'b0, CAUSE_LOAD_PAGE_FAULT};          // 13
-    end else if (pmp_data_fault & id_ex_q.dec.is_load) begin
+    end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_load) begin
+      // EX-stage data access faults: id_ex_q is the offending instruction.
+      // is_load covers plain LW/LD and LR (LR sets is_amo & is_load).
       trap_cause = {27'b0, CAUSE_LOAD_ACCESS_FAULT};        // 5
     end else if (store_page_fault) begin
       trap_cause = {27'b0, CAUSE_STORE_PAGE_FAULT};         // 15
-    end else if (pmp_data_fault & id_ex_q.dec.is_store) begin
+    end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_store) begin
       trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};       // 7
-    end else if (pmp_data_fault & id_ex_q.dec.is_amo) begin
-      // AMO permission violation: report as STORE access fault (priv-spec).
+    end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_amo) begin
+      // AMO/SC violation: report as STORE access fault (priv-spec).
       trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};
+    end else if (dcache_bus_err_fault & ex_mem_q.dec.is_load) begin
+      // MEM-stage bus error on a plain NC load — ex_mem_q is the offender.
+      trap_cause = {27'b0, CAUSE_LOAD_ACCESS_FAULT};        // 5
+    end else if (dcache_bus_err_fault) begin
+      // MEM-stage bus error on a plain NC store — store/AMO access fault.
+      trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};       // 7
     end else if (irq_pending) begin
       trap_cause = {1'b1, 26'b0, irq_cause};                // mcause[63]=1 (IRQ)
     end else if (id_ex_q.dec.illegal | csr_illegal |
@@ -1518,7 +1570,9 @@ module kronos_top
     else if (pmp_fetch_fault)  trap_tval = pmp_fetch_fault_addr[31:0];
     else if (load_page_fault | store_page_fault)
                                trap_tval = alu_result[31:0];
-    else if (pmp_data_fault)   trap_tval = pmp_data_fault_addr[31:0];
+    else if (pmp_data_fault)        trap_tval = pmp_data_fault_addr[31:0];
+    else if (ex_amo_nc_fault)       trap_tval = alu_result[31:0];
+    else if (dcache_bus_err_fault)  trap_tval = ex_mem_data_pa_q[31:0];
     else if (id_ex_q.dec.illegal | csr_illegal |
              mret_priv_fail | sret_priv_fail | satp_tvm_fail |
              wfi_priv_fail_q)
@@ -1537,6 +1591,7 @@ module kronos_top
                                wfi_priv_fail_q |
                                irq_pending)) | trig_hit |
               pmp_fetch_fault | pmp_data_fault |
+              ex_amo_nc_fault | dcache_bus_err_fault |
               instr_page_fault | load_page_fault | store_page_fault)
       ex_pc_next = trap_vector[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_mret & ~mret_priv_fail)
@@ -1592,6 +1647,7 @@ module kronos_top
       id_ex_q.dec.is_mret | id_ex_q.dec.is_sret)) |
     trig_hit |
     pmp_fetch_fault | pmp_data_fault |
+    ex_amo_nc_fault | dcache_bus_err_fault |
     instr_page_fault | load_page_fault | store_page_fault;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -1787,6 +1843,7 @@ module kronos_top
                               wfi_priv_fail_q |
                               irq_pending | trig_hit)) |
                             pmp_fetch_fault | pmp_data_fault |
+                            ex_amo_nc_fault | dcache_bus_err_fault |
                             instr_page_fault | load_page_fault | store_page_fault;
 
   assign event_bus[ 0]    = 1'b0;

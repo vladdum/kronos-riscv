@@ -56,8 +56,14 @@ module kronos_lsu
   // PMP fault input (asserted by u_pmp_data in kronos_top on a permission
   // violation).  When high, the LSU must not issue a dcache request and must
   // not stall the pipeline — the access-fault trap is raised on the existing
-  // trap path in kronos_top.
+  // trap path in kronos_top.  amo_nc_fault_i and bus_err_fault_i work the
+  // same way: they are raised by kronos_dcache combinationally at IDLE when
+  // an AMO targets a non-cacheable region or an AXI bus error is seen, and
+  // must likewise suppress the dcache request and unstall the pipeline so the
+  // trap can be taken immediately.
   input  logic             pmp_fault_i,
+  input  logic             amo_nc_fault_i,
+  input  logic             bus_err_fault_i,
 
   // Stage 6b: dTLB miss input (asserted by u_dtlb in kronos_top while a
   // page-table walk is in progress).  When high, the LSU must not issue a
@@ -107,6 +113,17 @@ module kronos_lsu
   // asserted the dcache must not see a request (no AXI transaction), and the
   // AMO request must also be suppressed.  The trap is taken on the existing
   // trap path in kronos_top.
+  //
+  // amo_nc_fault_i is NOT used to gate dcache_req_o: the fault is produced
+  // combinationally from eff_req_valid (which equals req_i in the normal path),
+  // so gating req_i on ~amo_nc_fault would create a combinational loop.
+  // Instead, the dcache itself handles the amo-on-NC case by staying at IDLE
+  // and not issuing any AXI transaction; the fault just propagates to the
+  // pipeline to suppress mem_stall and trigger the trap.
+  //
+  // bus_err_fault_i is registered (_q signals in the dcache) so there is no
+  // loop concern, but bus errors occur mid-transaction rather than at IDLE,
+  // so suppressing the req at that point is unnecessary and confusing.
   //
   // Stage 6b: a dTLB miss likewise suppresses the dcache request (and AMO
   // request) so no cache lookup happens until the page-table walker has
@@ -191,12 +208,15 @@ module kronos_lsu
   // On a PMP fault we suppressed the dcache request above, so there is no
   // in-flight transaction.  The pipeline must not stall — mem_stall is
   // forced low so the trap can be taken on the same cycle the fault is seen.
+  // amo_nc_fault_i and bus_err_fault_i are treated identically: the dcache
+  // raises them combinationally at IDLE without starting any AXI transaction,
+  // so the pipeline must also not stall when either is asserted.
   //
   // Stage 6b: while tlb_miss_i is asserted, no dcache transaction has been
   // issued yet, but the pipeline must remain stalled until the dTLB refills.
   // tlb_miss_i is therefore an explicit stall source alongside the dcache
   // not-yet-valid / stall conditions.
-  assign mem_stall_o  = req_i & ~pmp_fault_i &
+  assign mem_stall_o  = req_i & ~pmp_fault_i & ~amo_nc_fault_i & ~bus_err_fault_i &
                         (tlb_miss_i | ~dcache_data_valid_i | dcache_stall_i);
   assign valid_o      = dcache_data_valid_i & ~dcache_stall_i;
   assign sc_success_o = dcache_sc_success_i;

@@ -27,6 +27,14 @@
 // corrupts the reset vector. 2 MB comfortably holds every current test.
 static uint32_t mem[524288]; // 524288 words = 2 MB
 
+// MMIO scratch buffer: 16 KB at 0x4001_0000 - 0x4001_3FFF.
+// Supports byte-strobed reads/writes for NC PMA bypass tests.
+// Index = (addr - 0x40010000) >> 2, masked to 0xFFF (4096 words).
+static uint32_t mmio_mem[4096]; // 4096 words = 16 KB
+static inline bool is_mmio_scratch(uint32_t addr) {
+    return (addr >= 0x40010000u && addr <= 0x40013FFFu);
+}
+
 // Parse Intel HEX format (unchanged from stage2)
 static void load_hex(const char* path) {
     FILE* f = fopen(path, "r");
@@ -73,7 +81,8 @@ struct AxiRead {
 // -------------------------------------------------------------------------
 struct AxiWrite {
     bool     aw_done   = false;  // AW handshake received
-    bool     b_pending = false;  // waiting for B handshake
+    bool     b_armed   = false;  // W handshake completed this cycle; arm B for next
+    bool     b_pending = false;  // B response valid (drives data_b_valid_i)
     bool     irq_write = false;  // fire irq_timer_i one cycle after B handshake
     uint64_t base_addr = 0;      // AW address (first beat)
     uint8_t  beat      = 0;      // current W beat index
@@ -350,6 +359,16 @@ int main(int argc, char** argv) {
         // W channel: gated — driven below after AW handshake detection
         top->data_w_ready_i  = 0;
 
+        // Promote any B armed during last cycle's W handshake to b_pending
+        // for this cycle. This adds the one-cycle write→B delay that the
+        // dcache's NC store path (DC_NC_W → DC_NC_B → DC_IDLE) requires:
+        // without it, b_valid would fire in the same cycle as W and the
+        // dcache would miss it because state has not yet advanced to DC_NC_B.
+        if (data_w.b_armed) {
+            data_w.b_pending = true;
+            data_w.b_armed   = false;
+        }
+
         // R response — instr (multi-beat burst support: INCR and WRAP)
         if (instr_r.pending && cycle >= instr_r.fire_at) {
             uint64_t addr = instr_r.base_addr;
@@ -394,9 +413,16 @@ int main(int argc, char** argv) {
                 addr = line_base | off;
             }
             // Fetch the 64-bit beat (two consecutive 32-bit words, little-endian).
-            uint32_t wa    = ((uint32_t)(addr >> 2)) & 0x7FFFF;
-            uint32_t wa_hi = (wa + 1) & 0x7FFFF;
-            uint64_t beat_data = (uint64_t)mem[wa] | ((uint64_t)mem[wa_hi] << 32);
+            uint64_t beat_data;
+            if (is_mmio_scratch((uint32_t)addr)) {
+                uint32_t mi    = ((uint32_t)addr - 0x40010000u) >> 2;
+                uint32_t mi_hi = (mi + 1) & 0xFFF;
+                beat_data = (uint64_t)mmio_mem[mi & 0xFFF] | ((uint64_t)mmio_mem[mi_hi] << 32);
+            } else {
+                uint32_t wa    = ((uint32_t)(addr >> 2)) & 0x7FFFF;
+                uint32_t wa_hi = (wa + 1) & 0x7FFFF;
+                beat_data = (uint64_t)mem[wa] | ((uint64_t)mem[wa_hi] << 32);
+            }
             top->data_r_valid_i = 1;
             top->data_r_data_i  = beat_data;
             top->data_r_last_i  = (data_r.beat == data_r.len) ? 1 : 0;
@@ -531,8 +557,26 @@ int main(int argc, char** argv) {
                     if (be & (1u << i))
                         putchar((wdat >> (i * 8)) & 0xFF);
                 fflush(stdout);
-            } else if (((uint32_t)waddr & 0xC0000000u) == 0x40000000u) {
+            } else if (is_mmio_scratch((uint32_t)waddr)) {
+                // MMIO scratch buffer: byte-strobed write to 0x4001_0000-0x4001_3FFF.
+                // Used by NC PMA bypass asm tests; does NOT trigger halt.
+                uint32_t mi_lo = ((uint32_t)waddr - 0x40010000u) >> 2;
+                uint32_t cur_lo = mmio_mem[mi_lo & 0xFFF];
+                if (be & 0x01) cur_lo = (cur_lo & ~0x000000FFu) | (uint32_t)((wdat >>  0) & 0xFFu);
+                if (be & 0x02) cur_lo = (cur_lo & ~0x0000FF00u) | (uint32_t)((wdat >>  8) & 0xFFu) <<  8;
+                if (be & 0x04) cur_lo = (cur_lo & ~0x00FF0000u) | (uint32_t)((wdat >> 16) & 0xFFu) << 16;
+                if (be & 0x08) cur_lo = (cur_lo & ~0xFF000000u) | (uint32_t)((wdat >> 24) & 0xFFu) << 24;
+                mmio_mem[mi_lo & 0xFFF] = cur_lo;
+                uint32_t mi_hi = (mi_lo + 1) & 0xFFF;
+                uint32_t cur_hi = mmio_mem[mi_hi];
+                if (be & 0x10) cur_hi = (cur_hi & ~0x000000FFu) | (uint32_t)((wdat >> 32) & 0xFFu);
+                if (be & 0x20) cur_hi = (cur_hi & ~0x0000FF00u) | (uint32_t)((wdat >> 40) & 0xFFu) <<  8;
+                if (be & 0x40) cur_hi = (cur_hi & ~0x00FF0000u) | (uint32_t)((wdat >> 48) & 0xFFu) << 16;
+                if (be & 0x80) cur_hi = (cur_hi & ~0xFF000000u) | (uint32_t)((wdat >> 56) & 0xFFu) << 24;
+                mmio_mem[mi_hi] = cur_hi;
+            } else if (((uint32_t)waddr & 0xFFFF0000u) == 0x40000000u) {
                 // Halt via AXI writeback (dcache eviction path).
+                // Sentinel: 0x4000_0000 - 0x4000_FFFF (common.S uses 0x4000_0000).
                 // Only trigger if not already halted via the retire-trace path.
                 if (!halted) {
                     halt_x10 = (uint32_t)(wdat & 0xFFFFFFFFu);
@@ -567,8 +611,9 @@ int main(int argc, char** argv) {
 
             data_w.beat++;
             if (top->data_w_last_o) {
-                data_w.aw_done   = false;
-                data_w.b_pending = true;
+                data_w.aw_done = false;
+                // Arm B for next cycle (one-cycle write→B delay; see start of loop).
+                data_w.b_armed = true;
             }
         }
 
@@ -678,8 +723,10 @@ int main(int argc, char** argv) {
         // sentinel region signals termination.  This works with the write-back
         // dcache where the AXI writeback may be deferred indefinitely (the dirty
         // line stays in cache until eviction).
+        // Sentinel range: 0x4000_0000 - 0x4000_FFFF (common.S uses 0x4000_0000).
+        // 0x4001_0000 - 0x4001_3FFF is the MMIO scratch buffer (not a halt).
         if (!halted && top->retire_mem_wen_o &&
-            ((uint32_t)top->retire_mem_addr_o & 0xC0000000u) == 0x40000000u) {
+            ((uint32_t)top->retire_mem_addr_o & 0xFFFF0000u) == 0x40000000u) {
             halt_x10 = (uint32_t)(top->retire_mem_wdata_o & 0xFFFFFFFFu);
             printf("[sim] halt at cycle %d, x10 = %u\n", cycle, halt_x10);
             halted = 1;

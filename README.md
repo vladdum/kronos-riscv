@@ -37,6 +37,8 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 6b    | Sv39/Sv48 MMU + iTLB/dTLB + HW PTW + sfence.vma | RV64IMAFDC       | AXI4    | Complete    |
 | 6c    | Closeout: dhrystone perf gate, integration program, mstatus reset, GLS-s6 docs | RV64IMAFDC | AXI4 | Complete |
 | 6d    | RAM wrapper infrastructure (`kronos_ram` SDP, FPGA `xpm` + ASIC stub) | RV64IMAFDC | AXI4 | Complete |
+| 6e    | PMA layer for MMIO bypass (parameterised non-cacheable regions in `kronos_dcache`) | RV64IMAFDC | AXI4 | Complete |
+| 6f    | Dcache `data_q` RAM-wrapper refactor (deferred from 6e)               | RV64IMAFDC | AXI4    | Planned     |
 | 7     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4    | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same

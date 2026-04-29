@@ -1378,6 +1378,14 @@ sim-dcache:
 	  -Mdir $(OBJ_DIR)/dcache --top-module tb_dcache $(TB_DCACHE_FILES)
 	$(OBJ_DIR)/dcache/Vtb_dcache
 
+TB_DCACHE_PMA_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                       $(RTL_DIR)/stage6/kronos_dcache.sv \
+                       $(TB_DIR)/stage6/tb_dcache_pma.sv
+sim-dcache-pma-s6:
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-UNUSED \
+	  -Mdir $(OBJ_DIR)/dcache_pma_s6 --top-module tb_dcache_pma $(TB_DCACHE_PMA_FILES)
+	$(OBJ_DIR)/dcache_pma_s6/Vtb_dcache_pma
+
 TB_FPU_SB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
                    $(TB_DIR)/stage5/tb_fpu_scoreboard.sv
