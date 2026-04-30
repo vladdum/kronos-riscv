@@ -18,7 +18,7 @@ module kronos_tlb
 
   // Lookup port (combinational).
   input  logic              lookup_valid_i,
-  input  logic [XLEN-1:0]   lookup_va_i,
+  input  logic [kronos_pkg::XLEN-1:0]   lookup_va_i,
   input  logic [15:0]       lookup_asid_i,
   input  priv_e             lookup_priv_i,
   input  logic              is_load_i,
@@ -47,7 +47,7 @@ module kronos_tlb
   input  logic              flush_valid_i,
   input  logic              flush_va_valid_i,
   input  logic              flush_asid_valid_i,
-  input  logic [XLEN-1:0]   flush_va_i,
+  input  logic [kronos_pkg::XLEN-1:0]   flush_va_i,
   input  logic [15:0]       flush_asid_i
 );
 

@@ -59,7 +59,7 @@ module tb_ptw;
   logic        force_sc_fail;
 
   // Memory model storage and busy flop.
-  bit [XLEN-1:0] mem [logic [55:0]];
+  bit [kronos_pkg::XLEN-1:0] mem [logic [55:0]];
   logic          dc_busy_q;  // 1 = response delivered for current req pulse
 
   // Test bookkeeping and per-test scratch (declared module-top per coding
@@ -169,7 +169,7 @@ module tb_ptw;
     miss_priv     = PRIV_S;
     sum_in        = 1'b0;
     mxr_in        = 1'b0;
-    satp_mode     = SATP_MODE_SV39;
+    satp_mode     = kronos_pkg::SATP_MODE_SV39;
     satp_asid     = 16'd1;
     satp_ppn      = 44'h0_0001_0000;  // root table at PA 0x0001_0000_0000_0000
   endtask
@@ -293,7 +293,7 @@ module tb_ptw;
     // L2 (lvl-1)  PPN = 0x0_0030_0000;
     // L3 (lvl-0)  PPN = 0x0_0040_0000.
     // ----------------------------------------------------------------------
-    satp_mode = SATP_MODE_SV48;
+    satp_mode = kronos_pkg::SATP_MODE_SV48;
 
     // root[1] (Sv48 lvl-3, VPN[3]=1) → pointer to L1 table.
     set_pte(56'h00_0000_1000_0008, mk_pointer(44'h0_0020_0000));
@@ -313,7 +313,7 @@ module tb_ptw;
     repeat (4) @(posedge clk);
 
     // Switch back to Sv39 for remaining tests.
-    satp_mode = SATP_MODE_SV39;
+    satp_mode = kronos_pkg::SATP_MODE_SV39;
 
     // ----------------------------------------------------------------------
     // Test 5 — Invalid PTE (V=0)
@@ -323,7 +323,7 @@ module tb_ptw;
     kick_load_miss(64'h0000_0000_C000_0000);  // VPN[2]=3
     wait_done(refilled, faulted);
     check("T5 invalid PTE -> page-fault", faulted & ~refilled);
-    check("T5 cause = LOAD_PAGE_FAULT",   pf_cause == CAUSE_LOAD_PAGE_FAULT);
+    check("T5 cause = LOAD_PAGE_FAULT",   pf_cause == kronos_pkg::CAUSE_LOAD_PAGE_FAULT);
     check("T5 tval = original VA",        pf_tval == 64'h0000_0000_C000_0000);
     check("T5 which = TLB_LOAD",          pf_which == TLB_LOAD);
     repeat (4) @(posedge clk);
@@ -338,7 +338,7 @@ module tb_ptw;
     kick_load_miss(64'h0000_0001_0000_0000);  // VPN[2]=4
     wait_done(refilled, faulted);
     check("T6 reserved enc -> page-fault", faulted & ~refilled);
-    check("T6 cause = LOAD_PAGE_FAULT",    pf_cause == CAUSE_LOAD_PAGE_FAULT);
+    check("T6 cause = LOAD_PAGE_FAULT",    pf_cause == kronos_pkg::CAUSE_LOAD_PAGE_FAULT);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -353,7 +353,7 @@ module tb_ptw;
     kick_load_miss(64'h0000_0001_4000_0000);  // VPN[2]=5, VPN[1]=0
     wait_done(refilled, faulted);
     check("T7 misaligned superpage -> page-fault", faulted & ~refilled);
-    check("T7 cause = LOAD_PAGE_FAULT", pf_cause == CAUSE_LOAD_PAGE_FAULT);
+    check("T7 cause = LOAD_PAGE_FAULT", pf_cause == kronos_pkg::CAUSE_LOAD_PAGE_FAULT);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -370,7 +370,7 @@ module tb_ptw;
     kick_load_miss(64'h0000_0001_8000_0000);  // VPN[2]=6
     wait_done(refilled, faulted);
     check("T8 U-page in S w/o SUM -> page-fault", faulted & ~refilled);
-    check("T8 cause = LOAD_PAGE_FAULT", pf_cause == CAUSE_LOAD_PAGE_FAULT);
+    check("T8 cause = LOAD_PAGE_FAULT", pf_cause == kronos_pkg::CAUSE_LOAD_PAGE_FAULT);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -384,13 +384,13 @@ module tb_ptw;
     set_pte(leaf_addr,
             mk_leaf(44'h0_00CA_FE00, 4'b0_011, 1'b0, 1'b0, 1'b0));
     before_pte = mem[leaf_addr];
-    check("T9 leaf A=0 before walk", ((before_pte >> PTE_A_BIT) & 64'd1) == 64'd0);
+    check("T9 leaf A=0 before walk", ((before_pte >> kronos_pkg::PTE_A_BIT) & 64'd1) == 64'd0);
 
     kick_load_miss(64'h0000_0001_C000_0000);  // VPN[2]=7
     wait_done(refilled, faulted);
     check("T9 A-set walk refilled",     refilled & ~faulted);
     check("T9 A=1 in mem after SC",
-          ((mem[leaf_addr] >> PTE_A_BIT) & 64'd1) == 64'd1);
+          ((mem[leaf_addr] >> kronos_pkg::PTE_A_BIT) & 64'd1) == 64'd1);
     check("T9 PPN preserved",
           mem[leaf_addr][53:10] == 44'h0_00CA_FE00);
     check("T9 PPN refilled",            rf_ppn == 44'h0_00CA_FE00);
@@ -444,7 +444,7 @@ module tb_ptw;
     check("T10 SC-fail retry refilled", refilled & ~faulted);
     check("T10 PPN refilled",           rf_ppn == 44'h0_00DE_A000);
     check("T10 A=1 in mem",
-          ((mem[leaf_addr] >> PTE_A_BIT) & 64'd1) == 64'd1);
+          ((mem[leaf_addr] >> kronos_pkg::PTE_A_BIT) & 64'd1) == 64'd1);
     check("T10 saw an SC-fail event",   sc_seen == 1);
     repeat (4) @(posedge clk);
 

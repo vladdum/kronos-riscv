@@ -523,8 +523,30 @@ If the comment after the prefix is substantive (explains a non-obvious invariant
 ### Packages and Imports
 
 - Shared types live in `rtl/kronos_pkg.sv`. Do not duplicate type definitions across files.
-- Import packages at the module level with `import kronos_pkg::*;` — do not use the `::` scope operator inline in port lists or always blocks.
+- Import the package at module level with `import kronos_pkg::*;` — this brings types into scope for use in the port list, signal declarations, and bodies.
+- **Reference package `localparam` / `parameter` constants with the explicit `kronos_pkg::NAME` scope operator** at every use site (`kronos_pkg::XLEN`, `kronos_pkg::FLEN`, `kronos_pkg::MMIO_BASE`, `kronos_pkg::DECODED_INSTR_ZERO`, etc.). The scope prefix lets editor tooling (VSCode hover, LSP go-to-definition) resolve the constant's value without crawling every imported package. The wildcard `import` would otherwise hide the source file from the LSP.
+- **Types stay bare.** `decoded_instr_t`, `alu_op_e`, `id_ex_reg_t`, etc. are written without the package prefix in port lists, signal declarations, and `case` selectors. The wildcard import covers them and the type suffix (`_t`, `_e`) already signals package-origin.
+- **Enum members stay bare.** `ALU_ADD`, `FWD_NONE`, `PRIV_M`, `WB_ALU`, `FP_FADD`, etc. are written without the package prefix. The enclosing enum type already provides hover context, and scoping every case label would bloat decode tables and `case` statements.
 - Do not create per-stage packages; `kronos_pkg` is the single shared package across all stages.
+
+```systemverilog
+module kronos_alu
+  import kronos_pkg::*;
+(
+  input  alu_op_e                       op_i,        // type — bare
+  input  logic [kronos_pkg::XLEN-1:0]   a_i,         // constant — scoped
+  output logic [kronos_pkg::XLEN-1:0]   result_o
+);
+  always_comb begin
+    result_o = {kronos_pkg::XLEN{1'b0}};              // constant — scoped
+    unique case (op_i)
+      ALU_ADD: result_o = a_i + b_i;                  // enum member — bare
+      ALU_SUB: result_o = a_i - b_i;
+      default: ;
+    endcase
+  end
+endmodule
+```
 
 ### Hierarchy and Instantiation
 

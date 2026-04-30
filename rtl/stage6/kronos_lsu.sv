@@ -33,24 +33,24 @@ module kronos_lsu
   input  logic             req_i,
   input  logic             we_i,
   input  logic [31:0]      addr_i,
-  input  logic [XLEN-1:0]  wdata_i,
+  input  logic [kronos_pkg::XLEN-1:0]  wdata_i,
   input  logic [2:0]       funct3_i,
-  output logic [XLEN-1:0]  rdata_o,
+  output logic [kronos_pkg::XLEN-1:0]  rdata_o,
   output logic             valid_o,
   output logic             mem_stall_o,
 
   // FP load/store extensions (Stage 5)
   input  logic             fp_dest_req_i,    // this is a FP load/store
-  input  logic [FLEN-1:0]  fp_store_data_i,  // FP register data for FSW/FSD
+  input  logic [kronos_pkg::FLEN-1:0]  fp_store_data_i,  // FP register data for FSW/FSD
   output logic             fp_dest_rsp_o,    // load response targets FP regfile
-  output logic [FLEN-1:0]  fp_rdata_o,       // NaN-boxed FP load data
+  output logic [kronos_pkg::FLEN-1:0]  fp_rdata_o,       // NaN-boxed FP load data
 
   // A-extension
   input  logic             is_lr_i,
   input  logic             is_sc_i,
   input  logic             is_amo_i,
   input  logic [4:0]       amo_funct5_i,
-  input  logic [XLEN-1:0]  amo_src_i,
+  input  logic [kronos_pkg::XLEN-1:0]  amo_src_i,
   output logic             sc_success_o,
 
   // PMP fault input (asserted by u_pmp_data in kronos_top on a permission
@@ -74,14 +74,14 @@ module kronos_lsu
 
   // D-cache interface (replaces direct AXI master)
   output logic             dcache_req_o,
-  output logic [XLEN-1:0]  dcache_addr_o,
+  output logic [kronos_pkg::XLEN-1:0]  dcache_addr_o,
   output logic [2:0]       dcache_size_o,
   output logic             dcache_we_o,
-  output logic [XLEN-1:0]  dcache_wdata_o,
+  output logic [kronos_pkg::XLEN-1:0]  dcache_wdata_o,
   output logic             dcache_amo_req_o,
   output logic [4:0]       dcache_amo_op_o,
   input  logic             dcache_data_valid_i,
-  input  logic [XLEN-1:0]  dcache_rdata_i,
+  input  logic [kronos_pkg::XLEN-1:0]  dcache_rdata_i,
   input  logic             dcache_sc_success_i,
   input  logic             dcache_stall_i
 );
@@ -145,7 +145,7 @@ module kronos_lsu
   // request) so no cache lookup happens until the page-table walker has
   // refilled the dTLB and produced a translated PA.
   assign dcache_req_o     = req_i & ~pmp_fault_i & ~tlb_miss_i;
-  assign dcache_addr_o    = {{(XLEN-32){1'b0}}, addr_i};
+  assign dcache_addr_o    = {{(kronos_pkg::XLEN-32){1'b0}}, addr_i};
   assign dcache_we_o      = we_i;
   assign dcache_wdata_o   = fp_dest_req_i ? fp_store_data_i : wdata_i;
   assign dcache_amo_req_o = (is_lr_i | is_sc_i | is_amo_i) & ~pmp_fault_i & ~tlb_miss_i;
@@ -164,16 +164,16 @@ module kronos_lsu
     rdata_o = dcache_rdata_i;
     if (is_sc_i) begin
       // SC result: 0 = success, 1 = failure
-      rdata_o = {{(XLEN-1){1'b0}}, ~dcache_sc_success_i};
+      rdata_o = {{(kronos_pkg::XLEN-1){1'b0}}, ~dcache_sc_success_i};
     end else begin
       unique case (funct3_i)
-        3'b000: rdata_o = {{(XLEN-8){dcache_rdata_i[7]}},   dcache_rdata_i[7:0]};   // LB
-        3'b001: rdata_o = {{(XLEN-16){dcache_rdata_i[15]}}, dcache_rdata_i[15:0]};  // LH
-        3'b010: rdata_o = {{(XLEN-32){dcache_rdata_i[31]}}, dcache_rdata_i[31:0]};  // LW
+        3'b000: rdata_o = {{(kronos_pkg::XLEN-8){dcache_rdata_i[7]}},   dcache_rdata_i[7:0]};   // LB
+        3'b001: rdata_o = {{(kronos_pkg::XLEN-16){dcache_rdata_i[15]}}, dcache_rdata_i[15:0]};  // LH
+        3'b010: rdata_o = {{(kronos_pkg::XLEN-32){dcache_rdata_i[31]}}, dcache_rdata_i[31:0]};  // LW
         3'b011: rdata_o = dcache_rdata_i;                                           // LD
-        3'b100: rdata_o = {{(XLEN-8){1'b0}},   dcache_rdata_i[7:0]};                // LBU
-        3'b101: rdata_o = {{(XLEN-16){1'b0}},  dcache_rdata_i[15:0]};               // LHU
-        3'b110: rdata_o = {{(XLEN-32){1'b0}},  dcache_rdata_i[31:0]};               // LWU
+        3'b100: rdata_o = {{(kronos_pkg::XLEN-8){1'b0}},   dcache_rdata_i[7:0]};                // LBU
+        3'b101: rdata_o = {{(kronos_pkg::XLEN-16){1'b0}},  dcache_rdata_i[15:0]};               // LHU
+        3'b110: rdata_o = {{(kronos_pkg::XLEN-32){1'b0}},  dcache_rdata_i[31:0]};               // LWU
         default: rdata_o = dcache_rdata_i;
       endcase
     end
@@ -187,11 +187,11 @@ module kronos_lsu
   // pipeline routes the result to the FP register file.
   // -------------------------------------------------------------------------
   always_comb begin
-    fp_rdata_o = {FLEN{1'b0}};
+    fp_rdata_o = {kronos_pkg::FLEN{1'b0}};
     unique case (funct3_i)
-      3'b010: fp_rdata_o = {FP_NANBOX_UPPER, dcache_rdata_i[FP_S_TOTAL_W-1:0]};  // FLW: NaN-box
+      3'b010: fp_rdata_o = {kronos_pkg::FP_NANBOX_UPPER, dcache_rdata_i[kronos_pkg::FP_S_TOTAL_W-1:0]};  // FLW: NaN-box
       3'b011: fp_rdata_o = dcache_rdata_i;                                       // FLD: full 64-bit
-      default: fp_rdata_o = {FLEN{1'b0}};
+      default: fp_rdata_o = {kronos_pkg::FLEN{1'b0}};
     endcase
   end
 

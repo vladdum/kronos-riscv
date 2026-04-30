@@ -135,7 +135,7 @@ module kronos_lsu
   // -------------------------------------------------------------------------
   always_comb begin
     unique case (funct3_i)
-      3'b010: fp_rdata_o = {FP_NANBOX_UPPER, dcache_rdata_i[31:0]};  // FLW: NaN-box
+      3'b010: fp_rdata_o = {kronos_pkg::FP_NANBOX_UPPER, dcache_rdata_i[31:0]};  // FLW: NaN-box
       3'b011: fp_rdata_o = dcache_rdata_i;                           // FLD: full 64-bit
       default: fp_rdata_o = {64{1'b0}};
     endcase

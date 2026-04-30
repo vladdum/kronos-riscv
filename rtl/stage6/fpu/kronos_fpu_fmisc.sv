@@ -12,11 +12,11 @@ module kronos_fpu_fmisc
   input  fp_op_e          op_i,
   input  logic            fmt_d_i,
   input  logic [2:0]      rm_i,
-  input  logic [FLEN-1:0] a_i,
-  input  logic [FLEN-1:0] b_i,
+  input  logic [kronos_pkg::FLEN-1:0] a_i,
+  input  logic [kronos_pkg::FLEN-1:0] b_i,
   input  fpu_tag_t        tag_i,
   output logic            out_valid_o,
-  output logic [FLEN-1:0] result_o,
+  output logic [kronos_pkg::FLEN-1:0] result_o,
   output logic [4:0]      fflags_o,
   output fpu_tag_t        tag_o
 );
@@ -24,48 +24,48 @@ module kronos_fpu_fmisc
   // -------------------------------------------------------------------------
   // Helper functions: NaN classification for single-precision
   // -------------------------------------------------------------------------
-  function automatic logic is_snan_s(logic [FP_S_TOTAL_W-1:0] x);
-    return (x[FP_S_TOTAL_W-2:FP_S_MANT_W] == FP_S_EXP_MAX) &&
-           (x[FP_S_MANT_W-1] == 1'b0) &&
-           (x[FP_S_MANT_W-2:0] != {(FP_S_MANT_W-1){1'b0}});
+  function automatic logic is_snan_s(logic [kronos_pkg::FP_S_TOTAL_W-1:0] x);
+    return (x[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX) &&
+           (x[kronos_pkg::FP_S_MANT_W-1] == 1'b0) &&
+           (x[kronos_pkg::FP_S_MANT_W-2:0] != {(kronos_pkg::FP_S_MANT_W-1){1'b0}});
   endfunction
 
-  function automatic logic is_qnan_s(logic [FP_S_TOTAL_W-1:0] x);
-    return (x[FP_S_TOTAL_W-2:FP_S_MANT_W] == FP_S_EXP_MAX) &&
-           (x[FP_S_MANT_W-1] == 1'b1);
+  function automatic logic is_qnan_s(logic [kronos_pkg::FP_S_TOTAL_W-1:0] x);
+    return (x[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX) &&
+           (x[kronos_pkg::FP_S_MANT_W-1] == 1'b1);
   endfunction
 
-  function automatic logic is_nan_s(logic [FP_S_TOTAL_W-1:0] x);
+  function automatic logic is_nan_s(logic [kronos_pkg::FP_S_TOTAL_W-1:0] x);
     return is_snan_s(x) || is_qnan_s(x);
   endfunction
 
   // -------------------------------------------------------------------------
   // Helper functions: NaN classification for double-precision
   // -------------------------------------------------------------------------
-  function automatic logic is_snan_d(logic [FP_D_TOTAL_W-2:0] x);
-    return (x[FP_D_TOTAL_W-2:FP_D_MANT_W] == FP_D_EXP_MAX) &&
-           (x[FP_D_MANT_W-1] == 1'b0) &&
-           (x[FP_D_MANT_W-2:0] != {(FP_D_MANT_W-1){1'b0}});
+  function automatic logic is_snan_d(logic [kronos_pkg::FP_D_TOTAL_W-2:0] x);
+    return (x[kronos_pkg::FP_D_TOTAL_W-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX) &&
+           (x[kronos_pkg::FP_D_MANT_W-1] == 1'b0) &&
+           (x[kronos_pkg::FP_D_MANT_W-2:0] != {(kronos_pkg::FP_D_MANT_W-1){1'b0}});
   endfunction
 
-  function automatic logic is_qnan_d(logic [FP_D_TOTAL_W-2:0] x);
-    return (x[FP_D_TOTAL_W-2:FP_D_MANT_W] == FP_D_EXP_MAX) &&
-           (x[FP_D_MANT_W-1] == 1'b1);
+  function automatic logic is_qnan_d(logic [kronos_pkg::FP_D_TOTAL_W-2:0] x);
+    return (x[kronos_pkg::FP_D_TOTAL_W-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX) &&
+           (x[kronos_pkg::FP_D_MANT_W-1] == 1'b1);
   endfunction
 
-  function automatic logic is_nan_d(logic [FP_D_TOTAL_W-2:0] x);
+  function automatic logic is_nan_d(logic [kronos_pkg::FP_D_TOTAL_W-2:0] x);
     return is_snan_d(x) || is_qnan_d(x);
   endfunction
 
   // -------------------------------------------------------------------------
   // Combinational signals
   // -------------------------------------------------------------------------
-  logic [FLEN-1:0] result_comb;
+  logic [kronos_pkg::FLEN-1:0] result_comb;
   logic [4:0]      fflags_comb;
 
   // NaN-unboxed operands for single-precision use
-  logic [FP_S_TOTAL_W-1:0] a_s, b_s;
-  logic [FLEN-1:0]         a_eff, b_eff;
+  logic [kronos_pkg::FP_S_TOTAL_W-1:0] a_s, b_s;
+  logic [kronos_pkg::FLEN-1:0]         a_eff, b_eff;
 
   // Intermediate signals for FMIN/FMAX
   logic a_nan_s, b_nan_s, a_snan_s, b_snan_s;
@@ -73,13 +73,13 @@ module kronos_fpu_fmisc
 
   // Single-precision comparison helpers
   logic                    a_sign_s, b_sign_s;
-  logic [FP_S_TOTAL_W-2:0] a_mag_s, b_mag_s;
+  logic [kronos_pkg::FP_S_TOTAL_W-2:0] a_mag_s, b_mag_s;
   logic                    a_zero_s, b_zero_s;
   logic                    a_lt_b_s;     // a < b numerically (single)
 
   // Double-precision comparison helpers
   logic                    a_sign_d, b_sign_d;
-  logic [FP_D_TOTAL_W-2:0] a_mag_d, b_mag_d;
+  logic [kronos_pkg::FP_D_TOTAL_W-2:0] a_mag_d, b_mag_d;
   logic                    a_zero_d, b_zero_d;
   logic                    a_lt_b_d;     // a < b numerically (double)
 
@@ -96,24 +96,24 @@ module kronos_fpu_fmisc
   // -------------------------------------------------------------------------
   always_comb begin
     // Defaults
-    a_s   = FP_CANON_QNAN_S;
-    b_s   = FP_CANON_QNAN_S;
-    a_eff = {FLEN{1'b0}};
-    b_eff = {FLEN{1'b0}};
+    a_s   = kronos_pkg::FP_CANON_QNAN_S;
+    b_s   = kronos_pkg::FP_CANON_QNAN_S;
+    a_eff = {kronos_pkg::FLEN{1'b0}};
+    b_eff = {kronos_pkg::FLEN{1'b0}};
 
     // NaN-unbox single operands
-    a_s = (a_i[FLEN-1:FP_S_TOTAL_W] == FP_NANBOX_UPPER) ? a_i[FP_S_TOTAL_W-1:0]
-                                                        : FP_CANON_QNAN_S;
-    b_s = (b_i[FLEN-1:FP_S_TOTAL_W] == FP_NANBOX_UPPER) ? b_i[FP_S_TOTAL_W-1:0]
-                                                        : FP_CANON_QNAN_S;
+    a_s = (a_i[kronos_pkg::FLEN-1:FP_S_TOTAL_W] == kronos_pkg::FP_NANBOX_UPPER) ? a_i[kronos_pkg::FP_S_TOTAL_W-1:0]
+                                                        : kronos_pkg::FP_CANON_QNAN_S;
+    b_s = (b_i[kronos_pkg::FLEN-1:FP_S_TOTAL_W] == kronos_pkg::FP_NANBOX_UPPER) ? b_i[kronos_pkg::FP_S_TOTAL_W-1:0]
+                                                        : kronos_pkg::FP_CANON_QNAN_S;
 
     // Effective operands for each format
     if (fmt_d_i) begin
       a_eff = a_i;
       b_eff = b_i;
     end else begin
-      a_eff = {FP_NANBOX_UPPER, a_s};
-      b_eff = {FP_NANBOX_UPPER, b_s};
+      a_eff = {kronos_pkg::FP_NANBOX_UPPER, a_s};
+      b_eff = {kronos_pkg::FP_NANBOX_UPPER, b_s};
     end
   end
 
@@ -132,14 +132,14 @@ module kronos_fpu_fmisc
     b_snan_d    = 1'b0;
     a_sign_s    = 1'b0;
     b_sign_s    = 1'b0;
-    a_mag_s     = {(FP_S_TOTAL_W-1){1'b0}};
-    b_mag_s     = {(FP_S_TOTAL_W-1){1'b0}};
+    a_mag_s     = {(kronos_pkg::FP_S_TOTAL_W-1){1'b0}};
+    b_mag_s     = {(kronos_pkg::FP_S_TOTAL_W-1){1'b0}};
     a_zero_s    = 1'b0;
     b_zero_s    = 1'b0;
     a_sign_d    = 1'b0;
     b_sign_d    = 1'b0;
-    a_mag_d     = {(FP_D_TOTAL_W-1){1'b0}};
-    b_mag_d     = {(FP_D_TOTAL_W-1){1'b0}};
+    a_mag_d     = {(kronos_pkg::FP_D_TOTAL_W-1){1'b0}};
+    b_mag_d     = {(kronos_pkg::FP_D_TOTAL_W-1){1'b0}};
     a_zero_d    = 1'b0;
     b_zero_d    = 1'b0;
     a_lt_b_s    = 1'b0;
@@ -159,26 +159,26 @@ module kronos_fpu_fmisc
     b_snan_s = is_snan_s(b_s);
 
     // Double
-    a_nan_d  = is_nan_d(a_i[FLEN-2:0]);
-    b_nan_d  = is_nan_d(b_i[FLEN-2:0]);
-    a_snan_d = is_snan_d(a_i[FLEN-2:0]);
-    b_snan_d = is_snan_d(b_i[FLEN-2:0]);
+    a_nan_d  = is_nan_d(a_i[kronos_pkg::FLEN-2:0]);
+    b_nan_d  = is_nan_d(b_i[kronos_pkg::FLEN-2:0]);
+    a_snan_d = is_snan_d(a_i[kronos_pkg::FLEN-2:0]);
+    b_snan_d = is_snan_d(b_i[kronos_pkg::FLEN-2:0]);
 
     // Single magnitude/sign for comparisons
-    a_sign_s = a_s[FP_S_TOTAL_W-1];
-    b_sign_s = b_s[FP_S_TOTAL_W-1];
-    a_mag_s  = a_s[FP_S_TOTAL_W-2:0];
-    b_mag_s  = b_s[FP_S_TOTAL_W-2:0];
-    a_zero_s = (a_mag_s == {(FP_S_TOTAL_W-1){1'b0}});
-    b_zero_s = (b_mag_s == {(FP_S_TOTAL_W-1){1'b0}});
+    a_sign_s = a_s[kronos_pkg::FP_S_TOTAL_W-1];
+    b_sign_s = b_s[kronos_pkg::FP_S_TOTAL_W-1];
+    a_mag_s  = a_s[kronos_pkg::FP_S_TOTAL_W-2:0];
+    b_mag_s  = b_s[kronos_pkg::FP_S_TOTAL_W-2:0];
+    a_zero_s = (a_mag_s == {(kronos_pkg::FP_S_TOTAL_W-1){1'b0}});
+    b_zero_s = (b_mag_s == {(kronos_pkg::FP_S_TOTAL_W-1){1'b0}});
 
     // Double magnitude/sign for comparisons
-    a_sign_d = a_i[FLEN-1];
-    b_sign_d = b_i[FLEN-1];
-    a_mag_d  = a_i[FLEN-2:0];
-    b_mag_d  = b_i[FLEN-2:0];
-    a_zero_d = (a_mag_d == {(FP_D_TOTAL_W-1){1'b0}});
-    b_zero_d = (b_mag_d == {(FP_D_TOTAL_W-1){1'b0}});
+    a_sign_d = a_i[kronos_pkg::FLEN-1];
+    b_sign_d = b_i[kronos_pkg::FLEN-1];
+    a_mag_d  = a_i[kronos_pkg::FLEN-2:0];
+    b_mag_d  = b_i[kronos_pkg::FLEN-2:0];
+    a_zero_d = (a_mag_d == {(kronos_pkg::FP_D_TOTAL_W-1){1'b0}});
+    b_zero_d = (b_mag_d == {(kronos_pkg::FP_D_TOTAL_W-1){1'b0}});
 
     // Numeric comparison: a < b (single, ignoring NaN)
     // Two negatives: larger magnitude = smaller value
@@ -218,48 +218,48 @@ module kronos_fpu_fmisc
     // RISC-V spec: bit 8 = signalling NaN, bit 9 = quiet NaN.
     if (fmt_d_i) begin
       // Double
-      if (is_snan_d(a_i[FLEN-2:0]))
-        fclass_bits = FCLASS_SNAN;
-      else if (is_qnan_d(a_i[FLEN-2:0]))
-        fclass_bits = FCLASS_QNAN;
-      else if (a_i[FLEN-1] && (a_i[FLEN-2:FP_D_MANT_W] == FP_D_EXP_MAX))
-        fclass_bits = FCLASS_NEG_INF;
-      else if (!a_i[FLEN-1] && (a_i[FLEN-2:FP_D_MANT_W] == FP_D_EXP_MAX))
-        fclass_bits = FCLASS_POS_INF;
-      else if (a_i[FLEN-1] && (a_i[FLEN-2:FP_D_MANT_W] != {FP_D_EXP_W{1'b0}}))
-        fclass_bits = FCLASS_NEG_NORMAL;
-      else if (!a_i[FLEN-1] && (a_i[FLEN-2:FP_D_MANT_W] != {FP_D_EXP_W{1'b0}}))
-        fclass_bits = FCLASS_POS_NORMAL;
-      else if (a_i[FLEN-1] && (a_i[FLEN-2:FP_D_MANT_W] == {FP_D_EXP_W{1'b0}}) && (a_i[FP_D_MANT_W-1:0] != {FP_D_MANT_W{1'b0}}))
-        fclass_bits = FCLASS_NEG_SUBNORMAL;
-      else if (!a_i[FLEN-1] && (a_i[FLEN-2:FP_D_MANT_W] == {FP_D_EXP_W{1'b0}}) && (a_i[FP_D_MANT_W-1:0] != {FP_D_MANT_W{1'b0}}))
-        fclass_bits = FCLASS_POS_SUBNORMAL;
-      else if (a_i[FLEN-1])
-        fclass_bits = FCLASS_NEG_ZERO;
+      if (is_snan_d(a_i[kronos_pkg::FLEN-2:0]))
+        fclass_bits = kronos_pkg::FCLASS_SNAN;
+      else if (is_qnan_d(a_i[kronos_pkg::FLEN-2:0]))
+        fclass_bits = kronos_pkg::FCLASS_QNAN;
+      else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX))
+        fclass_bits = kronos_pkg::FCLASS_NEG_INF;
+      else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX))
+        fclass_bits = kronos_pkg::FCLASS_POS_INF;
+      else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] != {kronos_pkg::FP_D_EXP_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_NEG_NORMAL;
+      else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] != {kronos_pkg::FP_D_EXP_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_POS_NORMAL;
+      else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == {kronos_pkg::FP_D_EXP_W{1'b0}}) && (a_i[kronos_pkg::FP_D_MANT_W-1:0] != {kronos_pkg::FP_D_MANT_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_NEG_SUBNORMAL;
+      else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == {kronos_pkg::FP_D_EXP_W{1'b0}}) && (a_i[kronos_pkg::FP_D_MANT_W-1:0] != {kronos_pkg::FP_D_MANT_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_POS_SUBNORMAL;
+      else if (a_i[kronos_pkg::FLEN-1])
+        fclass_bits = kronos_pkg::FCLASS_NEG_ZERO;
       else
-        fclass_bits = FCLASS_POS_ZERO;
+        fclass_bits = kronos_pkg::FCLASS_POS_ZERO;
     end else begin
       // Single (use unboxed a_s)
       if (is_snan_s(a_s))
-        fclass_bits = FCLASS_SNAN;
+        fclass_bits = kronos_pkg::FCLASS_SNAN;
       else if (is_qnan_s(a_s))
-        fclass_bits = FCLASS_QNAN;
-      else if (a_s[FP_S_TOTAL_W-1] && (a_s[FP_S_TOTAL_W-2:FP_S_MANT_W] == FP_S_EXP_MAX))
-        fclass_bits = FCLASS_NEG_INF;
-      else if (!a_s[FP_S_TOTAL_W-1] && (a_s[FP_S_TOTAL_W-2:FP_S_MANT_W] == FP_S_EXP_MAX))
-        fclass_bits = FCLASS_POS_INF;
-      else if (a_s[FP_S_TOTAL_W-1] && (a_s[FP_S_TOTAL_W-2:FP_S_MANT_W] != {FP_S_EXP_W{1'b0}}))
-        fclass_bits = FCLASS_NEG_NORMAL;
-      else if (!a_s[FP_S_TOTAL_W-1] && (a_s[FP_S_TOTAL_W-2:FP_S_MANT_W] != {FP_S_EXP_W{1'b0}}))
-        fclass_bits = FCLASS_POS_NORMAL;
-      else if (a_s[FP_S_TOTAL_W-1] && (a_s[FP_S_TOTAL_W-2:FP_S_MANT_W] == {FP_S_EXP_W{1'b0}}) && (a_s[FP_S_MANT_W-1:0] != {FP_S_MANT_W{1'b0}}))
-        fclass_bits = FCLASS_NEG_SUBNORMAL;
-      else if (!a_s[FP_S_TOTAL_W-1] && (a_s[FP_S_TOTAL_W-2:FP_S_MANT_W] == {FP_S_EXP_W{1'b0}}) && (a_s[FP_S_MANT_W-1:0] != {FP_S_MANT_W{1'b0}}))
-        fclass_bits = FCLASS_POS_SUBNORMAL;
-      else if (a_s[FP_S_TOTAL_W-1])
-        fclass_bits = FCLASS_NEG_ZERO;
+        fclass_bits = kronos_pkg::FCLASS_QNAN;
+      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX))
+        fclass_bits = kronos_pkg::FCLASS_NEG_INF;
+      else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX))
+        fclass_bits = kronos_pkg::FCLASS_POS_INF;
+      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] != {kronos_pkg::FP_S_EXP_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_NEG_NORMAL;
+      else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] != {kronos_pkg::FP_S_EXP_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_POS_NORMAL;
+      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == {kronos_pkg::FP_S_EXP_W{1'b0}}) && (a_s[kronos_pkg::FP_S_MANT_W-1:0] != {kronos_pkg::FP_S_MANT_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_NEG_SUBNORMAL;
+      else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == {kronos_pkg::FP_S_EXP_W{1'b0}}) && (a_s[kronos_pkg::FP_S_MANT_W-1:0] != {kronos_pkg::FP_S_MANT_W{1'b0}}))
+        fclass_bits = kronos_pkg::FCLASS_POS_SUBNORMAL;
+      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1])
+        fclass_bits = kronos_pkg::FCLASS_NEG_ZERO;
       else
-        fclass_bits = FCLASS_POS_ZERO;
+        fclass_bits = kronos_pkg::FCLASS_POS_ZERO;
     end
   end
 
@@ -267,32 +267,32 @@ module kronos_fpu_fmisc
   // Main combinational result computation
   // -------------------------------------------------------------------------
   always_comb begin
-    result_comb = {FLEN{1'b0}};
+    result_comb = {kronos_pkg::FLEN{1'b0}};
     fflags_comb = 5'h0;
 
     unique case (op_i)
       // --- Sign injection ---
       FP_FSGNJ: begin
         if (fmt_d_i) begin
-          result_comb = {b_eff[FLEN-1], a_eff[FLEN-2:0]};
+          result_comb = {b_eff[kronos_pkg::FLEN-1], a_eff[kronos_pkg::FLEN-2:0]};
         end else begin
-          result_comb = {FP_NANBOX_UPPER, b_s[FP_S_TOTAL_W-1], a_s[FP_S_TOTAL_W-2:0]};
+          result_comb = {kronos_pkg::FP_NANBOX_UPPER, b_s[kronos_pkg::FP_S_TOTAL_W-1], a_s[kronos_pkg::FP_S_TOTAL_W-2:0]};
         end
       end
 
       FP_FSGNJN: begin
         if (fmt_d_i) begin
-          result_comb = {~b_eff[FLEN-1], a_eff[FLEN-2:0]};
+          result_comb = {~b_eff[kronos_pkg::FLEN-1], a_eff[kronos_pkg::FLEN-2:0]};
         end else begin
-          result_comb = {FP_NANBOX_UPPER, ~b_s[FP_S_TOTAL_W-1], a_s[FP_S_TOTAL_W-2:0]};
+          result_comb = {kronos_pkg::FP_NANBOX_UPPER, ~b_s[kronos_pkg::FP_S_TOTAL_W-1], a_s[kronos_pkg::FP_S_TOTAL_W-2:0]};
         end
       end
 
       FP_FSGNJX: begin
         if (fmt_d_i) begin
-          result_comb = {a_eff[FLEN-1] ^ b_eff[FLEN-1], a_eff[FLEN-2:0]};
+          result_comb = {a_eff[kronos_pkg::FLEN-1] ^ b_eff[kronos_pkg::FLEN-1], a_eff[kronos_pkg::FLEN-2:0]};
         end else begin
-          result_comb = {FP_NANBOX_UPPER, a_s[FP_S_TOTAL_W-1] ^ b_s[FP_S_TOTAL_W-1], a_s[FP_S_TOTAL_W-2:0]};
+          result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_s[kronos_pkg::FP_S_TOTAL_W-1] ^ b_s[kronos_pkg::FP_S_TOTAL_W-1], a_s[kronos_pkg::FP_S_TOTAL_W-2:0]};
         end
       end
 
@@ -304,9 +304,9 @@ module kronos_fpu_fmisc
       //   - Quiet NaN on one operand silently returns the other.
       FP_FMIN: begin
         if (fmt_d_i) begin
-          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_d || b_snan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_d && b_nan_d) begin
-            result_comb = FP_CANON_QNAN_D;
+            result_comb = kronos_pkg::FP_CANON_QNAN_D;
           end else if (a_nan_d) begin
             result_comb = b_i;
           end else if (b_nan_d) begin
@@ -314,26 +314,26 @@ module kronos_fpu_fmisc
           end else begin
             // Both numeric: min(-0,+0) = -0
             if (a_zero_d && b_zero_d) begin
-              result_comb = (a_sign_d || b_sign_d) ? {1'b1, {(FP_D_TOTAL_W-1){1'b0}}} : a_i;
+              result_comb = (a_sign_d || b_sign_d) ? {1'b1, {(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}} : a_i;
             end else begin
               result_comb = a_lt_b_d ? a_i : b_i;
             end
           end
         end else begin
-          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_s || b_snan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_s && b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
           end else if (a_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, b_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, b_s};
           end else if (b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, a_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_s};
           end else begin
             // Both numeric: min(-0,+0) = -0
             if (a_zero_s && b_zero_s) begin
-              result_comb = (a_sign_s || b_sign_s) ? {FP_NANBOX_UPPER, 1'b1, {(FP_S_TOTAL_W-1){1'b0}}}
-                                                   : {FP_NANBOX_UPPER, a_s};
+              result_comb = (a_sign_s || b_sign_s) ? {kronos_pkg::FP_NANBOX_UPPER, 1'b1, {(kronos_pkg::FP_S_TOTAL_W-1){1'b0}}}
+                                                   : {kronos_pkg::FP_NANBOX_UPPER, a_s};
             end else begin
-              result_comb = a_lt_b_s ? {FP_NANBOX_UPPER, a_s} : {FP_NANBOX_UPPER, b_s};
+              result_comb = a_lt_b_s ? {kronos_pkg::FP_NANBOX_UPPER, a_s} : {kronos_pkg::FP_NANBOX_UPPER, b_s};
             end
           end
         end
@@ -341,9 +341,9 @@ module kronos_fpu_fmisc
 
       FP_FMAX: begin
         if (fmt_d_i) begin
-          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_d || b_snan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_d && b_nan_d) begin
-            result_comb = FP_CANON_QNAN_D;
+            result_comb = kronos_pkg::FP_CANON_QNAN_D;
           end else if (a_nan_d) begin
             result_comb = b_i;
           end else if (b_nan_d) begin
@@ -351,26 +351,26 @@ module kronos_fpu_fmisc
           end else begin
             // Both numeric: max(-0,+0) = +0
             if (a_zero_d && b_zero_d) begin
-              result_comb = (!a_sign_d || !b_sign_d) ? {1'b0, {(FP_D_TOTAL_W-1){1'b0}}} : a_i;
+              result_comb = (!a_sign_d || !b_sign_d) ? {1'b0, {(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}} : a_i;
             end else begin
               result_comb = a_lt_b_d ? b_i : a_i;
             end
           end
         end else begin
-          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_s || b_snan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_s && b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
           end else if (a_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, b_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, b_s};
           end else if (b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, a_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_s};
           end else begin
             // Both numeric: max(-0,+0) = +0
             if (a_zero_s && b_zero_s) begin
-              result_comb = (!a_sign_s || !b_sign_s) ? {FP_NANBOX_UPPER, 1'b0, {(FP_S_TOTAL_W-1){1'b0}}}
-                                                     : {FP_NANBOX_UPPER, a_s};
+              result_comb = (!a_sign_s || !b_sign_s) ? {kronos_pkg::FP_NANBOX_UPPER, 1'b0, {(kronos_pkg::FP_S_TOTAL_W-1){1'b0}}}
+                                                     : {kronos_pkg::FP_NANBOX_UPPER, a_s};
             end else begin
-              result_comb = a_lt_b_s ? {FP_NANBOX_UPPER, b_s} : {FP_NANBOX_UPPER, a_s};
+              result_comb = a_lt_b_s ? {kronos_pkg::FP_NANBOX_UPPER, b_s} : {kronos_pkg::FP_NANBOX_UPPER, a_s};
             end
           end
         end
@@ -378,52 +378,52 @@ module kronos_fpu_fmisc
 
       // --- FCLASS ---
       FP_FCLASS: begin
-        result_comb = {{(FLEN-10){1'b0}}, fclass_bits};
+        result_comb = {{(kronos_pkg::FLEN-10){1'b0}}, fclass_bits};
       end
 
       // --- Comparisons ---
       FP_FEQ: begin
         if (fmt_d_i) begin
           // FEQ: only raises NV on sNaN
-          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
-          result_comb = {{(FP_D_TOTAL_W-1){1'b0}}, cmp_eq_d};
+          if (a_snan_d || b_snan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+          result_comb = {{(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}, cmp_eq_d};
         end else begin
-          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
-          result_comb = {{(FP_D_TOTAL_W-1){1'b0}}, cmp_eq_s};
+          if (a_snan_s || b_snan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+          result_comb = {{(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}, cmp_eq_s};
         end
       end
 
       FP_FLT: begin
         if (fmt_d_i) begin
           // FLT: raises NV on any NaN
-          if (a_nan_d || b_nan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
-          result_comb = {{(FP_D_TOTAL_W-1){1'b0}}, cmp_lt_d};
+          if (a_nan_d || b_nan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+          result_comb = {{(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}, cmp_lt_d};
         end else begin
-          if (a_nan_s || b_nan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
-          result_comb = {{(FP_D_TOTAL_W-1){1'b0}}, cmp_lt_s};
+          if (a_nan_s || b_nan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+          result_comb = {{(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}, cmp_lt_s};
         end
       end
 
       FP_FLE: begin
         if (fmt_d_i) begin
           // FLE: raises NV on any NaN
-          if (a_nan_d || b_nan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
-          result_comb = {{(FP_D_TOTAL_W-1){1'b0}}, cmp_le_d};
+          if (a_nan_d || b_nan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+          result_comb = {{(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}, cmp_le_d};
         end else begin
-          if (a_nan_s || b_nan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
-          result_comb = {{(FP_D_TOTAL_W-1){1'b0}}, cmp_le_s};
+          if (a_nan_s || b_nan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+          result_comb = {{(kronos_pkg::FP_D_TOTAL_W-1){1'b0}}, cmp_le_s};
         end
       end
 
       // --- Move operations ---
       FP_FMV_X_W: begin
         // Sign-extend low 32 bits to 64
-        result_comb = {{(FLEN-FP_S_TOTAL_W){a_i[FP_S_TOTAL_W-1]}}, a_i[FP_S_TOTAL_W-1:0]};
+        result_comb = {{(kronos_pkg::FLEN-kronos_pkg::FP_S_TOTAL_W){a_i[kronos_pkg::FP_S_TOTAL_W-1]}}, a_i[kronos_pkg::FP_S_TOTAL_W-1:0]};
       end
 
       FP_FMV_W_X: begin
         // NaN-box low 32 bits of integer source
-        result_comb = {FP_NANBOX_UPPER, a_i[FP_S_TOTAL_W-1:0]};
+        result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_i[kronos_pkg::FP_S_TOTAL_W-1:0]};
       end
 
       FP_FMV_X_D: begin
@@ -437,7 +437,7 @@ module kronos_fpu_fmisc
       end
 
       default: begin
-        result_comb = {FLEN{1'b0}};
+        result_comb = {kronos_pkg::FLEN{1'b0}};
         fflags_comb = 5'h0;
       end
     endcase
@@ -449,7 +449,7 @@ module kronos_fpu_fmisc
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       out_valid_o <= 1'b0;
-      result_o    <= {FLEN{1'b0}};
+      result_o    <= {kronos_pkg::FLEN{1'b0}};
       fflags_o    <= 5'h0;
       tag_o       <= '{default: '0};
     end else begin

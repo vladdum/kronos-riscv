@@ -14,8 +14,8 @@ module kronos_top
 #(
   // PMA non-cacheable region list — exposed for SoC integrators.
   parameter int unsigned     NUM_NC_REGIONS = 1,
-  parameter logic [XLEN-1:0] NC_REGION_BASE  [NUM_NC_REGIONS] = '{MMIO_BASE},
-  parameter logic [XLEN-1:0] NC_REGION_LIMIT [NUM_NC_REGIONS] = '{64'h0000_0000_4FFF_FFFF}
+  parameter logic [kronos_pkg::XLEN-1:0] NC_REGION_BASE  [NUM_NC_REGIONS] = '{kronos_pkg::MMIO_BASE},
+  parameter logic [kronos_pkg::XLEN-1:0] NC_REGION_LIMIT [NUM_NC_REGIONS] = '{64'h0000_0000_4FFF_FFFF}
 ) (
   input  logic             clk_i,
   input  logic             rst_ni,
@@ -46,21 +46,21 @@ module kronos_top
   // Driven from mem_wb_q in the cycle it advances past WB.
   // ----------------------------------------------------------------------
   output logic            retire_valid_o,
-  output logic [XLEN-1:0] retire_pc_o,
-  output logic [INST_W-1:0] retire_instr_o,
+  output logic [kronos_pkg::XLEN-1:0] retire_pc_o,
+  output logic [kronos_pkg::INST_W-1:0] retire_instr_o,
   output logic            retire_rd_wen_o,
   output logic [4:0]      retire_rd_o,
-  output logic [XLEN-1:0] retire_rd_wdata_o,
+  output logic [kronos_pkg::XLEN-1:0] retire_rd_wdata_o,
   output logic            retire_fp_wen_o,
   output logic [4:0]      retire_fp_rd_o,
-  output logic [FLEN-1:0] retire_fp_wdata_o,
+  output logic [kronos_pkg::FLEN-1:0] retire_fp_wdata_o,
   output logic            retire_mem_wen_o,
-  output logic [XLEN-1:0] retire_mem_addr_o,
-  output logic [XLEN-1:0] retire_mem_wdata_o,
+  output logic [kronos_pkg::XLEN-1:0] retire_mem_addr_o,
+  output logic [kronos_pkg::XLEN-1:0] retire_mem_wdata_o,
   output logic [2:0]      retire_mem_funct3_o,
   output logic            retire_csr_wen_o,
   output logic [11:0]     retire_csr_addr_o,
-  output logic [XLEN-1:0] retire_csr_wdata_o,
+  output logic [kronos_pkg::XLEN-1:0] retire_csr_wdata_o,
   // Trap-taken pulse: high for one cycle on trap entry (debug/coverage only).
   output logic        retire_trap_taken_o,
   output logic [31:0] retire_trap_cause_o
@@ -90,12 +90,12 @@ module kronos_top
   // ID-stage wires
   // -------------------------------------------------------------------------
   decoded_instr_t  id_dec;
-  logic [XLEN-1:0] rs1_rdata_64, rs2_rdata_64;
-  logic [XLEN-1:0] rs1_data_id, rs2_data_id, rs3_data_id;
+  logic [kronos_pkg::XLEN-1:0] rs1_rdata_64, rs2_rdata_64;
+  logic [kronos_pkg::XLEN-1:0] rs1_data_id, rs2_data_id, rs3_data_id;
   logic            wb_writing;
 
   // FP regfile read ports
-  logic [FLEN-1:0] fp_rd1, fp_rd2, fp_rd3;
+  logic [kronos_pkg::FLEN-1:0] fp_rd1, fp_rd2, fp_rd3;
 
   // CSR frm output
   logic [2:0]     frm;
@@ -104,28 +104,28 @@ module kronos_top
   // FP paths: 2-bit one-hot selector + data mux (4-way, replaces 4-level chain).
   // Integer path: plain WB-bypass-or-regfile (EX/MEM forwarding via fwd_rs1_sel).
   logic [1:0]      fp_rs1_sel, fp_rs2_sel, fp_rs3_sel;
-  logic [FLEN-1:0] fp_rs1_data_id, fp_rs2_data_id, fp_rs3_data_id;
-  logic [XLEN-1:0] int_rs1_data_id, int_rs2_data_id;
+  logic [kronos_pkg::FLEN-1:0] fp_rs1_data_id, fp_rs2_data_id, fp_rs3_data_id;
+  logic [kronos_pkg::XLEN-1:0] int_rs1_data_id, int_rs2_data_id;
 
   // -------------------------------------------------------------------------
   // EX-stage wires (64-bit datapath)
   // -------------------------------------------------------------------------
-  logic [XLEN-1:0] fwd_rs1_data, fwd_rs2_data;
-  logic [XLEN-1:0] alu_a, alu_b, alu_result;
-  logic [XLEN-1:0] ex_result;
+  logic [kronos_pkg::XLEN-1:0] fwd_rs1_data, fwd_rs2_data;
+  logic [kronos_pkg::XLEN-1:0] alu_a, alu_b, alu_result;
+  logic [kronos_pkg::XLEN-1:0] ex_result;
   logic [31:0]     ex_pc_d                        /* verilator public_flat_rd */;
   logic            ex_redirect                        /* verilator public_flat_rd */;
   logic            branch_taken;
   logic            irq_pending;
   logic [4:0]      irq_cause;
-  logic [XLEN-1:0] csr_rdata;
-  logic [XLEN-1:0] trap_vector, mepc, sepc;
+  logic [kronos_pkg::XLEN-1:0] csr_rdata;
+  logic [kronos_pkg::XLEN-1:0] trap_vector, mepc, sepc;
   logic [31:0]     trap_cause                        /* verilator public_flat_rd */;
-  logic [XLEN-1:0] jalr_target_64;
+  logic [kronos_pkg::XLEN-1:0] jalr_target_64;
 
   // privilege state + protection wires.
   priv_e             priv_q;
-  logic [XLEN-1:0]   mstatus;
+  logic [kronos_pkg::XLEN-1:0]   mstatus;
   logic              pmp_fetch_fault;
   logic [55:0]       pmp_fetch_fault_addr;
   logic              pmp_data_fault;
@@ -166,11 +166,11 @@ module kronos_top
   logic        itlb_miss, dtlb_miss;
   logic        ptw_busy, ptw_pf;
   logic [4:0]      ptw_pf_cause;
-  logic [XLEN-1:0] ptw_pf_tval;
+  logic [kronos_pkg::XLEN-1:0] ptw_pf_tval;
   tlb_op_e         ptw_pf_which;
   logic            ptw_dc_req_valid, ptw_dc_req_we, ptw_dc_req_lr, ptw_dc_req_sc;
   logic [55:0]     ptw_dc_req_addr;
-  logic [XLEN-1:0] ptw_dc_req_wdata;
+  logic [kronos_pkg::XLEN-1:0] ptw_dc_req_wdata;
   logic [2:0]      ptw_dc_req_size;
   logic            ptw_itlb_rfv, ptw_dtlb_rfv;
   logic [1:0]      ptw_rf_size;
@@ -181,14 +181,14 @@ module kronos_top
   logic [3:0]      ptw_rf_perm;
   logic            ptw_rf_a, ptw_rf_d;
   logic            ptw_dc_rsp_valid, ptw_dc_rsp_sc_ok;
-  logic [XLEN-1:0] ptw_dc_rsp_rdata;
+  logic [kronos_pkg::XLEN-1:0] ptw_dc_rsp_rdata;
   logic [3:0]      satp_mode;
   logic [15:0]     satp_asid;
   logic [43:0]     satp_ppn;
   priv_e           eff_priv_data;
   logic            translate_data, translate_fetch;
   logic            sfence_vma, sfence_va_valid, sfence_asid_valid;
-  logic [XLEN-1:0] sfence_va;
+  logic [kronos_pkg::XLEN-1:0] sfence_va;
   logic [15:0]     sfence_asid;
   logic        wfi_priv_fail;
   logic        cross_page_fault;
@@ -201,7 +201,7 @@ module kronos_top
   logic [31:0] ex_mem_data_pa_q;
 
   // STAGE2: muldiv signals (64-bit)
-  logic [XLEN-1:0] muldiv_result;
+  logic [kronos_pkg::XLEN-1:0] muldiv_result;
   logic        muldiv_valid, muldiv_idle;
   logic        muldiv_stall;
 
@@ -218,7 +218,7 @@ module kronos_top
 
   // I-cache interface signals
   logic              icache_data_valid;
-  logic [INST_W-1:0] icache_data;
+  logic [kronos_pkg::INST_W-1:0] icache_data;
   logic              icache_stall;
   logic        icache_miss_pulse                 /* verilator public_flat_rd */;
   logic        fence_i_pulse;
@@ -232,7 +232,7 @@ module kronos_top
   logic [31:0] icache_fetch_addr;
 
   // STAGE3: C extension — alignment unit signals
-  logic [INST_W-1:0] align_instr                       /* verilator public_flat_rd */;
+  logic [kronos_pkg::INST_W-1:0] align_instr                       /* verilator public_flat_rd */;
   logic              align_instr_valid                 /* verilator public_flat_rd */;
   logic              align_is_16b;
   logic              align_stall;
@@ -256,7 +256,7 @@ module kronos_top
   // -------------------------------------------------------------------------
   // MEM-stage wires (64-bit lsu data)
   // -------------------------------------------------------------------------
-  logic [XLEN-1:0]  lsu_rdata;
+  logic [kronos_pkg::XLEN-1:0]  lsu_rdata;
   logic             lsu_valid;
   logic             mem_stall                    /* verilator public_flat_rd */;
   logic             lsu_mem_stall;
@@ -264,19 +264,19 @@ module kronos_top
   // advances.  Gates req_i so LSU does not re-issue while the pipeline is
   // frozen by instr_fetch_stall.
   logic             mem_done_q;
-  logic [XLEN-1:0]  lsu_rdata_latch;  // holds rdata across the stall gap
+  logic [kronos_pkg::XLEN-1:0]  lsu_rdata_latch;  // holds rdata across the stall gap
   logic             amo_write_latch;  // holds is_amo_write across the stall gap
 
   // D-cache interface (LSU ↔ dcache)
   logic            dcache_req;
-  logic [XLEN-1:0] dcache_addr;
+  logic [kronos_pkg::XLEN-1:0] dcache_addr;
   logic [2:0]      dcache_size;
   logic            dcache_we;
-  logic [XLEN-1:0] dcache_wdata;
+  logic [kronos_pkg::XLEN-1:0] dcache_wdata;
   logic            dcache_amo_req;
   logic [4:0]      dcache_amo_op;
   logic            dcache_data_valid;
-  logic [XLEN-1:0] dcache_rdata;
+  logic [kronos_pkg::XLEN-1:0] dcache_rdata;
   logic            dcache_sc_success;
   logic            dcache_stall                      /* verilator public_flat_rd */;
   logic            dcache_miss_pulse                 /* verilator public_flat_rd */;
@@ -289,12 +289,12 @@ module kronos_top
 
   // LSU FP response
   logic             lsu_fp_dest;
-  logic [FLEN-1:0]  lsu_fp_rdata;
+  logic [kronos_pkg::FLEN-1:0]  lsu_fp_rdata;
 
   // -------------------------------------------------------------------------
   // WB-stage wires (64-bit)
   // -------------------------------------------------------------------------
-  logic [XLEN-1:0] wb_result_64;
+  logic [kronos_pkg::XLEN-1:0] wb_result_64;
 
   // -------------------------------------------------------------------------
   // FPU wires
@@ -303,7 +303,7 @@ module kronos_top
   logic            fp_inflight_q;       // FPU is computing
   logic            fpu_dispatched_q;    // dispatch has fired for current EX instr
   logic            fpu_out_valid;
-  logic [FLEN-1:0] fpu_result;
+  logic [kronos_pkg::FLEN-1:0] fpu_result;
   logic [4:0]      fpu_fflags;
   fpu_tag_t        fpu_tag_out;
   logic            fpu_busy;
@@ -325,19 +325,19 @@ module kronos_top
   // Sdtrig (trigger module) interface
   logic            trig_hit;
   logic [31:0]     trig_hit_pc;
-  logic [XLEN-1:0] trig_csr_rdata;
+  logic [kronos_pkg::XLEN-1:0] trig_csr_rdata;
   logic            trig_csr_match;
   logic            trig_csr_we;
-  logic [XLEN-1:0] trig_csr_wdata;
+  logic [kronos_pkg::XLEN-1:0] trig_csr_wdata;
 
   // post-write CSR value piped from u_csr → mem_wb pipeline → retire
   // trace.  csr_new_val_post is the combinational output of u_csr in the EX
   // stage; ex_mem_csr_new_val_q snapshots it at the EX→MEM boundary (same
   // cycle the CSR commits its write), and mem_wb_csr_new_val_q propagates it
   // to the WB stage so retire_csr_wdata_o reflects the post-write value.
-  logic [XLEN-1:0] csr_new_val_post;
-  logic [XLEN-1:0] ex_mem_csr_new_val_q;
-  logic [XLEN-1:0] mem_wb_csr_new_val_q;
+  logic [kronos_pkg::XLEN-1:0] csr_new_val_post;
+  logic [kronos_pkg::XLEN-1:0] ex_mem_csr_new_val_q;
+  logic [kronos_pkg::XLEN-1:0] mem_wb_csr_new_val_q;
 
   // ---- Stage 5c/e performance-counter event bus ----
   logic        bpred_mispredict_pulse;
@@ -351,24 +351,24 @@ module kronos_top
   // result survives instr_fetch_stall cycles that may hold combined_stall=1
   // even after fpu_stall drops to 0.
   logic            fp_result_valid_q;
-  logic [FLEN-1:0] fp_result_q;
+  logic [kronos_pkg::FLEN-1:0] fp_result_q;
   fpu_tag_t        fp_tag_q;
 
   // Combinatorial: current FPU result (just-fired or latched)
   logic            fp_result_avail;
-  logic [FLEN-1:0] fp_result_cur;
+  logic [kronos_pkg::FLEN-1:0] fp_result_cur;
   fpu_tag_t        fp_tag_cur;
 
   // FPU operand muxes: EX forwarding for integer-source FP instructions.
   // FMV.W.X / FMV.D.X read integer rs1/rs2; use fwd_rs1/2_data so that
   // MEM-WB bypassing applies (id_ex_q.rs1_data may be stale when the
   // producer was still in MEM when the FP instruction was in ID).
-  logic [FLEN-1:0] fpu_a_i, fpu_b_i;
+  logic [kronos_pkg::FLEN-1:0] fpu_a_i, fpu_b_i;
 
   // FP regfile write port signals
   logic            fp_we;
   logic [4:0]      fp_wa;
-  logic [FLEN-1:0] fp_wd;
+  logic [kronos_pkg::FLEN-1:0] fp_wd;
 
   // -------------------------------------------------------------------------
   // PC next (combinational)
@@ -820,7 +820,7 @@ module kronos_top
                      ( (priv_q == PRIV_U) |
                        ((priv_q == PRIV_S) & mstatus[22]) );  // TSR
     satp_tvm_fail  = id_ex_q.dec.is_csr &
-                     (id_ex_q.dec.csr_addr == CSR_SATP) &
+                     (id_ex_q.dec.csr_addr == kronos_pkg::CSR_SATP) &
                      (priv_q == PRIV_S) & mstatus[20];       // TVM
   end
 
@@ -844,8 +844,8 @@ module kronos_top
   // -------------------------------------------------------------------------
   assign eff_priv_data    = (priv_q == PRIV_M & mstatus[17] /*MPRV*/)
                             ? priv_e'(mstatus[12:11]) : priv_q;
-  assign translate_data   = (satp_mode != SATP_MODE_BARE) & (eff_priv_data != PRIV_M);
-  assign translate_fetch  = (satp_mode != SATP_MODE_BARE) & (priv_q != PRIV_M);
+  assign translate_data   = (satp_mode != kronos_pkg::SATP_MODE_BARE) & (eff_priv_data != PRIV_M);
+  assign translate_fetch  = (satp_mode != kronos_pkg::SATP_MODE_BARE) & (priv_q != PRIV_M);
 
   assign sfence_vma         = id_ex_q.valid & id_ex_q.dec.is_sfence_vma & ~combined_stall;
   assign sfence_va          = fwd_rs1_data;
@@ -1194,7 +1194,7 @@ module kronos_top
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       fp_result_valid_q <= 1'b0;
-      fp_result_q       <= {FLEN{1'b0}};
+      fp_result_q       <= {kronos_pkg::FLEN{1'b0}};
       fp_tag_q          <= '{default: '0};
     end else begin
       if (fpu_out_valid & combined_stall) begin
@@ -1214,7 +1214,7 @@ module kronos_top
   always_comb begin
     fp_we = 1'b0;
     fp_wa = 5'b0;
-    fp_wd = {FLEN{1'b0}};
+    fp_wd = {kronos_pkg::FLEN{1'b0}};
 
     if (lsu_valid & ex_mem_q.valid & ex_mem_q.dec.fp_load) begin
       // FP load: write NaN-boxed data directly
@@ -1448,9 +1448,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex_q <= ID_EX_REG_ZERO;
+      id_ex_q <= kronos_pkg::ID_EX_REG_ZERO;
     end else if (id_ex_flush) begin
-      id_ex_q <= ID_EX_REG_ZERO;
+      id_ex_q <= kronos_pkg::ID_EX_REG_ZERO;
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
@@ -1530,28 +1530,28 @@ module kronos_top
     if (trig_hit) begin
       trap_cause = 32'd3;                                   // BREAKPOINT (Sdtrig)
     end else if (instr_page_fault) begin
-      trap_cause = {27'b0, CAUSE_INSTR_PAGE_FAULT};         // 12
+      trap_cause = {27'b0, kronos_pkg::CAUSE_INSTR_PAGE_FAULT};         // 12
     end else if (pmp_fetch_fault) begin
-      trap_cause = {27'b0, CAUSE_INSTR_ACCESS_FAULT};       // 1
+      trap_cause = {27'b0, kronos_pkg::CAUSE_INSTR_ACCESS_FAULT};       // 1
     end else if (load_page_fault) begin
-      trap_cause = {27'b0, CAUSE_LOAD_PAGE_FAULT};          // 13
+      trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_PAGE_FAULT};          // 13
     end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_load) begin
       // EX-stage data access faults: id_ex_q is the offending instruction.
       // is_load covers plain LW/LD and LR (LR sets is_amo & is_load).
-      trap_cause = {27'b0, CAUSE_LOAD_ACCESS_FAULT};        // 5
+      trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};        // 5
     end else if (store_page_fault) begin
-      trap_cause = {27'b0, CAUSE_STORE_PAGE_FAULT};         // 15
+      trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_PAGE_FAULT};         // 15
     end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_store) begin
-      trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};       // 7
+      trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};       // 7
     end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_amo) begin
       // AMO/SC violation: report as STORE access fault (priv-spec).
-      trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};
+      trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
     end else if (dcache_bus_err_fault & ex_mem_q.dec.is_load) begin
       // MEM-stage bus error on a plain NC load — ex_mem_q is the offender.
-      trap_cause = {27'b0, CAUSE_LOAD_ACCESS_FAULT};        // 5
+      trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};        // 5
     end else if (dcache_bus_err_fault) begin
       // MEM-stage bus error on a plain NC store — store/AMO access fault.
-      trap_cause = {27'b0, CAUSE_STORE_ACCESS_FAULT};       // 7
+      trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};       // 7
     end else if (irq_pending) begin
       trap_cause = {1'b1, 26'b0, irq_cause};                // mcause[63]=1 (IRQ)
     end else if (id_ex_q.dec.illegal | csr_illegal |
@@ -1560,10 +1560,10 @@ module kronos_top
       trap_cause = 32'd2;                                   // ILLEGAL
     end else if (id_ex_q.dec.is_ecall) begin
       unique case (priv_q)
-        PRIV_U:  trap_cause = {27'b0, CAUSE_ECALL_U};       // 8
-        PRIV_S:  trap_cause = {27'b0, CAUSE_ECALL_S};       // 9
-        PRIV_M:  trap_cause = {27'b0, CAUSE_ECALL_M};       // 11
-        default: trap_cause = {27'b0, CAUSE_ECALL_M};
+        PRIV_U:  trap_cause = {27'b0, kronos_pkg::CAUSE_ECALL_U};       // 8
+        PRIV_S:  trap_cause = {27'b0, kronos_pkg::CAUSE_ECALL_S};       // 9
+        PRIV_M:  trap_cause = {27'b0, kronos_pkg::CAUSE_ECALL_M};       // 11
+        default: trap_cause = {27'b0, kronos_pkg::CAUSE_ECALL_M};
       endcase
     end else begin
       trap_cause = 32'd3;                                   // ebreak (default)
@@ -1667,14 +1667,14 @@ module kronos_top
   // own write commits on the same posedge (req_i is gated by ~combined_stall),
   // so this snapshot is the post-write value for the EX-stage instruction.
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni)        ex_mem_csr_new_val_q <= {XLEN{1'b0}};
+    if (!rst_ni)        ex_mem_csr_new_val_q <= {kronos_pkg::XLEN{1'b0}};
     else if (ex_mem_en) ex_mem_csr_new_val_q <= csr_new_val_post;
   end
 
   // propagate the post-write CSR value MEM→WB, mirroring the
   // mem_wb_q.csr_wdata pipe.  Drives retire_csr_wdata_o.
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni)        mem_wb_csr_new_val_q <= {XLEN{1'b0}};
+    if (!rst_ni)        mem_wb_csr_new_val_q <= {kronos_pkg::XLEN{1'b0}};
     else if (mem_wb_en) mem_wb_csr_new_val_q <= ex_mem_csr_new_val_q;
   end
 
@@ -1738,7 +1738,7 @@ module kronos_top
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mem_done_q      <= 1'b0;
-      lsu_rdata_latch <= {XLEN{1'b0}};
+      lsu_rdata_latch <= {kronos_pkg::XLEN{1'b0}};
       amo_write_latch <= 1'b0;
     end else begin
       if (lsu_valid) begin
@@ -1870,18 +1870,18 @@ module kronos_top
   // mispredict=0x1E↔0x02) so the consolidated taxonomy table is contiguous.
   assign event_bus[18]    = 1'b0;
   assign event_bus[19]    = 1'b0;
-  assign event_bus[EVT_LOAD_USE_STALL]      = load_use_event;
-  assign event_bus[EVT_JALR_FWD_STALL]      = jalr_fwd_event;
-  assign event_bus[EVT_FP_RAW_STALL]        = fp_load_use_event;
-  assign event_bus[EVT_FRM_HAZARD_STALL]    = id_ex_is_frm_write & if_id_fp_dyn_rm;
-  assign event_bus[EVT_FP_INFLIGHT_STALL]   = fpu_stall;
-  assign event_bus[EVT_FENCE_I_DRAIN_STALL] = fence_i_active_q;
-  assign event_bus[EVT_MEM_BUSY_STALL]      = lsu_mem_stall | dcache_stall;
-  assign event_bus[EVT_MULDIV_STALL]        = muldiv_stall;
-  assign event_bus[EVT_FPU_STALL]           = fpu_busy_any;
-  assign event_bus[EVT_INSTR_FETCH_STALL]   = instr_fetch_stall;
-  assign event_bus[EVT_BRANCH_MISPREDICT]   = bpred_mispredict_pulse;
-  assign event_bus[EVT_EX_REDIRECT]         = ex_redirect;
+  assign event_bus[kronos_pkg::EVT_LOAD_USE_STALL]      = load_use_event;
+  assign event_bus[kronos_pkg::EVT_JALR_FWD_STALL]      = jalr_fwd_event;
+  assign event_bus[kronos_pkg::EVT_FP_RAW_STALL]        = fp_load_use_event;
+  assign event_bus[kronos_pkg::EVT_FRM_HAZARD_STALL]    = id_ex_is_frm_write & if_id_fp_dyn_rm;
+  assign event_bus[kronos_pkg::EVT_FP_INFLIGHT_STALL]   = fpu_stall;
+  assign event_bus[kronos_pkg::EVT_FENCE_I_DRAIN_STALL] = fence_i_active_q;
+  assign event_bus[kronos_pkg::EVT_MEM_BUSY_STALL]      = lsu_mem_stall | dcache_stall;
+  assign event_bus[kronos_pkg::EVT_MULDIV_STALL]        = muldiv_stall;
+  assign event_bus[kronos_pkg::EVT_FPU_STALL]           = fpu_busy_any;
+  assign event_bus[kronos_pkg::EVT_INSTR_FETCH_STALL]   = instr_fetch_stall;
+  assign event_bus[kronos_pkg::EVT_BRANCH_MISPREDICT]   = bpred_mispredict_pulse;
+  assign event_bus[kronos_pkg::EVT_EX_REDIRECT]         = ex_redirect;
 
   assign retire_valid_o      = retire_advance;
   assign retire_pc_o         = {32'b0, mem_wb_q.pc};
@@ -1898,7 +1898,7 @@ module kronos_top
   assign retire_fp_wdata_o   = mem_wb_q.dec.fp_load
                                ? (mem_wb_q.dec.mem_funct3[0]  // funct3[0]=1 → FLD (011), =0 → FLW (010)
                                   ? mem_wb_q.lsu_rdata
-                                  : {FP_NANBOX_UPPER, mem_wb_q.lsu_rdata[31:0]})
+                                  : {kronos_pkg::FP_NANBOX_UPPER, mem_wb_q.lsu_rdata[31:0]})
                                : mem_wb_q.alu_result;
 
   assign retire_mem_wen_o    = retire_advance & (mem_wb_q.dec.is_store | mem_wb_q.is_amo_write);

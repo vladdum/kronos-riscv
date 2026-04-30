@@ -6,7 +6,7 @@
 // Implements mstatus, misa, mie, mtvec, mscratch, mepc, mcause, mip.
 // Handles trap entry (ECALL/EBREAK/illegal), MRET, and CSR read/write.
 // Stage 5a adds FFLAGS/FRM/FCSR floating-point CSRs and mstatus.FS storage.
-// All CSR data paths are 64 bits wide (MXL=10, XLEN=64).
+// All CSR data paths are 64 bits wide (MXL=10, kronos_pkg::XLEN=64).
 module kronos_csr
   import kronos_pkg::*;
 #(
@@ -19,9 +19,9 @@ module kronos_csr
   input  logic [11:0] addr_i,
   input  logic [2:0]  funct3_i,
   input  logic        use_imm_i,
-  input  logic [XLEN-1:0] rs1_data_i,
+  input  logic [kronos_pkg::XLEN-1:0] rs1_data_i,
   input  logic [4:0]      rs1_addr_i,
-  output logic [XLEN-1:0] rdata_o,
+  output logic [kronos_pkg::XLEN-1:0] rdata_o,
   output logic        valid_o,
   // Trap interface
   input  logic        trap_i,
@@ -35,12 +35,12 @@ module kronos_csr
   // both TLBs (I-TLB and D-TLB) via the matching *_o ports.  Pure combinational
   // passthrough — no architectural state involved.
   input  logic              sfence_vma_i,
-  input  logic [XLEN-1:0]   sfence_va_i,
+  input  logic [kronos_pkg::XLEN-1:0]   sfence_va_i,
   input  logic [15:0]       sfence_asid_i,
   input  logic              sfence_va_valid_i,
   input  logic              sfence_asid_valid_i,
   output logic              sfence_vma_o,
-  output logic [XLEN-1:0]   sfence_va_o,
+  output logic [kronos_pkg::XLEN-1:0]   sfence_va_o,
   output logic [15:0]       sfence_asid_o,
   output logic              sfence_va_valid_o,
   output logic              sfence_asid_valid_o,
@@ -49,15 +49,15 @@ module kronos_csr
   output logic [3:0]        satp_mode_o,
   output logic [15:0]       satp_asid_o,
   output logic [43:0]       satp_ppn_o,
-  output logic [XLEN-1:0] trap_vector_o,
-  output logic [XLEN-1:0] mepc_o,
+  output logic [kronos_pkg::XLEN-1:0] trap_vector_o,
+  output logic [kronos_pkg::XLEN-1:0] mepc_o,
   // sepc output for sret target redirection (kronos_top reads this
   // when an SRET advances out of EX).
-  output logic [XLEN-1:0] sepc_o,
+  output logic [kronos_pkg::XLEN-1:0] sepc_o,
   // current privilege level (M/S/U)
   output priv_e           priv_o,
   // full mstatus exposed for top-level (TW/TSR/TVM consultation).
-  output logic [XLEN-1:0] mstatus_o,
+  output logic [kronos_pkg::XLEN-1:0] mstatus_o,
   // Interrupts
   input  logic        irq_timer_i,
   input  logic [14:0] irq_fast_i,
@@ -89,14 +89,14 @@ module kronos_csr
   // is high, the trigger module owns this CSR read; csr_rdata is sourced from
   // trig_csr_rdata_i instead of the local mux.  Writes are forwarded to the
   // trigger module via trig_csr_we_o below.
-  input  logic [XLEN-1:0] trig_csr_rdata_i,
+  input  logic [kronos_pkg::XLEN-1:0] trig_csr_rdata_i,
   input  logic            trig_csr_match_i,
   output logic            trig_csr_we_o,    // 1 = current cycle is a trigger CSR write
   // post-write CSR value (combinational, valid for any csrrs/csrrc/csrrw).
   // Routed to retire_csr_wdata_o at top so the Sail-vs-Kronos trace diff sees
   // the new CSR value rather than the RS1 operand.
-  output logic [XLEN-1:0] csr_new_val_o,
-  output logic [XLEN-1:0] trig_csr_wdata_o, // CSR new value (after CSRRS/CSRRC)
+  output logic [kronos_pkg::XLEN-1:0] csr_new_val_o,
+  output logic [kronos_pkg::XLEN-1:0] trig_csr_wdata_o, // CSR new value (after CSRRS/CSRRC)
   // illegal-CSR-access aggregate output.  Currently driven by the
   // counter-access gate (mcounteren/scounteren).  T11 will OR additional
   // sources (privilege/RO-write checks) into this signal.  Top-level wiring
@@ -113,15 +113,15 @@ module kronos_csr
   // -------------------------------------------------------------------------
   // S-mode interrupt bits (SSIE/STIE/SEIE → SSIP/STIP/SEIP).  Used by mideleg
   // WARL mask, the SIE/SIP windows, and the irq_eff S-mode IRQ path.
-  localparam logic [XLEN-1:0] SMODE_IRQ_MASK   = 64'h0000_0000_0000_0222;
+  localparam logic [kronos_pkg::XLEN-1:0] SMODE_IRQ_MASK   = 64'h0000_0000_0000_0222;
   // mstatus M-mode writable-bit mask (Stage 6a-implemented bits; see decode).
-  localparam logic [XLEN-1:0] MSTATUS_M_MASK   = 64'h0000_0000_007E_79AA;
+  localparam logic [kronos_pkg::XLEN-1:0] MSTATUS_M_MASK   = 64'h0000_0000_007E_79AA;
   // sstatus S-visible writable-bit mask (used for both write-decode and read).
-  localparam logic [XLEN-1:0] SSTATUS_RW_MASK  = 64'h8000_0003_000D_E162;
+  localparam logic [kronos_pkg::XLEN-1:0] SSTATUS_RW_MASK  = 64'h8000_0003_000D_E162;
   // SSTATUS read mask without SD (bit 63) — SD is recomputed from FS == 11.
-  localparam logic [XLEN-2:0] SSTATUS_RD_MASK  = 63'h0000_0003_000D_E162;
+  localparam logic [kronos_pkg::XLEN-2:0] SSTATUS_RD_MASK  = 63'h0000_0003_000D_E162;
   // medeleg WARL mask (bits 0..15 except 11/14 hardwired 0).
-  localparam logic [XLEN-1:0] MEDELEG_MASK     = 64'h0000_0000_0000_B7FF;
+  localparam logic [kronos_pkg::XLEN-1:0] MEDELEG_MASK     = 64'h0000_0000_0000_B7FF;
 
   // -------------------------------------------------------------------------
   // 3. State registers (driven by always_ff)
@@ -131,33 +131,33 @@ module kronos_csr
   priv_e priv_q;
 
   // Machine-mode CSRs
-  logic [XLEN-1:0] mstatus;   // 0x300
-  logic [XLEN-1:0] mie;       // 0x304
-  logic [XLEN-1:0] mtvec;     // 0x305
-  logic [XLEN-1:0] mscratch;  // 0x340
-  logic [XLEN-1:0] mepc;      // 0x341
-  logic [XLEN-1:0] mcause;    // 0x342
-  logic [XLEN-1:0] mtval;     // 0x343
-  logic [XLEN-1:0] medeleg;   // 0x302  -- per-cause sync exception delegation
-  logic [XLEN-1:0] mideleg;   // 0x303  -- per-cause interrupt delegation
+  logic [kronos_pkg::XLEN-1:0] mstatus;   // 0x300
+  logic [kronos_pkg::XLEN-1:0] mie;       // 0x304
+  logic [kronos_pkg::XLEN-1:0] mtvec;     // 0x305
+  logic [kronos_pkg::XLEN-1:0] mscratch;  // 0x340
+  logic [kronos_pkg::XLEN-1:0] mepc;      // 0x341
+  logic [kronos_pkg::XLEN-1:0] mcause;    // 0x342
+  logic [kronos_pkg::XLEN-1:0] mtval;     // 0x343
+  logic [kronos_pkg::XLEN-1:0] medeleg;   // 0x302  -- per-cause sync exception delegation
+  logic [kronos_pkg::XLEN-1:0] mideleg;   // 0x303  -- per-cause interrupt delegation
   // software-written shadow of the SSIP/STIP/SEIP bits.
   // We keep `mip` itself as a continuous assign for hardware-driven bits
   // (irq_timer/irq_fast).  CSR writes (M-mode: SSIP/STIP/SEIP, S-mode: SSIP)
   // land in mip_sw; the read mux/path uses (mip | mip_sw).  This is the less
   // invasive of the two T7 options — no register conversion of mip required.
-  logic [XLEN-1:0] mip_sw;
+  logic [kronos_pkg::XLEN-1:0] mip_sw;
 
   // S-mode CSRs.
   // sstatus / sip / sie are *windows* into mstatus/mip/mie — handled in
   // the read mux and write decode below.
-  logic [XLEN-1:0] stvec;          // bit[1:0] hardwired 00 (Direct)
-  logic [XLEN-1:0] sscratch;
-  logic [XLEN-1:0] sepc;           // bit[0] hardwired 0
-  logic [XLEN-1:0] scause;
-  logic [XLEN-1:0] stval;
-  logic [XLEN-1:0] satp;           // MODE reads as 0 in 6a
+  logic [kronos_pkg::XLEN-1:0] stvec;          // bit[1:0] hardwired 00 (Direct)
+  logic [kronos_pkg::XLEN-1:0] sscratch;
+  logic [kronos_pkg::XLEN-1:0] sepc;           // bit[0] hardwired 0
+  logic [kronos_pkg::XLEN-1:0] scause;
+  logic [kronos_pkg::XLEN-1:0] stval;
+  logic [kronos_pkg::XLEN-1:0] satp;           // MODE reads as 0 in 6a
   logic [31:0]     scounteren;
-  logic [XLEN-1:0] senvcfg;        // hardwired 0 in 6a
+  logic [kronos_pkg::XLEN-1:0] senvcfg;        // hardwired 0 in 6a
 
   // FCSR = {FRM[2:0], FFLAGS[4:0]} — 8 bits, zero-extended to 64 for reads.
   logic [7:0]  fcsr_q;    // 0x001/0x002/0x003
@@ -165,8 +165,8 @@ module kronos_csr
   // Zicntr counters — read-only user-mode counters (mirrored from m-mode
   // mcycle/minstret in a full implementation; here we just expose free-running
   // counters at 0xC00/0xC02 so ACT4 Zicntr tests pass).
-  logic [XLEN-1:0] mcycle;    // 0xB00 / 0xC00 (U-mode alias)
-  logic [XLEN-1:0] minstret;  // 0xB02 / 0xC02 (U-mode alias)
+  logic [kronos_pkg::XLEN-1:0] mcycle;    // 0xB00 / 0xC00 (U-mode alias)
+  logic [kronos_pkg::XLEN-1:0] minstret;  // 0xB02 / 0xC02 (U-mode alias)
 
   // Zihpm counter-control + event counters (Stage 5c).
   // mcountinhibit (0x320) — bit X gates increment of counter X:
@@ -186,7 +186,7 @@ module kronos_csr
   // mhpmcounter3..10 — 8 programmable 64-bit event counters.
   // Indexed as mhpmcounter[3]..mhpmcounter[10]; entries [0..2] are unused
   // (their CSR slots are mcycle/reserved/minstret which live above).
-  logic [XLEN-1:0] mhpmcounter [3:10];
+  logic [kronos_pkg::XLEN-1:0] mhpmcounter [3:10];
 
   // mhpmevent3..10 — paired event-select registers (only bits [7:0] used).
   logic [7:0]  mhpmevent   [3:10];
@@ -195,12 +195,12 @@ module kronos_csr
   // 4. Combinational signals
   // -------------------------------------------------------------------------
   // Read-only / hardware-driven CSR views
-  logic [XLEN-1:0] misa;
-  logic [XLEN-1:0] mip;
+  logic [kronos_pkg::XLEN-1:0] misa;
+  logic [kronos_pkg::XLEN-1:0] mip;
 
   // CSR write-data path
-  logic [XLEN-1:0] csr_wdata;
-  logic [XLEN-1:0] csr_new_val;
+  logic [kronos_pkg::XLEN-1:0] csr_wdata;
+  logic [kronos_pkg::XLEN-1:0] csr_new_val;
   logic            fp_csr_sw_write;
 
   // trap delegation routing.  When priv != M and the cause's
@@ -210,7 +210,7 @@ module kronos_csr
   logic [4:0] cause_idx;
 
   // interrupt-priority encoder outputs (see always_comb below).
-  logic [XLEN-1:0] irq_eff;
+  logic [kronos_pkg::XLEN-1:0] irq_eff;
   logic [4:0]      irq_cause_int;
   logic            irq_pending_int;
 
@@ -346,11 +346,11 @@ module kronos_csr
       12'h003: rdata_o = {56'b0, fcsr_q};                 // FCSR
       12'h300: rdata_o = {(mstatus[14:13] == 2'b11), mstatus[62:0]}; // bit63=SD, derived from FS
       12'h301: rdata_o = misa;
-      CSR_MEDELEG: rdata_o = medeleg;
-      CSR_MIDELEG: rdata_o = mideleg;
+      kronos_pkg::CSR_MEDELEG: rdata_o = medeleg;
+      kronos_pkg::CSR_MIDELEG: rdata_o = mideleg;
       12'h304: rdata_o = mie;
       12'h305: rdata_o = mtvec;
-      CSR_MCOUNTEREN: rdata_o = {32'd0, mcounteren};
+      kronos_pkg::CSR_MCOUNTEREN: rdata_o = {32'd0, mcounteren};
       12'h320: rdata_o = {53'b0, mcountinhibit};         // mcountinhibit
       12'h323: rdata_o = {56'b0, mhpmevent[3]};
       12'h324: rdata_o = {56'b0, mhpmevent[4]};
@@ -366,9 +366,9 @@ module kronos_csr
       12'h343: rdata_o = mtval;
       12'h344: rdata_o = mip | mip_sw;
       // PMP CSRs.  pmpcfg0 packs cfg bytes 0..7; pmpcfg2 packs 8..15.
-      CSR_PMPCFG0: rdata_o = {pmpcfg_q[7], pmpcfg_q[6], pmpcfg_q[5], pmpcfg_q[4],
+      kronos_pkg::CSR_PMPCFG0: rdata_o = {pmpcfg_q[7], pmpcfg_q[6], pmpcfg_q[5], pmpcfg_q[4],
                               pmpcfg_q[3], pmpcfg_q[2], pmpcfg_q[1], pmpcfg_q[0]};
-      CSR_PMPCFG2: rdata_o = {pmpcfg_q[15], pmpcfg_q[14], pmpcfg_q[13], pmpcfg_q[12],
+      kronos_pkg::CSR_PMPCFG2: rdata_o = {pmpcfg_q[15], pmpcfg_q[14], pmpcfg_q[13], pmpcfg_q[12],
                               pmpcfg_q[11], pmpcfg_q[10], pmpcfg_q[9],  pmpcfg_q[8]};
       12'h3B0: rdata_o = {10'd0, pmpaddr_q[0]};
       12'h3B1: rdata_o = {10'd0, pmpaddr_q[1]};
@@ -400,21 +400,21 @@ module kronos_csr
       12'hB09, 12'hC09: rdata_o = mhpmcounter[9];
       12'hB0A, 12'hC0A: rdata_o = mhpmcounter[10];
       // S-mode CSRs
-      CSR_STVEC:      rdata_o = {stvec[63:2], 2'b00};
-      CSR_SSCRATCH:   rdata_o = sscratch;
-      CSR_SEPC:       rdata_o = {sepc[63:1], 1'b0};
-      CSR_SCAUSE:     rdata_o = scause;
-      CSR_STVAL:      rdata_o = stval;
-      CSR_SATP:       rdata_o = satp;
-      CSR_SCOUNTEREN: rdata_o = {32'd0, scounteren};
-      CSR_SENVCFG:    rdata_o = senvcfg;
+      kronos_pkg::CSR_STVEC:      rdata_o = {stvec[63:2], 2'b00};
+      kronos_pkg::CSR_SSCRATCH:   rdata_o = sscratch;
+      kronos_pkg::CSR_SEPC:       rdata_o = {sepc[63:1], 1'b0};
+      kronos_pkg::CSR_SCAUSE:     rdata_o = scause;
+      kronos_pkg::CSR_STVAL:      rdata_o = stval;
+      kronos_pkg::CSR_SATP:       rdata_o = satp;
+      kronos_pkg::CSR_SCOUNTEREN: rdata_o = {32'd0, scounteren};
+      kronos_pkg::CSR_SENVCFG:    rdata_o = senvcfg;
       // SSTATUS: S-visible bits + SD computed from FS (mstatus[63] is never
       // written; the SD bit must be derived from FS == 2'b11 just like the
       // master mstatus read above).
-      CSR_SSTATUS:    rdata_o = {(mstatus[14:13] == 2'b11),
+      kronos_pkg::CSR_SSTATUS:    rdata_o = {(mstatus[14:13] == 2'b11),
                                   63'(mstatus[62:0] & SSTATUS_RD_MASK)};
-      CSR_SIE:        rdata_o = mie & SMODE_IRQ_MASK;            // SSIE/STIE/SEIE
-      CSR_SIP:        rdata_o = (mip | mip_sw) & SMODE_IRQ_MASK;
+      kronos_pkg::CSR_SIE:        rdata_o = mie & SMODE_IRQ_MASK;            // SSIE/STIE/SEIE
+      kronos_pkg::CSR_SIP:        rdata_o = (mip | mip_sw) & SMODE_IRQ_MASK;
       default: rdata_o = trig_csr_match_i ? trig_csr_rdata_i : 64'hDEAD_C5A0_DEAD_C5A0;
     endcase
   end
@@ -491,32 +491,32 @@ module kronos_csr
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mstatus  <= 64'h0000_0000_0000_1800; // MPP=11, FS=00 (Off) — matches Sail; common.S sets FS=Dirty in prologue
-      mie      <= {XLEN{1'b0}};
-      mtvec    <= {XLEN{1'b0}};
-      mscratch <= {XLEN{1'b0}};
-      mepc     <= {XLEN{1'b0}};
-      mcause   <= {XLEN{1'b0}};
-      mtval    <= {XLEN{1'b0}};
-      medeleg  <= {XLEN{1'b0}};
-      mideleg  <= {XLEN{1'b0}};
-      mip_sw   <= {XLEN{1'b0}};
+      mie      <= {kronos_pkg::XLEN{1'b0}};
+      mtvec    <= {kronos_pkg::XLEN{1'b0}};
+      mscratch <= {kronos_pkg::XLEN{1'b0}};
+      mepc     <= {kronos_pkg::XLEN{1'b0}};
+      mcause   <= {kronos_pkg::XLEN{1'b0}};
+      mtval    <= {kronos_pkg::XLEN{1'b0}};
+      medeleg  <= {kronos_pkg::XLEN{1'b0}};
+      mideleg  <= {kronos_pkg::XLEN{1'b0}};
+      mip_sw   <= {kronos_pkg::XLEN{1'b0}};
       fcsr_q   <= 8'h00;
-      mcycle   <= {XLEN{1'b0}};
-      minstret <= {XLEN{1'b0}};
+      mcycle   <= {kronos_pkg::XLEN{1'b0}};
+      minstret <= {kronos_pkg::XLEN{1'b0}};
       mcountinhibit <= 11'b0;
       mcounteren    <= 32'b0;
       priv_q   <= PRIV_M;
       // S-mode CSRs reset
-      stvec       <= {XLEN{1'b0}};
-      sscratch    <= {XLEN{1'b0}};
-      sepc        <= {XLEN{1'b0}};
-      scause      <= {XLEN{1'b0}};
-      stval       <= {XLEN{1'b0}};
-      satp        <= {XLEN{1'b0}};
+      stvec       <= {kronos_pkg::XLEN{1'b0}};
+      sscratch    <= {kronos_pkg::XLEN{1'b0}};
+      sepc        <= {kronos_pkg::XLEN{1'b0}};
+      scause      <= {kronos_pkg::XLEN{1'b0}};
+      stval       <= {kronos_pkg::XLEN{1'b0}};
+      satp        <= {kronos_pkg::XLEN{1'b0}};
       scounteren  <= 32'b0;
-      senvcfg     <= {XLEN{1'b0}};
+      senvcfg     <= {kronos_pkg::XLEN{1'b0}};
       for (int i = 3; i <= 10; i++) begin
-        mhpmcounter[i] <= {XLEN{1'b0}};
+        mhpmcounter[i] <= {kronos_pkg::XLEN{1'b0}};
         mhpmevent[i]   <= 8'b0;
       end
       // PMP reset — all regions OFF (A=00) and unlocked.
@@ -600,12 +600,12 @@ module kronos_csr
           end
           // medeleg WARL: bits 0..15 writable except bit 11 (M-ecall, hardwired 0);
           // bits 14 and 16+ also hardwired 0.
-          CSR_MEDELEG: medeleg <= csr_new_val & MEDELEG_MASK;
+          kronos_pkg::CSR_MEDELEG: medeleg <= csr_new_val & MEDELEG_MASK;
           // mideleg WARL: only SSIE/STIE/SEIE delegation bits writable.
-          CSR_MIDELEG: mideleg <= csr_new_val & SMODE_IRQ_MASK;
+          kronos_pkg::CSR_MIDELEG: mideleg <= csr_new_val & SMODE_IRQ_MASK;
           12'h304: mie      <= csr_new_val;
           12'h305: mtvec    <= csr_new_val;
-          CSR_MCOUNTEREN: mcounteren <= csr_new_val[31:0];
+          kronos_pkg::CSR_MCOUNTEREN: mcounteren <= csr_new_val[31:0];
           12'h320: mcountinhibit <= csr_new_val[10:0];
           12'h323: mhpmevent[3]  <= csr_new_val[7:0];
           12'h324: mhpmevent[4]  <= csr_new_val[7:0];
@@ -629,7 +629,7 @@ module kronos_csr
           //  - L=1 ⇒ drop write to that byte AND its paired pmpaddr.
           //  - A=01 (TOR) collapses to A=00 (OFF) — Stage 6 supports OFF/NAPOT only.
           //  - WPRI bits [6:5] read 0.
-          CSR_PMPCFG0: begin
+          kronos_pkg::CSR_PMPCFG0: begin
             for (int i = 0; i < 8; i++) begin
               if (~pmpcfg_q[i][7]) begin
                 // WARL: WPRI bits [6:5] clear; A=01 (TOR) collapses to A=00 (OFF).
@@ -641,7 +641,7 @@ module kronos_csr
               end
             end
           end
-          CSR_PMPCFG2: begin
+          kronos_pkg::CSR_PMPCFG2: begin
             for (int i = 0; i < 8; i++) begin
               if (~pmpcfg_q[i+8][7]) begin
                 // WARL: WPRI bits [6:5] clear; A=01 (TOR) collapses to A=00 (OFF).
@@ -682,36 +682,36 @@ module kronos_csr
           12'hB09: mhpmcounter[9]  <= csr_new_val;
           12'hB0A: mhpmcounter[10] <= csr_new_val;
           // S-mode CSRs
-          CSR_STVEC:      stvec       <= {csr_new_val[63:2], 2'b00};
-          CSR_SSCRATCH:   sscratch    <= csr_new_val;
-          CSR_SEPC:       sepc        <= {csr_new_val[63:1], 1'b0};
-          CSR_SCAUSE:     scause      <= csr_new_val;
-          CSR_STVAL:      stval       <= csr_new_val;
-          CSR_SATP: begin
+          kronos_pkg::CSR_STVEC:      stvec       <= {csr_new_val[63:2], 2'b00};
+          kronos_pkg::CSR_SSCRATCH:   sscratch    <= csr_new_val;
+          kronos_pkg::CSR_SEPC:       sepc        <= {csr_new_val[63:1], 1'b0};
+          kronos_pkg::CSR_SCAUSE:     scause      <= csr_new_val;
+          kronos_pkg::CSR_STVAL:      stval       <= csr_new_val;
+          kronos_pkg::CSR_SATP: begin
             // WARL on MODE.  Only Bare/Sv39/Sv48 are supported; on
             // any other MODE the *entire* write is dropped (per priv-spec WARL
             // rules — we choose to keep the legal previous value rather than
             // accept a partially-modified satp).
-            if (csr_new_val[63:60] == SATP_MODE_BARE |
-                csr_new_val[63:60] == SATP_MODE_SV39 |
-                csr_new_val[63:60] == SATP_MODE_SV48) begin
+            if (csr_new_val[63:60] == kronos_pkg::SATP_MODE_BARE |
+                csr_new_val[63:60] == kronos_pkg::SATP_MODE_SV39 |
+                csr_new_val[63:60] == kronos_pkg::SATP_MODE_SV48) begin
               satp <= csr_new_val;
             end
           end
-          CSR_SCOUNTEREN: scounteren  <= csr_new_val[31:0];
-          CSR_SENVCFG:    /* WARL=0 in 6a; ignore writes */ ;
-          CSR_SSTATUS: begin
+          kronos_pkg::CSR_SCOUNTEREN: scounteren  <= csr_new_val[31:0];
+          kronos_pkg::CSR_SENVCFG:    /* WARL=0 in 6a; ignore writes */ ;
+          kronos_pkg::CSR_SSTATUS: begin
             // Only S-visible bits writable; preserve the rest of mstatus.
             mstatus <= (mstatus & ~SSTATUS_RW_MASK)
                      | (csr_new_val & SSTATUS_RW_MASK);
           end
-          CSR_SIE: begin
+          kronos_pkg::CSR_SIE: begin
             mie <= (mie & ~SMODE_IRQ_MASK)
                  | (csr_new_val & SMODE_IRQ_MASK);
           end
-          CSR_SIP: begin
+          kronos_pkg::CSR_SIP: begin
             // S-mode view of mip: only SSIP (bit 1) is writable from S-mode.
-            // Land the write in the mip_sw shadow register; the CSR_SIP read
+            // Land the write in the mip_sw shadow register; the kronos_pkg::CSR_SIP read
             // path returns (mip | mip_sw) masked to the S-visible bits.
             // M-mode software can write SSIP/STIP/SEIP via 0x344 above.
             mip_sw <= (mip_sw & ~64'h0000_0000_0000_0002)

@@ -90,16 +90,16 @@ module kronos_fpu_fmisc
   // -------------------------------------------------------------------------
   always_comb begin
     // NaN-unbox single operands
-    a_s = (a_i[63:32] == FP_NANBOX_UPPER) ? a_i[31:0] : FP_CANON_QNAN_S;
-    b_s = (b_i[63:32] == FP_NANBOX_UPPER) ? b_i[31:0] : FP_CANON_QNAN_S;
+    a_s = (a_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? a_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
+    b_s = (b_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? b_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
 
     // Effective operands for each format
     if (fmt_d_i) begin
       a_eff = a_i;
       b_eff = b_i;
     end else begin
-      a_eff = {FP_NANBOX_UPPER, a_s};
-      b_eff = {FP_NANBOX_UPPER, b_s};
+      a_eff = {kronos_pkg::FP_NANBOX_UPPER, a_s};
+      b_eff = {kronos_pkg::FP_NANBOX_UPPER, b_s};
     end
   end
 
@@ -231,7 +231,7 @@ module kronos_fpu_fmisc
         if (fmt_d_i) begin
           result_comb = {b_eff[63], a_eff[62:0]};
         end else begin
-          result_comb = {FP_NANBOX_UPPER, b_s[31], a_s[30:0]};
+          result_comb = {kronos_pkg::FP_NANBOX_UPPER, b_s[31], a_s[30:0]};
         end
       end
 
@@ -239,7 +239,7 @@ module kronos_fpu_fmisc
         if (fmt_d_i) begin
           result_comb = {~b_eff[63], a_eff[62:0]};
         end else begin
-          result_comb = {FP_NANBOX_UPPER, ~b_s[31], a_s[30:0]};
+          result_comb = {kronos_pkg::FP_NANBOX_UPPER, ~b_s[31], a_s[30:0]};
         end
       end
 
@@ -247,7 +247,7 @@ module kronos_fpu_fmisc
         if (fmt_d_i) begin
           result_comb = {a_eff[63] ^ b_eff[63], a_eff[62:0]};
         end else begin
-          result_comb = {FP_NANBOX_UPPER, a_s[31] ^ b_s[31], a_s[30:0]};
+          result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_s[31] ^ b_s[31], a_s[30:0]};
         end
       end
 
@@ -259,9 +259,9 @@ module kronos_fpu_fmisc
       //   - Quiet NaN on one operand silently returns the other.
       FP_FMIN: begin
         if (fmt_d_i) begin
-          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_d || b_snan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_d && b_nan_d) begin
-            result_comb = FP_CANON_QNAN_D;
+            result_comb = kronos_pkg::FP_CANON_QNAN_D;
           end else if (a_nan_d) begin
             result_comb = b_i;
           end else if (b_nan_d) begin
@@ -275,20 +275,20 @@ module kronos_fpu_fmisc
             end
           end
         end else begin
-          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_s || b_snan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_s && b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
           end else if (a_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, b_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, b_s};
           end else if (b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, a_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_s};
           end else begin
             // Both numeric: min(-0,+0) = -0
             if (a_zero_s && b_zero_s) begin
-              result_comb = (a_sign_s || b_sign_s) ? {FP_NANBOX_UPPER, 1'b1, 31'd0}
-                                                   : {FP_NANBOX_UPPER, a_s};
+              result_comb = (a_sign_s || b_sign_s) ? {kronos_pkg::FP_NANBOX_UPPER, 1'b1, 31'd0}
+                                                   : {kronos_pkg::FP_NANBOX_UPPER, a_s};
             end else begin
-              result_comb = a_lt_b_s ? {FP_NANBOX_UPPER, a_s} : {FP_NANBOX_UPPER, b_s};
+              result_comb = a_lt_b_s ? {kronos_pkg::FP_NANBOX_UPPER, a_s} : {kronos_pkg::FP_NANBOX_UPPER, b_s};
             end
           end
         end
@@ -296,9 +296,9 @@ module kronos_fpu_fmisc
 
       FP_FMAX: begin
         if (fmt_d_i) begin
-          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_d || b_snan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_d && b_nan_d) begin
-            result_comb = FP_CANON_QNAN_D;
+            result_comb = kronos_pkg::FP_CANON_QNAN_D;
           end else if (a_nan_d) begin
             result_comb = b_i;
           end else if (b_nan_d) begin
@@ -312,20 +312,20 @@ module kronos_fpu_fmisc
             end
           end
         end else begin
-          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_s || b_snan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           if (a_nan_s && b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
           end else if (a_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, b_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, b_s};
           end else if (b_nan_s) begin
-            result_comb = {FP_NANBOX_UPPER, a_s};
+            result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_s};
           end else begin
             // Both numeric: max(-0,+0) = +0
             if (a_zero_s && b_zero_s) begin
-              result_comb = (!a_sign_s || !b_sign_s) ? {FP_NANBOX_UPPER, 1'b0, 31'd0}
-                                                     : {FP_NANBOX_UPPER, a_s};
+              result_comb = (!a_sign_s || !b_sign_s) ? {kronos_pkg::FP_NANBOX_UPPER, 1'b0, 31'd0}
+                                                     : {kronos_pkg::FP_NANBOX_UPPER, a_s};
             end else begin
-              result_comb = a_lt_b_s ? {FP_NANBOX_UPPER, b_s} : {FP_NANBOX_UPPER, a_s};
+              result_comb = a_lt_b_s ? {kronos_pkg::FP_NANBOX_UPPER, b_s} : {kronos_pkg::FP_NANBOX_UPPER, a_s};
             end
           end
         end
@@ -340,10 +340,10 @@ module kronos_fpu_fmisc
       FP_FEQ: begin
         if (fmt_d_i) begin
           // FEQ: only raises NV on sNaN
-          if (a_snan_d || b_snan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_d || b_snan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           result_comb = {63'd0, cmp_eq_d};
         end else begin
-          if (a_snan_s || b_snan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_snan_s || b_snan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           result_comb = {63'd0, cmp_eq_s};
         end
       end
@@ -351,10 +351,10 @@ module kronos_fpu_fmisc
       FP_FLT: begin
         if (fmt_d_i) begin
           // FLT: raises NV on any NaN
-          if (a_nan_d || b_nan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_d || b_nan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           result_comb = {63'd0, cmp_lt_d};
         end else begin
-          if (a_nan_s || b_nan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_s || b_nan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           result_comb = {63'd0, cmp_lt_s};
         end
       end
@@ -362,10 +362,10 @@ module kronos_fpu_fmisc
       FP_FLE: begin
         if (fmt_d_i) begin
           // FLE: raises NV on any NaN
-          if (a_nan_d || b_nan_d) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_d || b_nan_d) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           result_comb = {63'd0, cmp_le_d};
         end else begin
-          if (a_nan_s || b_nan_s) fflags_comb[FP_FFLAG_NV] = 1'b1;
+          if (a_nan_s || b_nan_s) fflags_comb[kronos_pkg::FP_FFLAG_NV] = 1'b1;
           result_comb = {63'd0, cmp_le_s};
         end
       end
@@ -378,7 +378,7 @@ module kronos_fpu_fmisc
 
       FP_FMV_W_X: begin
         // NaN-box low 32 bits of integer source
-        result_comb = {FP_NANBOX_UPPER, a_i[31:0]};
+        result_comb = {kronos_pkg::FP_NANBOX_UPPER, a_i[31:0]};
       end
 
       FP_FMV_X_D: begin

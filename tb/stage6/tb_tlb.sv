@@ -13,7 +13,7 @@ module tb_tlb;
 
   // Lookup
   logic            lookup_valid;
-  logic [XLEN-1:0] lookup_va;
+  logic [kronos_pkg::XLEN-1:0] lookup_va;
   logic [15:0]     lookup_asid;
   priv_e           lookup_priv;
   logic            is_load, is_store, is_fetch;
@@ -35,7 +35,7 @@ module tb_tlb;
   // sfence
   logic            flush_valid;
   logic            flush_va_valid, flush_asid_valid;
-  logic [XLEN-1:0] flush_va;
+  logic [kronos_pkg::XLEN-1:0] flush_va;
   logic [15:0]     flush_asid;
 
   // Error counter
@@ -78,7 +78,7 @@ module tb_tlb;
 
   task automatic clear_inputs;
     lookup_valid     = 1'b0;
-    lookup_va        = {XLEN{1'b0}};
+    lookup_va        = {kronos_pkg::XLEN{1'b0}};
     lookup_asid      = 16'h0;
     lookup_priv      = PRIV_M;
     is_load          = 1'b0;
@@ -98,7 +98,7 @@ module tb_tlb;
     flush_valid      = 1'b0;
     flush_va_valid   = 1'b0;
     flush_asid_valid = 1'b0;
-    flush_va         = {XLEN{1'b0}};
+    flush_va         = {kronos_pkg::XLEN{1'b0}};
     flush_asid       = 16'h0;
   endtask
 
@@ -124,7 +124,7 @@ module tb_tlb;
     refill_valid = 1'b0;
   endtask
 
-  task automatic do_lookup(input logic [XLEN-1:0] va,
+  task automatic do_lookup(input logic [kronos_pkg::XLEN-1:0] va,
                            input logic [15:0]     aid,
                            input priv_e           p,
                            input logic            isf,
@@ -155,7 +155,7 @@ module tb_tlb;
 
   task automatic do_flush(input logic            va_v,
                           input logic            aid_v,
-                          input logic [XLEN-1:0] va,
+                          input logic [kronos_pkg::XLEN-1:0] va,
                           input logic [15:0]     aid);
     @(posedge clk);
     flush_valid      = 1'b1;

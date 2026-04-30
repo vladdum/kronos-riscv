@@ -115,9 +115,9 @@ module kronos_fpu_fma
 
   always_comb begin
     // NaN-unbox single operands
-    a_s = (a_i[63:32] == FP_NANBOX_UPPER) ? a_i[31:0] : FP_CANON_QNAN_S;
-    b_s = (b_i[63:32] == FP_NANBOX_UPPER) ? b_i[31:0] : FP_CANON_QNAN_S;
-    c_s = (c_i[63:32] == FP_NANBOX_UPPER) ? c_i[31:0] : FP_CANON_QNAN_S;
+    a_s = (a_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? a_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
+    b_s = (b_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? b_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
+    c_s = (c_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? c_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
     a_d = a_i;
     b_d = b_i;
     c_d = c_i;
@@ -198,34 +198,34 @@ module kronos_fpu_fma
 
     if (s1_a_snan || s1_b_snan || s1_c_snan) begin
       s1_special              = 1'b1;
-      s1_special_result       = fmt_d_i ? FP_CANON_QNAN_D
-                                        : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-      s1_special_flags[FP_FFLAG_NV] = 1'b1;
+      s1_special_result       = fmt_d_i ? kronos_pkg::FP_CANON_QNAN_D
+                                        : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
+      s1_special_flags[kronos_pkg::FP_FFLAG_NV] = 1'b1;
     end else if ((s1_a_inf && s1_b_zero) || (s1_a_zero && s1_b_inf)) begin
       // 0 * inf -> invalid
       s1_special              = 1'b1;
-      s1_special_result       = fmt_d_i ? FP_CANON_QNAN_D
-                                        : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-      s1_special_flags[FP_FFLAG_NV] = 1'b1;
+      s1_special_result       = fmt_d_i ? kronos_pkg::FP_CANON_QNAN_D
+                                        : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
+      s1_special_flags[kronos_pkg::FP_FFLAG_NV] = 1'b1;
     end else if ((s1_a_inf || s1_b_inf) && s1_c_inf &&
                  (s1_prod_sign != s1_addend_sign)) begin
       // Inf - Inf -> invalid
       s1_special              = 1'b1;
-      s1_special_result       = fmt_d_i ? FP_CANON_QNAN_D
-                                        : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-      s1_special_flags[FP_FFLAG_NV] = 1'b1;
+      s1_special_result       = fmt_d_i ? kronos_pkg::FP_CANON_QNAN_D
+                                        : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
+      s1_special_flags[kronos_pkg::FP_FFLAG_NV] = 1'b1;
     end else if (s1_a_nan || s1_b_nan || s1_c_nan) begin
       // Propagate as canonical qNaN
       s1_special        = 1'b1;
-      s1_special_result = fmt_d_i ? FP_CANON_QNAN_D
-                                  : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+      s1_special_result = fmt_d_i ? kronos_pkg::FP_CANON_QNAN_D
+                                  : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
     end else if (s1_a_inf || s1_b_inf) begin
       // Inf * finite (+/- finite addend, same sign or c finite)
       s1_special        = 1'b1;
       if (fmt_d_i) begin
         s1_special_result = {s1_prod_sign, 11'h7FF, 52'd0};
       end else begin
-        s1_special_result = {FP_NANBOX_UPPER, s1_prod_sign, 8'hFF, 23'd0};
+        s1_special_result = {kronos_pkg::FP_NANBOX_UPPER, s1_prod_sign, 8'hFF, 23'd0};
       end
     end else if (s1_c_inf) begin
       // finite * finite + inf -> +/- inf (sign = addend sign)
@@ -233,7 +233,7 @@ module kronos_fpu_fma
       if (fmt_d_i) begin
         s1_special_result = {s1_addend_sign, 11'h7FF, 52'd0};
       end else begin
-        s1_special_result = {FP_NANBOX_UPPER, s1_addend_sign, 8'hFF, 23'd0};
+        s1_special_result = {kronos_pkg::FP_NANBOX_UPPER, s1_addend_sign, 8'hFF, 23'd0};
       end
     end
   end
@@ -1091,18 +1091,18 @@ module kronos_fpu_fma
       if (s5b_eff_sub) begin
         if (s5b_rm == FP_RM_RDN) begin
           s5b_result_comb = s5b_fmt_d ? {1'b1, 63'd0}
-                                      : {FP_NANBOX_UPPER, 1'b1, 31'd0};
+                                      : {kronos_pkg::FP_NANBOX_UPPER, 1'b1, 31'd0};
         end else begin
           s5b_result_comb = s5b_fmt_d ? 64'd0
-                                      : {FP_NANBOX_UPPER, 32'd0};
+                                      : {kronos_pkg::FP_NANBOX_UPPER, 32'd0};
         end
       end else begin
         if (s5b_prod_sign) begin
           s5b_result_comb = s5b_fmt_d ? {1'b1, 63'd0}
-                                      : {FP_NANBOX_UPPER, 1'b1, 31'd0};
+                                      : {kronos_pkg::FP_NANBOX_UPPER, 1'b1, 31'd0};
         end else begin
           s5b_result_comb = s5b_fmt_d ? 64'd0
-                                      : {FP_NANBOX_UPPER, 32'd0};
+                                      : {kronos_pkg::FP_NANBOX_UPPER, 32'd0};
         end
       end
     end else begin
@@ -1203,44 +1203,44 @@ module kronos_fpu_fma
         end
 
         if (!(carry_n && (s5b_exp_pre_tiny + 13'sd1 == emin))) begin
-          s5b_flags_comb[FP_FFLAG_UF] = 1'b1;
+          s5b_flags_comb[kronos_pkg::FP_FFLAG_UF] = 1'b1;
         end
       end
 
-      if (inexact) s5b_flags_comb[FP_FFLAG_NX] = 1'b1;
+      if (inexact) s5b_flags_comb[kronos_pkg::FP_FFLAG_NX] = 1'b1;
 
       if (overflow_ovf) begin
-        s5b_flags_comb[FP_FFLAG_OF] = 1'b1;
-        s5b_flags_comb[FP_FFLAG_NX] = 1'b1;
+        s5b_flags_comb[kronos_pkg::FP_FFLAG_OF] = 1'b1;
+        s5b_flags_comb[kronos_pkg::FP_FFLAG_NX] = 1'b1;
         unique case (s5b_rm)
           FP_RM_RTZ: begin
             if (s5b_fmt_d) s5b_result_comb = {s5b_res_sign, 11'd2046, {52{1'b1}}};
-            else           s5b_result_comb = {FP_NANBOX_UPPER,
+            else           s5b_result_comb = {kronos_pkg::FP_NANBOX_UPPER,
                                               s5b_res_sign, 8'd254, {23{1'b1}}};
           end
           FP_RM_RDN: begin
             if (s5b_res_sign) begin
               if (s5b_fmt_d) s5b_result_comb = {1'b1, 11'h7FF, 52'd0};
-              else           s5b_result_comb = {FP_NANBOX_UPPER, 1'b1, 8'hFF, 23'd0};
+              else           s5b_result_comb = {kronos_pkg::FP_NANBOX_UPPER, 1'b1, 8'hFF, 23'd0};
             end else begin
               if (s5b_fmt_d) s5b_result_comb = {1'b0, 11'd2046, {52{1'b1}}};
-              else           s5b_result_comb = {FP_NANBOX_UPPER,
+              else           s5b_result_comb = {kronos_pkg::FP_NANBOX_UPPER,
                                                1'b0, 8'd254, {23{1'b1}}};
             end
           end
           FP_RM_RUP: begin
             if (s5b_res_sign) begin
               if (s5b_fmt_d) s5b_result_comb = {1'b1, 11'd2046, {52{1'b1}}};
-              else           s5b_result_comb = {FP_NANBOX_UPPER,
+              else           s5b_result_comb = {kronos_pkg::FP_NANBOX_UPPER,
                                                1'b1, 8'd254, {23{1'b1}}};
             end else begin
               if (s5b_fmt_d) s5b_result_comb = {1'b0, 11'h7FF, 52'd0};
-              else           s5b_result_comb = {FP_NANBOX_UPPER, 1'b0, 8'hFF, 23'd0};
+              else           s5b_result_comb = {kronos_pkg::FP_NANBOX_UPPER, 1'b0, 8'hFF, 23'd0};
             end
           end
           default: begin
             if (s5b_fmt_d) s5b_result_comb = {s5b_res_sign, 11'h7FF, 52'd0};
-            else           s5b_result_comb = {FP_NANBOX_UPPER,
+            else           s5b_result_comb = {kronos_pkg::FP_NANBOX_UPPER,
                                              s5b_res_sign, 8'hFF, 23'd0};
           end
         endcase
@@ -1250,7 +1250,7 @@ module kronos_fpu_fma
           s5b_result_comb = {s5b_res_sign, exp_field_d, final_sig[51:0]};
         end else begin
           exp_field_s = final_exp[7:0];
-          s5b_result_comb = {FP_NANBOX_UPPER, s5b_res_sign, exp_field_s,
+          s5b_result_comb = {kronos_pkg::FP_NANBOX_UPPER, s5b_res_sign, exp_field_s,
                              final_sig[22:0]};
         end
       end

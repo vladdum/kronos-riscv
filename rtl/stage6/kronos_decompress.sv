@@ -9,7 +9,7 @@ module kronos_decompress
   import kronos_pkg::*;
 (
   input  logic [15:0]        instr16_i,
-  output logic [INST_W-1:0]  instr32_o,
+  output logic [kronos_pkg::INST_W-1:0]  instr32_o,
   output logic               illegal_o
 );
   // ---------------------------------------------------------------
@@ -42,9 +42,9 @@ module kronos_decompress
 
   // Temporary signals for immediate assembly (shared across case arms — only one active at a time)
   logic [11:0]        uimm;
-  logic [INST_W-1:0]  nzimm;
-  logic [INST_W-1:0]  imm;
-  logic [INST_W-1:0]  off;
+  logic [kronos_pkg::INST_W-1:0]  nzimm;
+  logic [kronos_pkg::INST_W-1:0]  imm;
+  logic [kronos_pkg::INST_W-1:0]  off;
   logic [5:0]         shamt;
 
   // ---------------------------------------------------------------
@@ -67,12 +67,12 @@ module kronos_decompress
   // ---------------------------------------------------------------
   always_comb begin
     // Defaults
-    instr32_o = {INST_W{1'b0}};
+    instr32_o = {kronos_pkg::INST_W{1'b0}};
     illegal_o = 1'b0;
     uimm      = 12'd0;
-    nzimm     = {INST_W{1'b0}};
-    imm       = {INST_W{1'b0}};
-    off       = {INST_W{1'b0}};
+    nzimm     = {kronos_pkg::INST_W{1'b0}};
+    imm       = {kronos_pkg::INST_W{1'b0}};
+    off       = {kronos_pkg::INST_W{1'b0}};
     shamt     = 6'd0;
 
     unique case (instr16_i[1:0])
@@ -153,11 +153,11 @@ module kronos_decompress
             if (rd == REG_X2) begin  // C.ADDI16SP → ADDI x2, x2, nzimm
               nzimm = {{23{instr16_i[12]}}, instr16_i[4:3], instr16_i[5],
                        instr16_i[2], instr16_i[6], 4'b0};
-              if (nzimm == {INST_W{1'b0}}) illegal_o = 1'b1;
+              if (nzimm == {kronos_pkg::INST_W{1'b0}}) illegal_o = 1'b1;
               else instr32_o = {nzimm[11:0], REG_X2, 3'b000, REG_X2, OP_IMM};
             end else begin  // C.LUI → LUI rd, nzimm
               nzimm = {{15{instr16_i[12]}}, instr16_i[6:2], 12'b0};
-              if (nzimm == {INST_W{1'b0}}) illegal_o = 1'b1;
+              if (nzimm == {kronos_pkg::INST_W{1'b0}}) illegal_o = 1'b1;
               else instr32_o = {nzimm[31:12], rd, OP_LUI};
             end
           end

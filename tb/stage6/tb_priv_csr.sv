@@ -26,9 +26,9 @@ module tb_priv_csr;
   localparam logic [11:0] CSR_CYCLE   = 12'hC00;
 
   // Mask of bits we expect to remain set after writing all-ones to mideleg.
-  localparam logic [XLEN-1:0] MIDELEG_MASK = 64'h0000_0000_0000_0222;
+  localparam logic [kronos_pkg::XLEN-1:0] MIDELEG_MASK = 64'h0000_0000_0000_0222;
   // Mask of bits expected to remain after writing all-ones to medeleg.
-  localparam logic [XLEN-1:0] MEDELEG_MASK = 64'h0000_0000_0000_B7FF;
+  localparam logic [kronos_pkg::XLEN-1:0] MEDELEG_MASK = 64'h0000_0000_0000_B7FF;
 
   // ------------------------------------------------------------------------
   // Clock / reset
@@ -44,7 +44,7 @@ module tb_priv_csr;
   logic [11:0]     addr_i;
   logic [2:0]      funct3_i;
   logic            use_imm_i;
-  logic [XLEN-1:0] rs1_data_i;
+  logic [kronos_pkg::XLEN-1:0] rs1_data_i;
   logic [4:0]      rs1_addr_i;
   logic            trap_i;
   logic [31:0]     trap_pc_i;
@@ -64,24 +64,24 @@ module tb_priv_csr;
   logic            fp_rd_we_i;
   logic            instret_retire_i;
   logic [31:0]     event_bus_i;
-  logic [XLEN-1:0] trig_csr_rdata_i;
+  logic [kronos_pkg::XLEN-1:0] trig_csr_rdata_i;
   logic            trig_csr_match_i;
 
   // ------------------------------------------------------------------------
   // DUT outputs
   // ------------------------------------------------------------------------
-  logic [XLEN-1:0]  rdata_o;
+  logic [kronos_pkg::XLEN-1:0]  rdata_o;
   logic             valid_o;
-  logic [XLEN-1:0]  trap_vector_o;
-  logic [XLEN-1:0]  mepc_o;
-  logic [XLEN-1:0]  sepc_o;
+  logic [kronos_pkg::XLEN-1:0]  trap_vector_o;
+  logic [kronos_pkg::XLEN-1:0]  mepc_o;
+  logic [kronos_pkg::XLEN-1:0]  sepc_o;
   priv_e            priv_o;
-  logic [XLEN-1:0]  mstatus_o;
+  logic [kronos_pkg::XLEN-1:0]  mstatus_o;
   logic             irq_pending_o;
   logic [4:0]       irq_cause_o;
   logic [2:0]       frm_o;
   logic             trig_csr_we_o;
-  logic [XLEN-1:0]  trig_csr_wdata_o;
+  logic [kronos_pkg::XLEN-1:0]  trig_csr_wdata_o;
   logic             csr_illegal_o;
   logic [7:0][7:0]  pmpcfg_o;
   logic [7:0][53:0] pmpaddr_o;
@@ -90,7 +90,7 @@ module tb_priv_csr;
   // Stimulus state (mid-module declarations forbidden — declared up front)
   // ------------------------------------------------------------------------
   int              fail_count;
-  logic [XLEN-1:0] v;
+  logic [kronos_pkg::XLEN-1:0] v;
   logic            illegal;
 
   // ------------------------------------------------------------------------
@@ -163,7 +163,7 @@ module tb_priv_csr;
   // Helper tasks
   // ------------------------------------------------------------------------
   // CSRRW — write `v` to CSR `a` (rs1_addr=1 so write fires).
-  task automatic csr_write(input logic [11:0] a, input logic [XLEN-1:0] v);
+  task automatic csr_write(input logic [11:0] a, input logic [kronos_pkg::XLEN-1:0] v);
     @(posedge clk);
     addr_i     = a;
     funct3_i   = 3'b001;     // CSRRW
@@ -177,7 +177,7 @@ module tb_priv_csr;
 
   // CSRRS rs1=x0 — read-only.  Returns rdata and same-cycle csr_illegal.
   task automatic csr_read(input  logic [11:0]     a,
-                          output logic [XLEN-1:0] v,
+                          output logic [kronos_pkg::XLEN-1:0] v,
                           output logic            illegal);
     @(posedge clk);
     addr_i     = a;
@@ -271,7 +271,7 @@ module tb_priv_csr;
       $display("FAIL case1: mstatus reset=%h expected 0x1800", v);
       fail_count++;
     end
-    csr_read(CSR_PMPCFG0, v, illegal);
+    csr_read(kronos_pkg::CSR_PMPCFG0, v, illegal);
     if (v !== 64'h0) begin
       $display("FAIL case1: pmpcfg0 reset=%h expected 0", v);
       fail_count++;
@@ -280,13 +280,13 @@ module tb_priv_csr;
     // ----------------------------------------------------------------------
     // Case 2: sstatus mirror — SUM (bit 18)
     // ----------------------------------------------------------------------
-    csr_write(CSR_SSTATUS, 64'h0000_0000_0004_0000);   // sstatus: bit 18
+    csr_write(kronos_pkg::CSR_SSTATUS, 64'h0000_0000_0004_0000);   // sstatus: bit 18
     csr_read (CSR_MSTATUS, v, illegal);
     if (v[18] !== 1'b1) begin
       $display("FAIL case2a: mstatus.SUM not set via sstatus write (mstatus=%h)", v);
       fail_count++;
     end
-    csr_write(CSR_SSTATUS, 64'h0);                     // clear sstatus.SUM
+    csr_write(kronos_pkg::CSR_SSTATUS, 64'h0);                     // clear sstatus.SUM
     csr_read (CSR_MSTATUS, v, illegal);
     if (v[18] !== 1'b0) begin
       $display("FAIL case2b: mstatus.SUM not cleared via sstatus (mstatus=%h)", v);
@@ -296,8 +296,8 @@ module tb_priv_csr;
     // ----------------------------------------------------------------------
     // Case 3: medeleg[11] is hardwired 0
     // ----------------------------------------------------------------------
-    csr_write(CSR_MEDELEG, 64'hFFFF_FFFF_FFFF_FFFF);
-    csr_read (CSR_MEDELEG, v, illegal);
+    csr_write(kronos_pkg::CSR_MEDELEG, 64'hFFFF_FFFF_FFFF_FFFF);
+    csr_read (kronos_pkg::CSR_MEDELEG, v, illegal);
     if (v[11] !== 1'b0) begin
       $display("FAIL case3: medeleg[11] readback=%h expected 0", v[11]);
       fail_count++;
@@ -310,8 +310,8 @@ module tb_priv_csr;
     // ----------------------------------------------------------------------
     // Case 4: mideleg WARL — only bits {1, 5, 9} writable
     // ----------------------------------------------------------------------
-    csr_write(CSR_MIDELEG, 64'hFFFF_FFFF_FFFF_FFFF);
-    csr_read (CSR_MIDELEG, v, illegal);
+    csr_write(kronos_pkg::CSR_MIDELEG, 64'hFFFF_FFFF_FFFF_FFFF);
+    csr_read (kronos_pkg::CSR_MIDELEG, v, illegal);
     if (v !== MIDELEG_MASK) begin
       $display("FAIL case4: mideleg readback=%h expected %h", v, MIDELEG_MASK);
       fail_count++;
@@ -325,15 +325,15 @@ module tb_priv_csr;
     // Case 5: pmpcfg.A=01 (TOR) collapses to A=00 (OFF); A=11 (NAPOT) preserved
     // ----------------------------------------------------------------------
     // First write NAPOT (A=11) — must be preserved.
-    csr_write(CSR_PMPCFG0, 64'h0000_0000_0000_0018);
-    csr_read (CSR_PMPCFG0, v, illegal);
+    csr_write(kronos_pkg::CSR_PMPCFG0, 64'h0000_0000_0000_0018);
+    csr_read (kronos_pkg::CSR_PMPCFG0, v, illegal);
     if (v[7:0] !== 8'h18) begin
       $display("FAIL case5a: pmpcfg0[byte0] NAPOT readback=%h expected 0x18", v[7:0]);
       fail_count++;
     end
     // Now write TOR (A=01) — must collapse to OFF (A=00 → byte=0x00).
-    csr_write(CSR_PMPCFG0, 64'h0000_0000_0000_0008);
-    csr_read (CSR_PMPCFG0, v, illegal);
+    csr_write(kronos_pkg::CSR_PMPCFG0, 64'h0000_0000_0000_0008);
+    csr_read (kronos_pkg::CSR_PMPCFG0, v, illegal);
     if (v[7:0] !== 8'h00) begin
       $display("FAIL case5b: pmpcfg0[byte0] TOR collapse readback=%h expected 0x00", v[7:0]);
       fail_count++;
@@ -342,14 +342,14 @@ module tb_priv_csr;
     // ----------------------------------------------------------------------
     // Case 6: pmpcfg lock — L=1 prevents subsequent writes to that byte
     // ----------------------------------------------------------------------
-    csr_write(CSR_PMPCFG0, 64'h0000_0000_0000_0080);   // L=1
-    csr_read (CSR_PMPCFG0, v, illegal);
+    csr_write(kronos_pkg::CSR_PMPCFG0, 64'h0000_0000_0000_0080);   // L=1
+    csr_read (kronos_pkg::CSR_PMPCFG0, v, illegal);
     if (v[7:0] !== 8'h80) begin
       $display("FAIL case6a: pmpcfg0[byte0] lock-set readback=%h expected 0x80", v[7:0]);
       fail_count++;
     end
-    csr_write(CSR_PMPCFG0, 64'h0000_0000_0000_0018);   // try NAPOT — locked!
-    csr_read (CSR_PMPCFG0, v, illegal);
+    csr_write(kronos_pkg::CSR_PMPCFG0, 64'h0000_0000_0000_0018);   // try NAPOT — locked!
+    csr_read (kronos_pkg::CSR_PMPCFG0, v, illegal);
     if (v[7:0] !== 8'h80) begin
       $display("FAIL case6b: pmpcfg0[byte0] lock-honour readback=%h expected 0x80", v[7:0]);
       fail_count++;
@@ -374,7 +374,7 @@ module tb_priv_csr;
     // Case 8: sret transition — already in S; SPP=U → priv=U
     // ----------------------------------------------------------------------
     // sstatus mask exposes SPP (bit 8); writing 0 to sstatus clears SPP.
-    csr_write(CSR_SSTATUS, 64'h0);                     // sstatus.SPP = 0
+    csr_write(kronos_pkg::CSR_SSTATUS, 64'h0);                     // sstatus.SPP = 0
     pulse_sret;
     if (priv_o !== PRIV_U) begin
       $display("FAIL case8: post-sret priv_o=%h expected PRIV_U", priv_o);
@@ -404,8 +404,8 @@ module tb_priv_csr;
     rst_n = 1'b1;
     repeat (2) @(posedge clk);
 
-    csr_write(CSR_MCOUNTEREN, 64'h0000_0000_0000_0001);   // mcounteren[0]=1
-    csr_write(CSR_SCOUNTEREN, 64'h0000_0000_0000_0001);   // scounteren[0]=1
+    csr_write(kronos_pkg::CSR_MCOUNTEREN, 64'h0000_0000_0000_0001);   // mcounteren[0]=1
+    csr_write(kronos_pkg::CSR_SCOUNTEREN, 64'h0000_0000_0000_0001);   // scounteren[0]=1
     drop_to_u;
     csr_read(CSR_CYCLE, v, illegal);
     if (illegal !== 1'b0) begin

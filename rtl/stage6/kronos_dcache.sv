@@ -19,8 +19,8 @@ module kronos_dcache
   parameter int unsigned PHYS_ADDR_W = 64,
   // PMA: non-cacheable region list. Default matches issue #67 (0x4000_0000-0x4FFF_FFFF).
   parameter int unsigned NUM_NC_REGIONS = 1,
-  parameter logic [XLEN-1:0] NC_REGION_BASE  [NUM_NC_REGIONS] = '{MMIO_BASE},
-  parameter logic [XLEN-1:0] NC_REGION_LIMIT [NUM_NC_REGIONS] = '{64'h0000_0000_4FFF_FFFF}
+  parameter logic [kronos_pkg::XLEN-1:0] NC_REGION_BASE  [NUM_NC_REGIONS] = '{kronos_pkg::MMIO_BASE},
+  parameter logic [kronos_pkg::XLEN-1:0] NC_REGION_LIMIT [NUM_NC_REGIONS] = '{64'h0000_0000_4FFF_FFFF}
 ) (
   input  logic                   clk_i,
   input  logic                   rst_ni,
@@ -30,12 +30,12 @@ module kronos_dcache
   input  logic [PHYS_ADDR_W-1:0] addr_i,
   input  logic [2:0]             size_i,
   input  logic                   we_i,
-  input  logic [XLEN-1:0]        wdata_i,
+  input  logic [kronos_pkg::XLEN-1:0]        wdata_i,
   input  logic                   amo_req_i,
   input  logic [4:0]             amo_op_i,
   input  logic                   rsrv_clear_i,
   output logic                   data_valid_o,
-  output logic [XLEN-1:0]        rdata_o,
+  output logic [kronos_pkg::XLEN-1:0]        rdata_o,
   output logic                   sc_success_o,
   output logic                   stall_o,
 
@@ -43,11 +43,11 @@ module kronos_dcache
   input  logic                   ptw_req_valid_i,
   input  logic [55:0]            ptw_req_addr_i,
   input  logic                   ptw_req_we_i,
-  input  logic [XLEN-1:0]        ptw_req_wdata_i,
+  input  logic [kronos_pkg::XLEN-1:0]        ptw_req_wdata_i,
   input  logic                   ptw_req_is_lr_i,
   input  logic                   ptw_req_is_sc_i,
   output logic                   ptw_rsp_valid_o,
-  output logic [XLEN-1:0]        ptw_rsp_rdata_o,
+  output logic [kronos_pkg::XLEN-1:0]        ptw_rsp_rdata_o,
   output logic                   ptw_rsp_sc_ok_o,
 
   // FENCE.I full flush: writeback every dirty line and invalidate.  Hold
@@ -100,7 +100,7 @@ module kronos_dcache
   logic             valid_q [NUM_SETS][NUM_WAYS];
   logic             dirty_q [NUM_SETS][NUM_WAYS];
   logic [2:0]       plru_q  [NUM_SETS];
-  logic [XLEN-1:0]  data_q  [NUM_WAYS][NUM_SETS][BEATS];
+  logic [kronos_pkg::XLEN-1:0]  data_q  [NUM_WAYS][NUM_SETS][BEATS];
 
   // Top-level FSM state
   dcache_state_e state_q;
@@ -115,10 +115,10 @@ module kronos_dcache
   logic [$clog2(NUM_WAYS)-1:0]     victim_q;
   logic [3:0]                      beat_cnt_q;
   logic                            bypass_valid_q;
-  logic [XLEN-1:0]                 bypass_data_q;
+  logic [kronos_pkg::XLEN-1:0]                 bypass_data_q;
   logic                            miss_was_store_q;
-  logic [XLEN-1:0]                 miss_store_data_q;
-  logic [XLEN_BYTES-1:0]           miss_store_strobes_q;
+  logic [kronos_pkg::XLEN-1:0]                 miss_store_data_q;
+  logic [kronos_pkg::XLEN_BYTES-1:0]           miss_store_strobes_q;
   logic [2:0]                      miss_store_off_q;
   logic                            store_done_q;
   logic [3:0]                      wb_beat_cnt_q;
@@ -129,13 +129,13 @@ module kronos_dcache
   logic [PHYS_ADDR_W-1:0] nc_addr_q;
   logic [2:0]             nc_size_q;
   logic                   nc_we_q;
-  logic [XLEN-1:0]        nc_wdata_q;
+  logic [kronos_pkg::XLEN-1:0]        nc_wdata_q;
   logic                   nc_is_ptw_q;     // routes the response back to PTW
 
   // NC read response — captured one cycle in DC_NC_R; used by the
   // load-extension mux for one cycle.
   logic            nc_rsp_valid_q;
-  logic [XLEN-1:0] nc_rsp_data_q;
+  logic [kronos_pkg::XLEN-1:0] nc_rsp_data_q;
   logic         nc_rsp_err_q;     // r.resp != OKAY captured at the same time
 
   // NC write completion — pulses for one cycle when B arrives.
@@ -145,8 +145,8 @@ module kronos_dcache
   // AMO state registers
   logic            amo_pending_q;
   logic [4:0]      amo_op_q;
-  logic [XLEN-1:0] amo_src_q;
-  logic [XLEN-1:0] amo_old_val_q;
+  logic [kronos_pkg::XLEN-1:0] amo_src_q;
+  logic [kronos_pkg::XLEN-1:0] amo_old_val_q;
   logic        amo_done_q;
   logic        amo_is_word_q;     // size_i == 3'd2
   logic [2:0]  amo_addr_off_q;    // addr_i[2:0] captured at AMO issue
@@ -174,7 +174,7 @@ module kronos_dcache
   logic                   eff_req_valid;
   logic [PHYS_ADDR_W-1:0] eff_req_addr;
   logic                   eff_req_we;
-  logic [XLEN-1:0]        eff_req_wdata;
+  logic [kronos_pkg::XLEN-1:0]        eff_req_wdata;
   logic                   eff_req_is_lr;
   logic                   eff_req_is_sc;
   logic [2:0]             eff_req_size;
@@ -204,40 +204,40 @@ module kronos_dcache
   logic dirty_pending;
 
   // AMO intermediate signals for DC_AMO_RMW
-  logic [XLEN-1:0]       amo_cur_beat;
-  logic [XLEN-1:0]       amo_result;
-  logic [XLEN_BYTES-1:0] amo_be;
-  logic [XLEN-1:0]       amo_aligned;
+  logic [kronos_pkg::XLEN-1:0]       amo_cur_beat;
+  logic [kronos_pkg::XLEN-1:0]       amo_result;
+  logic [kronos_pkg::XLEN_BYTES-1:0] amo_be;
+  logic [kronos_pkg::XLEN-1:0]       amo_aligned;
 
   // hit_way_idx: binary encoding of hit way for AMO/SC use
   logic [$clog2(NUM_WAYS)-1:0] hit_way_idx;
 
-  // hit_beat: full XLEN-wide beat from the hit way (consumed by the AMO RMW
+  // hit_beat: full kronos_pkg::XLEN-wide beat from the hit way (consumed by the AMO RMW
   // capture inside the always_ff block below). Declared here so synthesis
   // sees it before its first use (Synth 8-6901).
-  logic [XLEN-1:0] hit_beat;
+  logic [kronos_pkg::XLEN-1:0] hit_beat;
 
   // Pre-computed strobes/aligned-data for store-hit and SC-success write
   // paths.  Promoted from `automatic` block-locals (R2) so the FSM can
   // index them directly inside the per-way write loops.
-  logic [XLEN_BYTES-1:0] st_strobes;
-  logic [XLEN-1:0]       st_aligned;
-  logic [XLEN_BYTES-1:0] sc_strobes;
-  logic [XLEN-1:0]       sc_aligned;
+  logic [kronos_pkg::XLEN_BYTES-1:0] st_strobes;
+  logic [kronos_pkg::XLEN-1:0]       st_aligned;
+  logic [kronos_pkg::XLEN_BYTES-1:0] sc_strobes;
+  logic [kronos_pkg::XLEN-1:0]       sc_aligned;
 
   // Hit data path: select between cache hit and refill bypass
-  logic [XLEN-1:0] beat_for_load;
+  logic [kronos_pkg::XLEN-1:0] beat_for_load;
 
   // Inputs to load_data_full: prefer the in-flight NC request when active.
   logic [2:0] eff_size_for_load;
   logic [2:0] eff_off_for_load;
 
   // Size/sign extension on loads
-  logic [XLEN-1:0] load_data_full;
+  logic [kronos_pkg::XLEN-1:0] load_data_full;
 
   // Aggregate response signal (before LSU/PTW demux)
   logic            rsp_valid_int;
-  logic [XLEN-1:0] rsp_rdata_int;
+  logic [kronos_pkg::XLEN-1:0] rsp_rdata_int;
   logic            sc_success_int;
 
   // route the response to either LSU or PTW
@@ -249,7 +249,7 @@ module kronos_dcache
   // ==========================================================================
   // Functions (kept in-module so they can use parameters)
   // ==========================================================================
-  function automatic logic [XLEN_BYTES-1:0] store_strobes(input logic [2:0] sz, input logic [2:0] off);
+  function automatic logic [kronos_pkg::XLEN_BYTES-1:0] store_strobes(input logic [2:0] sz, input logic [2:0] off);
     case (sz)
       3'd0: return 8'b00000001 << off;
       3'd1: return 8'b00000011 << {off[2:1], 1'b0};
@@ -259,12 +259,12 @@ module kronos_dcache
     endcase
   endfunction
 
-  function automatic logic [XLEN-1:0] store_data_aligned(
+  function automatic logic [kronos_pkg::XLEN-1:0] store_data_aligned(
     input logic [2:0]      sz,
     input logic [2:0]      off,
-    input logic [XLEN-1:0] data
+    input logic [kronos_pkg::XLEN-1:0] data
   );
-    logic [XLEN-1:0] r;
+    logic [kronos_pkg::XLEN-1:0] r;
     case (sz)
       3'd0: r = {8{data[7:0]}};
       3'd1: r = {4{data[15:0]}};
@@ -276,15 +276,15 @@ module kronos_dcache
 
   // funct5 → AMO operation (RISC-V A-extension).  is_word=1 for AMO.W
   // (treat as 32-bit signed/unsigned, sign-extend the result).
-  function automatic logic [XLEN-1:0] amo_compute(
+  function automatic logic [kronos_pkg::XLEN-1:0] amo_compute(
     input logic [4:0]      funct5,
-    input logic [XLEN-1:0] old_val,
-    input logic [XLEN-1:0] src_val,
+    input logic [kronos_pkg::XLEN-1:0] old_val,
+    input logic [kronos_pkg::XLEN-1:0] src_val,
     input logic            is_word
   );
-    logic [XLEN-1:0] a;
-    logic [XLEN-1:0] b;
-    logic [XLEN-1:0] r;
+    logic [kronos_pkg::XLEN-1:0] a;
+    logic [kronos_pkg::XLEN-1:0] b;
+    logic [kronos_pkg::XLEN-1:0] r;
     a = is_word ? {{32{old_val[31]}}, old_val[31:0]} : old_val;
     b = is_word ? {{32{src_val[31]}}, src_val[31:0]} : src_val;
     unique case (funct5)
@@ -334,7 +334,7 @@ module kronos_dcache
     eff_req_valid = 1'b0;
     eff_req_addr  = {PHYS_ADDR_W{1'b0}};
     eff_req_we    = 1'b0;
-    eff_req_wdata = {XLEN{1'b0}};
+    eff_req_wdata = {kronos_pkg::XLEN{1'b0}};
     eff_req_is_lr = 1'b0;
     eff_req_is_sc = 1'b0;
     eff_req_size  = 3'd0;
@@ -442,7 +442,7 @@ module kronos_dcache
   // hit_beat: full 64-bit beat from the hit way (consumed by the AMO RMW
   // capture inside the always_ff block below).
   always_comb begin
-    hit_beat = {XLEN{1'b0}};
+    hit_beat = {kronos_pkg::XLEN{1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
       if (hit_way_oh[w]) hit_beat = data_q[w][set_idx][beat_idx];
     end
@@ -471,18 +471,18 @@ module kronos_dcache
       victim_q       <= {$clog2(NUM_WAYS){1'b0}};
       beat_cnt_q     <= 4'd0;
       bypass_valid_q       <= 1'b0;
-      bypass_data_q        <= {XLEN{1'b0}};
+      bypass_data_q        <= {kronos_pkg::XLEN{1'b0}};
       miss_was_store_q     <= 1'b0;
-      miss_store_data_q    <= {XLEN{1'b0}};
-      miss_store_strobes_q <= {XLEN_BYTES{1'b0}};
+      miss_store_data_q    <= {kronos_pkg::XLEN{1'b0}};
+      miss_store_strobes_q <= {kronos_pkg::XLEN_BYTES{1'b0}};
       miss_store_off_q     <= 3'b0;
       store_done_q         <= 1'b0;
       wb_beat_cnt_q        <= 4'd0;
       evict_tag_q          <= {TAG_W{1'b0}};
       amo_pending_q        <= 1'b0;
       amo_op_q             <= 5'b0;
-      amo_src_q            <= {XLEN{1'b0}};
-      amo_old_val_q        <= {XLEN{1'b0}};
+      amo_src_q            <= {kronos_pkg::XLEN{1'b0}};
+      amo_old_val_q        <= {kronos_pkg::XLEN{1'b0}};
       amo_done_q           <= 1'b0;
       amo_is_word_q        <= 1'b0;
       amo_addr_off_q       <= 3'b0;
@@ -496,10 +496,10 @@ module kronos_dcache
       nc_addr_q            <= {PHYS_ADDR_W{1'b0}};
       nc_size_q            <= 3'b0;
       nc_we_q              <= 1'b0;
-      nc_wdata_q           <= {XLEN{1'b0}};
+      nc_wdata_q           <= {kronos_pkg::XLEN{1'b0}};
       nc_is_ptw_q          <= 1'b0;
       nc_rsp_valid_q       <= 1'b0;
-      nc_rsp_data_q        <= {XLEN{1'b0}};
+      nc_rsp_data_q        <= {kronos_pkg::XLEN{1'b0}};
       nc_rsp_err_q         <= 1'b0;
       nc_b_done_q          <= 1'b0;
       nc_b_err_q           <= 1'b0;
@@ -518,7 +518,7 @@ module kronos_dcache
       for (int w = 0; w < NUM_WAYS; w++) begin
         for (int s = 0; s < NUM_SETS; s++) begin
           for (int b = 0; b < BEATS; b++) begin
-            data_q[w][s][b] <= {XLEN{1'b0}};
+            data_q[w][s][b] <= {kronos_pkg::XLEN{1'b0}};
           end
         end
       end
@@ -947,7 +947,7 @@ module kronos_dcache
     axi_req_o.aw_valid = (state_q == DC_WB_AW) | (state_q == DC_FLUSH_AW);
 
     axi_req_o.w.data   = data_q[victim_q][miss_set_q][wb_beat_cnt_q[BEAT_IDX_W-1:0]];
-    axi_req_o.w.strb   = {XLEN_BYTES{1'b1}};
+    axi_req_o.w.strb   = {kronos_pkg::XLEN_BYTES{1'b1}};
     axi_req_o.w.last   = (wb_beat_cnt_q == 4'd7);
     axi_req_o.w_valid  = (state_q == DC_WB_W) | (state_q == DC_FLUSH_W);
 
@@ -983,7 +983,7 @@ module kronos_dcache
     amo_result   = amo_compute(amo_op_q, amo_old_val_q, amo_src_q, amo_is_word_q);
     amo_be       = amo_is_word_q
                      ? store_strobes(3'd2, amo_addr_off_q)
-                     : {XLEN_BYTES{1'b1}};
+                     : {kronos_pkg::XLEN_BYTES{1'b1}};
     amo_aligned  = amo_is_word_q
                      ? store_data_aligned(3'd2, amo_addr_off_q, amo_result)
                      : amo_result;

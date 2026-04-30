@@ -22,7 +22,7 @@ module kronos_align
   input  logic              clk_i,
   input  logic              rst_ni,
   input  logic [31:0]       pc_i,           // current fetch PC (used for cross-page detection)
-  input  logic [INST_W-1:0] rdata_i,
+  input  logic [kronos_pkg::INST_W-1:0] rdata_i,
   input  logic              rvalid_i,
   input  logic              stall_i,        // hold state when pipeline can't accept output
   input  logic              flush_i,
@@ -36,7 +36,7 @@ module kronos_align
   // fetch.  When translate_fetch_i=1 the cross-page fetch is conservatively
   // converted to an instruction-page fault.
   input  logic              translate_fetch_i,
-  output logic [INST_W-1:0] instr_o,
+  output logic [kronos_pkg::INST_W-1:0] instr_o,
   output logic              instr_valid_o,
   output logic              is_16b_o,
   output logic              align_stall_o,
@@ -70,10 +70,10 @@ module kronos_align
   // Prevents a permanent deadlock where need_upper_q gets stuck at 1 when a
   // muldiv (or other multi-cycle) stall coincides with the r_valid pulse.
   logic              span_valid_q;
-  logic [INST_W-1:0] span_instr_q;
+  logic [kronos_pkg::INST_W-1:0] span_instr_q;
 
   // Combinational from decompress instances
-  logic [INST_W-1:0] decomp_lower, decomp_upper, decomp_buf;
+  logic [kronos_pkg::INST_W-1:0] decomp_lower, decomp_upper, decomp_buf;
   logic              decomp_lower_ill, decomp_upper_ill, decomp_buf_ill;
 
   // cross-page 32-bit fetch detection
@@ -100,7 +100,7 @@ module kronos_align
   // Output logic (combinational)
   // -------------------------------------------------------------------------
   always_comb begin
-    instr_o            = {INST_W{1'b0}};
+    instr_o            = {kronos_pkg::INST_W{1'b0}};
     instr_valid_o      = 1'b0;
     is_16b_o           = 1'b0;
     align_stall_o      = need_upper_q;
@@ -186,7 +186,7 @@ module kronos_align
       need_upper_q <= 1'b0;
       skip_lower_q <= 1'b0;
       span_valid_q <= 1'b0;
-      span_instr_q <= {INST_W{1'b0}};
+      span_instr_q <= {kronos_pkg::INST_W{1'b0}};
     end else if (flush_i) begin
       buf_valid_q  <= 1'b0;
       buf_data_q   <= {16{1'b0}};

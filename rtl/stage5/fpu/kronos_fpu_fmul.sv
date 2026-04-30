@@ -132,8 +132,8 @@ module kronos_fpu_fmul
     logic signed [EXP_EXT_W-1:0] ea_ext, eb_ext;
 
     // NaN-unbox single operands (mirrors kronos_fpu_fmisc).
-    a_s_l = (a_i[63:32] == FP_NANBOX_UPPER) ? a_i[31:0] : FP_CANON_QNAN_S;
-    b_s_l = (b_i[63:32] == FP_NANBOX_UPPER) ? b_i[31:0] : FP_CANON_QNAN_S;
+    a_s_l = (a_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? a_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
+    b_s_l = (b_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? b_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
     a_s_unb = a_s_l;
     b_s_unb = b_s_l;
 
@@ -854,39 +854,39 @@ module kronos_fpu_fmul
     // -------- Build result --------
     if (s4_any_snan_q) begin
       // sNaN operand → invalid, canonical qNaN
-      s5_fflags_c[FP_FFLAG_NV] = 1'b1;
-      s5_result_c = s4_fmt_d_q ? FP_CANON_QNAN_D
-                                : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+      s5_fflags_c[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+      s5_result_c = s4_fmt_d_q ? kronos_pkg::FP_CANON_QNAN_D
+                                : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
     end else if (s4_inf_times_zero_q) begin
       // inf * 0 → invalid, canonical qNaN
-      s5_fflags_c[FP_FFLAG_NV] = 1'b1;
-      s5_result_c = s4_fmt_d_q ? FP_CANON_QNAN_D
-                                : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+      s5_fflags_c[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+      s5_result_c = s4_fmt_d_q ? kronos_pkg::FP_CANON_QNAN_D
+                                : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
     end else if (s4_any_nan_q) begin
       // qNaN propagation → canonical qNaN, no flag
-      s5_result_c = s4_fmt_d_q ? FP_CANON_QNAN_D
-                                : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+      s5_result_c = s4_fmt_d_q ? kronos_pkg::FP_CANON_QNAN_D
+                                : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
     end else if (s4_res_is_inf_q) begin
       // inf * finite(non-zero) → signed infinity, no flag
       if (s4_fmt_d_q) begin
         s5_result_c = {s4_sign_q, 11'h7FF, 52'd0};
       end else begin
-        s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 8'hFF, 23'd0};
+        s5_result_c = {kronos_pkg::FP_NANBOX_UPPER, s4_sign_q, 8'hFF, 23'd0};
       end
     end else if (s4_res_is_zero_q) begin
       // zero * finite → signed zero, no flag
       if (s4_fmt_d_q) begin
         s5_result_c = {s4_sign_q, 63'd0};
       end else begin
-        s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 31'd0};
+        s5_result_c = {kronos_pkg::FP_NANBOX_UPPER, s4_sign_q, 31'd0};
       end
     end else begin
       // Normal numeric path — check overflow/underflow against format range.
       if (s4_fmt_d_q) begin
         overflow = (exp_rnd >= 13'sd2047);
         if (overflow) begin
-          s5_fflags_c[FP_FFLAG_OF] = 1'b1;
-          s5_fflags_c[FP_FFLAG_NX] = 1'b1;
+          s5_fflags_c[kronos_pkg::FP_FFLAG_OF] = 1'b1;
+          s5_fflags_c[kronos_pkg::FP_FFLAG_NX] = 1'b1;
           // Rounding mode controls whether we produce inf or max-finite.
           unique case (s4_rm_q)
             3'b001: // RTZ → max-finite
@@ -909,29 +909,29 @@ module kronos_fpu_fmul
           end
           pack_frac_d = mant_rnd[D_SIG_W-1:0];
           s5_result_c = {s4_sign_q, pack_exp_d, pack_frac_d};
-          s5_fflags_c[FP_FFLAG_NX] = inexact;
+          s5_fflags_c[kronos_pkg::FP_FFLAG_NX] = inexact;
           // Underflow: tiny before rounding AND inexact after rounding
           // (IEEE 754 "after rounding" underflow flag semantics).
-          s5_fflags_c[FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_d == 11'd0);
+          s5_fflags_c[kronos_pkg::FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_d == 11'd0);
         end
       end else begin
         overflow = (exp_rnd >= 13'sd255);
         if (overflow) begin
-          s5_fflags_c[FP_FFLAG_OF] = 1'b1;
-          s5_fflags_c[FP_FFLAG_NX] = 1'b1;
+          s5_fflags_c[kronos_pkg::FP_FFLAG_OF] = 1'b1;
+          s5_fflags_c[kronos_pkg::FP_FFLAG_NX] = 1'b1;
           unique case (s4_rm_q)
             3'b001:
-              s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 8'hFE, {S_SIG_W{1'b1}}};
+              s5_result_c = {kronos_pkg::FP_NANBOX_UPPER, s4_sign_q, 8'hFE, {S_SIG_W{1'b1}}};
             3'b010:
               s5_result_c = s4_sign_q
-                ? {FP_NANBOX_UPPER, 1'b1, 8'hFF, 23'd0}
-                : {FP_NANBOX_UPPER, 1'b0, 8'hFE, {S_SIG_W{1'b1}}};
+                ? {kronos_pkg::FP_NANBOX_UPPER, 1'b1, 8'hFF, 23'd0}
+                : {kronos_pkg::FP_NANBOX_UPPER, 1'b0, 8'hFE, {S_SIG_W{1'b1}}};
             3'b011:
               s5_result_c = s4_sign_q
-                ? {FP_NANBOX_UPPER, 1'b1, 8'hFE, {S_SIG_W{1'b1}}}
-                : {FP_NANBOX_UPPER, 1'b0, 8'hFF, 23'd0};
+                ? {kronos_pkg::FP_NANBOX_UPPER, 1'b1, 8'hFE, {S_SIG_W{1'b1}}}
+                : {kronos_pkg::FP_NANBOX_UPPER, 1'b0, 8'hFF, 23'd0};
             default:
-              s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, 8'hFF, 23'd0};
+              s5_result_c = {kronos_pkg::FP_NANBOX_UPPER, s4_sign_q, 8'hFF, 23'd0};
           endcase
         end else begin
           if (exp_rnd <= 13'sd0) begin
@@ -940,9 +940,9 @@ module kronos_fpu_fmul
             pack_exp_s = exp_rnd[S_EXP_W-1:0];
           end
           pack_frac_s = mant_rnd[S_SIG_W-1:0];
-          s5_result_c = {FP_NANBOX_UPPER, s4_sign_q, pack_exp_s, pack_frac_s};
-          s5_fflags_c[FP_FFLAG_NX] = inexact;
-          s5_fflags_c[FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_s == 8'd0);
+          s5_result_c = {kronos_pkg::FP_NANBOX_UPPER, s4_sign_q, pack_exp_s, pack_frac_s};
+          s5_fflags_c[kronos_pkg::FP_FFLAG_NX] = inexact;
+          s5_fflags_c[kronos_pkg::FP_FFLAG_UF] = underflow_tiny & inexact & (pack_exp_s == 8'd0);
         end
       end
     end

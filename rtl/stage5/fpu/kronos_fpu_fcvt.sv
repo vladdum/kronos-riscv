@@ -72,10 +72,10 @@ module kronos_fpu_fcvt
     endcase
 
     if (s1_src_is_single) begin
-      if (a_i[63:32] == FP_NANBOX_UPPER) begin
+      if (a_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) begin
         s1_a_d = {32'h0, a_i[31:0]};
       end else begin
-        s1_a_d = {32'h0, FP_CANON_QNAN_S};
+        s1_a_d = {32'h0, kronos_pkg::FP_CANON_QNAN_S};
       end
     end else begin
       s1_a_d = a_i;
@@ -431,8 +431,8 @@ module kronos_fpu_fcvt
       end else if ((sd_sexp == 8'hFF) && (sd_smant == 23'd0)) begin
         d_result = {sd_sign, 11'h7FF, 52'd0};
       end else if (sd_sexp == 8'hFF) begin
-        if (sd_smant[22] == 1'b0) fs_flags[FP_FFLAG_NV] = 1'b1;
-        d_result = FP_CANON_QNAN_D;
+        if (sd_smant[22] == 1'b0) fs_flags[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+        d_result = kronos_pkg::FP_CANON_QNAN_D;
       end else if (sd_sexp == 8'd0) begin
         integer k;
         logic [22:0] m;
@@ -471,8 +471,8 @@ module kronos_fpu_fcvt
       end else if ((ds_dexp == 11'h7FF) && (ds_dmant == 52'd0)) begin
         s_result = {ds_sign, 8'hFF, 23'd0};
       end else if (ds_dexp == 11'h7FF) begin
-        if (ds_dmant[51] == 1'b0) fs_flags[FP_FFLAG_NV] = 1'b1;
-        s_result = FP_CANON_QNAN_S;
+        if (ds_dmant[51] == 1'b0) fs_flags[kronos_pkg::FP_FFLAG_NV] = 1'b1;
+        s_result = kronos_pkg::FP_CANON_QNAN_S;
       end else begin
         if (ds_dexp == 11'd0) begin
           logic nz_in;
@@ -485,12 +485,12 @@ module kronos_fpu_fcvt
             default: s_result = {ds_sign, 31'd0};
           endcase
           if (nz_in) begin
-            fs_flags[FP_FFLAG_UF] = 1'b1;
-            fs_flags[FP_FFLAG_NX] = 1'b1;
+            fs_flags[kronos_pkg::FP_FFLAG_UF] = 1'b1;
+            fs_flags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
           end
         end else if (ds_unbiased > 13'sd127) begin
-          fs_flags[FP_FFLAG_OF] = 1'b1;
-          fs_flags[FP_FFLAG_NX] = 1'b1;
+          fs_flags[kronos_pkg::FP_FFLAG_OF] = 1'b1;
+          fs_flags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
           unique case (s1_rm_q)
             3'b001: s_result = {ds_sign, 8'hFE, 23'h7FFFFF};
             3'b010: s_result = ds_sign ? {1'b1, 8'hFF, 23'd0} : {1'b0, 8'hFE, 23'h7FFFFF};
@@ -528,7 +528,7 @@ module kronos_fpu_fcvt
           endcase
 
           subn_rounded = subn_sig + (subn_round_up ? 24'd1 : 24'd0);
-          if (subn_g | subn_sticky) fs_flags[FP_FFLAG_NX] = 1'b1;
+          if (subn_g | subn_sticky) fs_flags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
 
           if (subn_rounded[23]) begin
             subn_mant = {23{1'b0}};
@@ -540,7 +540,7 @@ module kronos_fpu_fcvt
           s_result = {ds_sign, subn_exp, subn_mant};
 
           if ((subn_g | subn_sticky) && (subn_exp == 8'd0))
-            fs_flags[FP_FFLAG_UF] = 1'b1;
+            fs_flags[kronos_pkg::FP_FFLAG_UF] = 1'b1;
         end else begin
           // Normal range: round 52-bit mantissa to 23 bits
           ds_sig    = {1'b1, ds_dmant[51:29]};
@@ -557,13 +557,13 @@ module kronos_fpu_fcvt
             default: ds_round_up = ds_g && (ds_sticky || ds_lsb);
           endcase
           ds_rounded = {1'b0, ds_sig} + (ds_round_up ? 25'd1 : 25'd0);
-          if (ds_g || ds_sticky) fs_flags[FP_FFLAG_NX] = 1'b1;
+          if (ds_g || ds_sticky) fs_flags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
 
           ds_sexp_out = ds_unbiased[7:0] + 8'd127;
           if (ds_rounded[24]) begin
             if ((ds_sexp_out + 8'd1) == 8'hFF) begin
               s_result = {ds_sign, 8'hFF, 23'd0};
-              fs_flags[FP_FFLAG_OF] = 1'b1;
+              fs_flags[kronos_pkg::FP_FFLAG_OF] = 1'b1;
             end else begin
               s_result = {ds_sign, ds_sexp_out + 8'd1, 23'd0};
             end
@@ -572,7 +572,7 @@ module kronos_fpu_fcvt
           end
         end
       end
-      s2c_ds_result = {FP_NANBOX_UPPER, s_result};
+      s2c_ds_result = {kronos_pkg::FP_NANBOX_UPPER, s_result};
       s2c_ds_fflags = fs_flags;
     end
   end
@@ -697,10 +697,10 @@ module kronos_fpu_fcvt
     ifp_fflags = {5{1'b0}};
     if (s2_fmt_d_q) begin
       ifp_result = d_bits;
-      if (!s2_ifp_imag_zero && s2_ifp_d_inexact) ifp_fflags[FP_FFLAG_NX] = 1'b1;
+      if (!s2_ifp_imag_zero && s2_ifp_d_inexact) ifp_fflags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
     end else begin
-      ifp_result = {FP_NANBOX_UPPER, s_bits};
-      if (!s2_ifp_imag_zero && s2_ifp_s_inexact) ifp_fflags[FP_FFLAG_NX] = 1'b1;
+      ifp_result = {kronos_pkg::FP_NANBOX_UPPER, s_bits};
+      if (!s2_ifp_imag_zero && s2_ifp_s_inexact) ifp_fflags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
     end
 
     // --- FP -> INT rounding (65-bit conditional increment + sign + range check) ---
@@ -713,11 +713,11 @@ module kronos_fpu_fcvt
 
     if (s2_fpi_src_is_nan) begin
       fpi_result               = s2_fpi_target_max;
-      fpi_fflags[FP_FFLAG_NV]  = 1'b1;
+      fpi_fflags[kronos_pkg::FP_FFLAG_NV]  = 1'b1;
     end else if (s2_fpi_overflow) begin
       if (s2_fpi_neg_of) fpi_result = s2_fpi_target_is_signed ? s2_fpi_target_min : 64'd0;
       else               fpi_result = s2_fpi_target_max;
-      fpi_fflags[FP_FFLAG_NV] = 1'b1;
+      fpi_fflags[kronos_pkg::FP_FFLAG_NV] = 1'b1;
     end else begin
       if (s2_fpi_target_is_32b && s2_fpi_target_is_signed) begin
         if (s2_fpi_src_sign) begin
@@ -750,7 +750,7 @@ module kronos_fpu_fcvt
       if (over_after_round) begin
         if (s2_fpi_src_sign) fpi_result = s2_fpi_target_is_signed ? s2_fpi_target_min : 64'd0;
         else                 fpi_result = s2_fpi_target_max;
-        fpi_fflags[FP_FFLAG_NV] = 1'b1;
+        fpi_fflags[kronos_pkg::FP_FFLAG_NV] = 1'b1;
       end else begin
         signed_val = s2_fpi_src_sign ? (~mag + 64'd1) : mag;
         if (s2_fpi_target_is_32b) begin
@@ -758,7 +758,7 @@ module kronos_fpu_fcvt
         end else begin
           fpi_result = signed_val;
         end
-        if (s2_fpi_is_inexact) fpi_fflags[FP_FFLAG_NX] = 1'b1;
+        if (s2_fpi_is_inexact) fpi_fflags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
       end
     end
 

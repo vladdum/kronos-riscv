@@ -33,8 +33,8 @@ module kronos_fpu_fdiv_core
   // Constants
   // -------------------------------------------------------------------------
   // N = mantissa width + 4 guard bits (3 fractional + 1 integer)
-  localparam int unsigned N_S = FP_S_MANT_W + 4;  // 27 iterations for single
-  localparam int unsigned N_D = FP_D_MANT_W + 4;  // 56 iterations for double
+  localparam int unsigned N_S = kronos_pkg::FP_S_MANT_W + 4;  // 27 iterations for single
+  localparam int unsigned N_D = kronos_pkg::FP_D_MANT_W + 4;  // 56 iterations for double
 
   // -------------------------------------------------------------------------
   // FSM encoding

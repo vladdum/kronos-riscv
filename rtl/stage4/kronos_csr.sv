@@ -5,7 +5,7 @@
 // kronos_csr.sv — machine-mode CSR file for Stage 4 (RV64)
 // Implements mstatus, misa, mie, mtvec, mscratch, mepc, mcause, mip.
 // Handles trap entry (ECALL/EBREAK/illegal), MRET, and CSR read/write.
-// All CSR data paths are 64 bits wide (MXL=10, XLEN=64).
+// All CSR data paths are 64 bits wide (MXL=10, kronos_pkg::XLEN=64).
 module kronos_csr #(
   // MISA extension bits [25:0]. Default = I-only (bit 8).
   // Stage 4 advertises I+M+A+C as appropriate via the top-level parameter.
