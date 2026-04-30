@@ -261,8 +261,8 @@ module kronos_fpu_fadd
     b_d_nan  = b_d_snan || b_d_qnan;
 
     // --- Single decomposition (with NaN-unbox) ---
-    a_s_bits = (a_i[63:32] == FP_NANBOX_UPPER) ? a_i[31:0] : FP_CANON_QNAN_S;
-    b_s_bits = (b_i[63:32] == FP_NANBOX_UPPER) ? b_i[31:0] : FP_CANON_QNAN_S;
+    a_s_bits = (a_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? a_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
+    b_s_bits = (b_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? b_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
     a_s_sign = a_s_bits[31];
     b_s_sign = b_s_bits[31];
     a_s_expf = a_s_bits[30:23];
@@ -368,26 +368,26 @@ module kronos_fpu_fadd
 
       if (a_nan_sel || b_nan_sel) begin
         s1_d.is_special  = 1'b1;
-        s1_d.special_res = fmt_d_i ? FP_CANON_QNAN_D
-                                   : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
+        s1_d.special_res = fmt_d_i ? kronos_pkg::FP_CANON_QNAN_D
+                                   : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
         if (a_snan_sel || b_snan_sel) begin
-          s1_d.special_flg[FP_FFLAG_NV] = 1'b1;
+          s1_d.special_flg[kronos_pkg::FP_FFLAG_NV] = 1'b1;
         end
       end else if (both_inf_opposite) begin
         s1_d.is_special  = 1'b1;
-        s1_d.special_res = fmt_d_i ? FP_CANON_QNAN_D
-                                   : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-        s1_d.special_flg[FP_FFLAG_NV] = 1'b1;
+        s1_d.special_res = fmt_d_i ? kronos_pkg::FP_CANON_QNAN_D
+                                   : {kronos_pkg::FP_NANBOX_UPPER, kronos_pkg::FP_CANON_QNAN_S};
+        s1_d.special_flg[kronos_pkg::FP_FFLAG_NV] = 1'b1;
       end else if (a_inf_sel || b_inf_sel) begin
         s1_d.is_special = 1'b1;
         // Propagate the infinity that's present; same sign as it (b sign already
         // flipped for FSUB).
         if (a_inf_sel) begin
           s1_d.special_res = fmt_d_i ? {a_sign_sel, 11'h7FF, 52'd0}
-                                     : {FP_NANBOX_UPPER, a_sign_sel, 8'hFF, 23'd0};
+                                     : {kronos_pkg::FP_NANBOX_UPPER, a_sign_sel, 8'hFF, 23'd0};
         end else begin
           s1_d.special_res = fmt_d_i ? {b_sign_pre, 11'h7FF, 52'd0}
-                                     : {FP_NANBOX_UPPER, b_sign_pre, 8'hFF, 23'd0};
+                                     : {kronos_pkg::FP_NANBOX_UPPER, b_sign_pre, 8'hFF, 23'd0};
         end
       end else if (both_zero_early) begin
         // 0 + 0: sign(result) = sign(a) & sign(b) for eff_sub=0; else for RDN,
@@ -402,7 +402,7 @@ module kronos_fpu_fadd
             zero_sign = (rm_i == FP_RM_RDN);
           end
           s1_d.special_res = fmt_d_i ? {zero_sign, 63'd0}
-                                     : {FP_NANBOX_UPPER, zero_sign, 31'd0};
+                                     : {kronos_pkg::FP_NANBOX_UPPER, zero_sign, 31'd0};
         end
       end
     end
@@ -801,7 +801,7 @@ module kronos_fpu_fadd
       s5_flags  = s4_q.special_flg;
     end else if (s4_q.result_zero) begin
       if (s4_q.fmt_d) s5_result = {s4_q.res_sign, 63'd0};
-      else            s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, 31'd0};
+      else            s5_result = {kronos_pkg::FP_NANBOX_UPPER, s4_q.res_sign, 31'd0};
     end else begin : pack_blk
       if (s4_q.fmt_d) begin
         mant_w = 52;
@@ -812,8 +812,8 @@ module kronos_fpu_fadd
       end
 
       if (s4_q.overflow) begin
-        s5_flags[FP_FFLAG_OF] = 1'b1;
-        s5_flags[FP_FFLAG_NX] = 1'b1;
+        s5_flags[kronos_pkg::FP_FFLAG_OF] = 1'b1;
+        s5_flags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
         unique case (s4_q.rm)
           FP_RM_RNE: to_inf = 1'b1;
           FP_RM_RTZ: to_inf = 1'b0;
@@ -826,8 +826,8 @@ module kronos_fpu_fadd
           if (to_inf) s5_result = {s4_q.res_sign, 11'h7FF, 52'd0};
           else        s5_result = {s4_q.res_sign, 11'h7FE, {52{1'b1}}};
         end else begin
-          if (to_inf) s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, 8'hFF, 23'd0};
-          else        s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, 8'hFE, {23{1'b1}}};
+          if (to_inf) s5_result = {kronos_pkg::FP_NANBOX_UPPER, s4_q.res_sign, 8'hFF, 23'd0};
+          else        s5_result = {kronos_pkg::FP_NANBOX_UPPER, s4_q.res_sign, 8'hFE, {23{1'b1}}};
         end
       end else begin
         if (s4_q.fmt_d) begin
@@ -839,11 +839,11 @@ module kronos_fpu_fadd
           out_mant_s = s4_q.rounded_sig[SIG_W-2 -: 23];
           if (s4_q.is_subnormal_out) out_expf_s = 8'd0;
           else                       out_expf_s = 8'(s4_q.cur_exp + bias);
-          s5_result = {FP_NANBOX_UPPER, s4_q.res_sign, out_expf_s, out_mant_s};
+          s5_result = {kronos_pkg::FP_NANBOX_UPPER, s4_q.res_sign, out_expf_s, out_mant_s};
         end
 
-        if (s4_q.inexact) s5_flags[FP_FFLAG_NX] = 1'b1;
-        if (s4_q.is_subnormal_out && s4_q.inexact) s5_flags[FP_FFLAG_UF] = 1'b1;
+        if (s4_q.inexact) s5_flags[kronos_pkg::FP_FFLAG_NX] = 1'b1;
+        if (s4_q.is_subnormal_out && s4_q.inexact) s5_flags[kronos_pkg::FP_FFLAG_UF] = 1'b1;
       end
     end
   end

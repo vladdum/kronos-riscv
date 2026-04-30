@@ -26,7 +26,7 @@ module kronos_icache
   input  logic                   pmp_fault_i,
   input  logic                   tlb_miss_i,
   output logic                   data_valid_o,
-  output logic [INST_W-1:0]      data_o,
+  output logic [kronos_pkg::INST_W-1:0]      data_o,
   output logic                   stall_o,
 
   // Downstream AXI4 read master
@@ -41,10 +41,10 @@ module kronos_icache
   localparam int unsigned NUM_SETS    = CACHE_BYTES / (NUM_WAYS * LINE_BYTES);
   localparam int unsigned SET_IDX_W   = $clog2(NUM_SETS);
   localparam int unsigned OFFSET_W    = $clog2(LINE_BYTES);
-  localparam int unsigned WORD_IDX_W  = OFFSET_W - $clog2(INST_W/8); // 32-bit words/line
+  localparam int unsigned WORD_IDX_W  = OFFSET_W - $clog2(kronos_pkg::INST_W/8); // 32-bit words/line
   localparam int unsigned TAG_W       = PHYS_ADDR_W - SET_IDX_W - OFFSET_W;
-  localparam int unsigned WORDS       = LINE_BYTES / (INST_W/8);     // INST_W words/line = 16
-  localparam int unsigned BEATS       = LINE_BYTES / XLEN_BYTES;     // XLEN-beats/line = 8
+  localparam int unsigned WORDS       = LINE_BYTES / (kronos_pkg::INST_W/8);     // kronos_pkg::INST_W words/line = 16
+  localparam int unsigned BEATS       = LINE_BYTES / kronos_pkg::XLEN_BYTES;     // kronos_pkg::XLEN-beats/line = 8
   localparam int unsigned BEAT_CNT_W  = $clog2(BEATS);               // 3 bits
 
   // ---- Types ----------------------------------------------------------------
@@ -55,7 +55,7 @@ module kronos_icache
   } icache_state_e;
 
   // ---- State registers ------------------------------------------------------
-  logic [INST_W-1:0]           data_q  [NUM_WAYS][NUM_SETS][WORDS];
+  logic [kronos_pkg::INST_W-1:0]           data_q  [NUM_WAYS][NUM_SETS][WORDS];
   logic [TAG_W-1:0]            tag_q   [NUM_SETS][NUM_WAYS];
   logic                        valid_q [NUM_SETS][NUM_WAYS];
   logic [2:0]                  plru_q  [NUM_SETS];
@@ -68,7 +68,7 @@ module kronos_icache
   logic [BEAT_CNT_W-1:0]       beat_cnt_q;    // 3 bits: 0..7
   logic                        miss_addr2_q;  // addr[2] within the critical 64-bit beat
   logic                        bypass_valid_q;
-  logic [INST_W-1:0]           bypass_data_q;
+  logic [kronos_pkg::INST_W-1:0]           bypass_data_q;
 
   // ---- Combinational signals ------------------------------------------------
   logic [SET_IDX_W-1:0]        set_idx;
@@ -80,13 +80,13 @@ module kronos_icache
   logic [$clog2(NUM_WAYS)-1:0] victim_pick;
   logic [WORD_IDX_W-1:0]       beat_base_word;
   logic [BEAT_CNT_W-1:0]       beat_idx;
-  logic [INST_W-1:0]           hit_word;
+  logic [kronos_pkg::INST_W-1:0]           hit_word;
   logic                        _unused;
 
   // ---- Address breakdown ----------------------------------------------------
   assign set_idx  = addr_i[SET_IDX_W + OFFSET_W - 1 : OFFSET_W];
   assign tag_in   = addr_i[PHYS_ADDR_W-1 : SET_IDX_W + OFFSET_W];
-  assign word_idx = addr_i[OFFSET_W-1 : $clog2(INST_W/8)];
+  assign word_idx = addr_i[OFFSET_W-1 : $clog2(kronos_pkg::INST_W/8)];
 
   // ---- Hit logic ------------------------------------------------------------
   always_comb begin
@@ -151,7 +151,7 @@ module kronos_icache
       beat_cnt_q     <= {BEAT_CNT_W{1'b0}};
       miss_addr2_q   <= 1'b0;
       bypass_valid_q <= 1'b0;
-      bypass_data_q  <= {INST_W{1'b0}};
+      bypass_data_q  <= {kronos_pkg::INST_W{1'b0}};
       for (int s = 0; s < NUM_SETS; s++) begin
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
@@ -163,7 +163,7 @@ module kronos_icache
       for (int w = 0; w < NUM_WAYS; w++) begin
         for (int s = 0; s < NUM_SETS; s++) begin
           for (int wd = 0; wd < WORDS; wd++) begin
-            data_q[w][s][wd] <= {INST_W{1'b0}};
+            data_q[w][s][wd] <= {kronos_pkg::INST_W{1'b0}};
           end
         end
       end
@@ -199,14 +199,14 @@ module kronos_icache
             // miss_beat = miss_word_q[WORD_IDX_W-1:1] (upper bits, beat-aligned).
             // Each beat covers two 32-bit words: indices beat*2 and beat*2+1.
             // The WRAP offset is a beat index; we compute the 32-bit word addresses.
-            data_q[victim_q][miss_set_q][beat_base_word]     <= axi_rsp_i.r.data[INST_W-1:0];
-            data_q[victim_q][miss_set_q][beat_base_word + 1] <= axi_rsp_i.r.data[XLEN-1:INST_W];
+            data_q[victim_q][miss_set_q][beat_base_word]     <= axi_rsp_i.r.data[kronos_pkg::INST_W-1:0];
+            data_q[victim_q][miss_set_q][beat_base_word + 1] <= axi_rsp_i.r.data[kronos_pkg::XLEN-1:INST_W];
             beat_cnt_q <= beat_cnt_q + 1'b1;
             // CWF bypass: expose the correct 32-bit half of the first beat.
             if (beat_cnt_q == {BEAT_CNT_W{1'b0}}) begin
               bypass_valid_q <= 1'b1;
-              bypass_data_q  <= miss_addr2_q ? axi_rsp_i.r.data[XLEN-1:INST_W]
-                                             : axi_rsp_i.r.data[INST_W-1:0];
+              bypass_data_q  <= miss_addr2_q ? axi_rsp_i.r.data[kronos_pkg::XLEN-1:INST_W]
+                                             : axi_rsp_i.r.data[kronos_pkg::INST_W-1:0];
             end
             if (axi_rsp_i.r.last) begin
               tag_q[miss_set_q][victim_q]   <= miss_tag_q;
@@ -247,7 +247,7 @@ module kronos_icache
 
   // ---- Hit data path (way-select mux on data_q) ------------------------------
   always_comb begin
-    hit_word = {INST_W{1'b0}};
+    hit_word = {kronos_pkg::INST_W{1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
       if (hit_way_oh[w]) hit_word = data_q[w][set_idx][word_idx];
     end

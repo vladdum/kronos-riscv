@@ -72,7 +72,7 @@ module tb_fpu_fma;
     int unsigned sf_r;
     byte unsigned sf_f;
     apply5(o, 1'b0, r,
-           {FP_NANBOX_UPPER, as}, {FP_NANBOX_UPPER, bs}, {FP_NANBOX_UPPER, cs});
+           {kronos_pkg::FP_NANBOX_UPPER, as}, {kronos_pkg::FP_NANBOX_UPPER, bs}, {kronos_pkg::FP_NANBOX_UPPER, cs});
     sf_a = as;
     sf_b = bs;
     sf_c = cs;
@@ -139,9 +139,9 @@ module tb_fpu_fma;
     // ------- Directed S-precision corner cases -------
     // +0 * +0 + (-0) in RNE -> +0
     apply5(FP_FMADD, 1'b0, 3'd0,
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h8000_0000});
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h8000_0000});
     total++;
     if (result[31:0] !== 32'h0000_0000) begin
       $error("0*0+(-0) RNE: dut=%h", result[31:0]);
@@ -150,9 +150,9 @@ module tb_fpu_fma;
 
     // +0 * +0 + (-0) in RDN -> -0
     apply5(FP_FMADD, 1'b0, 3'd2,
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h8000_0000});
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h8000_0000});
     total++;
     if (result[31:0] !== 32'h8000_0000) begin
       $error("0*0+(-0) RDN: dut=%h", result[31:0]);
@@ -161,22 +161,22 @@ module tb_fpu_fma;
 
     // Inf * 0 -> canonical qNaN, NV
     apply5(FP_FMADD, 1'b0, 3'd0,
-           {FP_NANBOX_UPPER, 32'h7F80_0000},
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h0000_0000});
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h7F80_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000});
     total++;
-    if (result[31:0] !== FP_CANON_QNAN_S || !fflags[FP_FFLAG_NV]) begin
+    if (result[31:0] !== kronos_pkg::FP_CANON_QNAN_S || !fflags[kronos_pkg::FP_FFLAG_NV]) begin
       $error("inf*0: dut=%h flags=%b", result[31:0], fflags);
       errors++;
     end
 
     // Inf * 1 + (-Inf) -> qNaN, NV
     apply5(FP_FMADD, 1'b0, 3'd0,
-           {FP_NANBOX_UPPER, 32'h7F80_0000},
-           {FP_NANBOX_UPPER, 32'h3F80_0000},
-           {FP_NANBOX_UPPER, 32'hFF80_0000});
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h7F80_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h3F80_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'hFF80_0000});
     total++;
-    if (result[31:0] !== FP_CANON_QNAN_S || !fflags[FP_FFLAG_NV]) begin
+    if (result[31:0] !== kronos_pkg::FP_CANON_QNAN_S || !fflags[kronos_pkg::FP_FFLAG_NV]) begin
       $error("inf-inf: dut=%h flags=%b", result[31:0], fflags);
       errors++;
     end
@@ -184,11 +184,11 @@ module tb_fpu_fma;
     // ── sNaN input -> canonical qNaN + NV ────────────────────────────────
     // S-precision: sNaN.S × 1.0S + 0 → qNaN.S + NV
     apply5(FP_FMADD, 1'b0, 3'd0,
-           {FP_NANBOX_UPPER, 32'h7FA0_0000},   // a = sNaN.S
-           {FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
-           {FP_NANBOX_UPPER, 32'h0000_0000});  // c = +0
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h7FA0_0000},   // a = sNaN.S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000});  // c = +0
     total++;
-    if (result[31:0] !== FP_CANON_QNAN_S || !fflags[FP_FFLAG_NV]) begin
+    if (result[31:0] !== kronos_pkg::FP_CANON_QNAN_S || !fflags[kronos_pkg::FP_FFLAG_NV]) begin
       $error("sNaN.s fma: dut=%h flags=%b", result[31:0], fflags);
       errors++;
     end
@@ -198,7 +198,7 @@ module tb_fpu_fma;
            64'h3FF0_0000_0000_0000,            // b = 1.0D
            64'h0000_0000_0000_0000);           // c = +0.D
     total++;
-    if (result !== FP_CANON_QNAN_D || !fflags[FP_FFLAG_NV]) begin
+    if (result !== kronos_pkg::FP_CANON_QNAN_D || !fflags[kronos_pkg::FP_FFLAG_NV]) begin
       $error("sNaN.d fma: dut=%h flags=%b", result, fflags);
       errors++;
     end
@@ -206,9 +206,9 @@ module tb_fpu_fma;
     // ── Inf × finite (non-zero) -> ±Inf result ───────────────────────────
     // S-precision: +Inf × 1.0S + 0 → +Inf.S, no flags
     apply5(FP_FMADD, 1'b0, 3'd0,
-           {FP_NANBOX_UPPER, 32'h7F80_0000},   // a = +Inf.S
-           {FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
-           {FP_NANBOX_UPPER, 32'h0000_0000});  // c = +0
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h7F80_0000},   // a = +Inf.S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000});  // c = +0
     total++;
     if (result[31:0] !== 32'h7F80_0000 || fflags !== 5'b0) begin
       $error("inf*1.s fma: dut=%h flags=%b", result[31:0], fflags);
@@ -228,9 +228,9 @@ module tb_fpu_fma;
     // ── finite × finite + Inf addend -> ±Inf result ──────────────────────
     // S-precision: 1.0S × 1.0S + (+Inf.S) → +Inf.S, no flags
     apply5(FP_FMADD, 1'b0, 3'd0,
-           {FP_NANBOX_UPPER, 32'h3F80_0000},   // a = 1.0S
-           {FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
-           {FP_NANBOX_UPPER, 32'h7F80_0000});  // c = +Inf.S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h3F80_0000},   // a = 1.0S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h7F80_0000});  // c = +Inf.S
     total++;
     if (result[31:0] !== 32'h7F80_0000 || fflags !== 5'b0) begin
       $error("1*1+inf.s fma: dut=%h flags=%b", result[31:0], fflags);
@@ -251,9 +251,9 @@ module tb_fpu_fma;
     // S-precision: FMADD(-0, 1.0, -0) — product = -0, addend = -0, same-sign add
     // → result = -0 (prod_sign = 1)
     apply5(FP_FMADD, 1'b0, 3'd0,
-           {FP_NANBOX_UPPER, 32'h8000_0000},   // a = -0.S
-           {FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
-           {FP_NANBOX_UPPER, 32'h8000_0000});  // c = -0.S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h8000_0000},   // a = -0.S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h3F80_0000},   // b = 1.0S
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h8000_0000});  // c = -0.S
     total++;
     if (result[31:0] !== 32'h8000_0000 || fflags !== 5'b0) begin
       $error("neg-zero fma: dut=%h flags=%b", result[31:0], fflags);
@@ -305,9 +305,9 @@ module tb_fpu_fma;
     // ------- Gap 1: zero-sign edge cases for RUP and RMM -------
     // +0 * +0 + (-0) in RUP -> +0
     apply5(FP_FMADD, 1'b0, 3'd3,
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h8000_0000});
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h8000_0000});
     total++;
     if (result[31:0] !== 32'h0000_0000) begin
       $error("0*0+(-0) RUP: dut=%h", result[31:0]);
@@ -316,9 +316,9 @@ module tb_fpu_fma;
 
     // +0 * +0 + (-0) in RMM -> +0
     apply5(FP_FMADD, 1'b0, 3'd4,
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h0000_0000},
-           {FP_NANBOX_UPPER, 32'h8000_0000});
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000},
+           {kronos_pkg::FP_NANBOX_UPPER, 32'h8000_0000});
     total++;
     if (result[31:0] !== 32'h0000_0000) begin
       $error("0*0+(-0) RMM: dut=%h", result[31:0]);
@@ -378,9 +378,9 @@ module tb_fpu_fma;
             raw32 = $urandom();
             rc32  = {raw32[31], e8, raw32[22:0]};
             apply5(rand_op, 1'b0, rm_i[2:0],
-                   {FP_NANBOX_UPPER, ra32},
-                   {FP_NANBOX_UPPER, rb32},
-                   {FP_NANBOX_UPPER, rc32});
+                   {kronos_pkg::FP_NANBOX_UPPER, ra32},
+                   {kronos_pkg::FP_NANBOX_UPPER, rb32},
+                   {kronos_pkg::FP_NANBOX_UPPER, rc32});
             sf_reset();
             unique case (rand_op)
               FP_FMADD:  sf_r32 = sf_f32_mulAdd(ra32, rb32, rc32, rm_i[7:0]);

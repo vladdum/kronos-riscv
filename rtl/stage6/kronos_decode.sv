@@ -15,7 +15,7 @@
 module kronos_decode
   import kronos_pkg::*;
 (
-  input  logic [INST_W-1:0] instr_i,
+  input  logic [kronos_pkg::INST_W-1:0] instr_i,
   input  logic [2:0]        frm_i,        // current FRM from FCSR (for dynamic rm)
   output decoded_instr_t    decoded_o,
   output logic              illegal_insn_o
@@ -68,7 +68,7 @@ module kronos_decode
   assign funct7 = instr_i[31:25];
 
   always_comb begin
-    decoded_o          = DECODED_INSTR_ZERO;
+    decoded_o          = kronos_pkg::DECODED_INSTR_ZERO;
     decoded_o.rs1      = rs1;
     decoded_o.rs2      = rs2;
     decoded_o.rd       = rd;

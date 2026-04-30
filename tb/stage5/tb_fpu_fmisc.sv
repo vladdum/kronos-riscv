@@ -98,7 +98,7 @@ module tb_fpu_fmisc;
 
     // FLT.S with sNaN → result 0, NV flag set
     apply(FP_FLT, 1'b0, 64'hFFFF_FFFF_7FA0_0000, 64'hFFFF_FFFF_4000_0000);
-    if (result[0] !== 1'b0 || fflags[FP_FFLAG_NV] !== 1'b1)
+    if (result[0] !== 1'b0 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1)
       $fatal(1, "flt sNaN: r=%h f=%b", result, fflags);
 
     // FMIN.S(+0, -0) = -0 (IEEE 754 edge case)
@@ -162,7 +162,7 @@ module tb_fpu_fmisc;
     if (!out_valid || result[0] !== 1'b0 || fflags !== 5'b0) $fatal(1, "feq.d ne: %h/%b", result, fflags);
     // sNaN → result 0, NV
     apply(FP_FEQ, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result[0] !== 1'b0 || fflags[FP_FFLAG_NV] !== 1'b1) $fatal(1, "feq.d sNaN: %h/%b", result, fflags);
+    if (!out_valid || result[0] !== 1'b0 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1) $fatal(1, "feq.d sNaN: %h/%b", result, fflags);
 
     // ── FLT.D ─────────────────────────────────────────────────────────────
     // 1.0D < 2.0D → 1
@@ -173,7 +173,7 @@ module tb_fpu_fmisc;
     if (!out_valid || result[0] !== 1'b0 || fflags !== 5'b0) $fatal(1, "flt.d gt: %h/%b", result, fflags);
     // qNaN → result 0, NV
     apply(FP_FLT, 1'b1, 64'h7FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result[0] !== 1'b0 || fflags[FP_FFLAG_NV] !== 1'b1) $fatal(1, "flt.d NaN: %h/%b", result, fflags);
+    if (!out_valid || result[0] !== 1'b0 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1) $fatal(1, "flt.d NaN: %h/%b", result, fflags);
 
     // ── FLE.D ─────────────────────────────────────────────────────────────
     // 1.0D <= 1.0D → 1
@@ -184,7 +184,7 @@ module tb_fpu_fmisc;
     if (!out_valid || result[0] !== 1'b0 || fflags !== 5'b0) $fatal(1, "fle.d gt: %h/%b", result, fflags);
     // sNaN → result 0, NV
     apply(FP_FLE, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result[0] !== 1'b0 || fflags[FP_FFLAG_NV] !== 1'b1) $fatal(1, "fle.d sNaN: %h/%b", result, fflags);
+    if (!out_valid || result[0] !== 1'b0 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1) $fatal(1, "fle.d sNaN: %h/%b", result, fflags);
 
     // ── FMIN.D — all branches ─────────────────────────────────────────────
     // basic: min(1.0D, 2.0D) = 1.0D
@@ -195,7 +195,7 @@ module tb_fpu_fmisc;
     if (!out_valid || result !== 64'h8000_0000_0000_0000) $fatal(1, "fmin.d +0/-0: %h", result);
     // sNaN → non-NaN operand + NV (per RISC-V spec: "result is the non-NaN operand")
     apply(FP_FMIN, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b1)
+    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1)
       $fatal(1, "fmin.d sNaN: %h/%b", result, fflags);
     // qNaN a, number b → return b
     apply(FP_FMIN, 1'b1, 64'h7FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000);
@@ -213,7 +213,7 @@ module tb_fpu_fmisc;
     if (!out_valid || result !== 64'h0000_0000_0000_0000) $fatal(1, "fmax.d +0/-0: %h", result);
     // sNaN → non-NaN operand + NV (per RISC-V spec: "result is the non-NaN operand")
     apply(FP_FMAX, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b1)
+    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1)
       $fatal(1, "fmax.d sNaN: %h/%b", result, fflags);
     // qNaN a, number b → return b
     apply(FP_FMAX, 1'b1, 64'h7FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000);
@@ -224,12 +224,12 @@ module tb_fpu_fmisc;
 
     // FMIN.D(qNaN, qNaN) → canonical qNaN, no NV  [covers both-NaN branch]
     apply(FP_FMIN, 1'b1, 64'h7FF8_0000_0000_0000, 64'h7FF8_0000_0000_0000);
-    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b0)
+    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b0)
       $fatal(1, "fmin.d both-qNaN: r=%h f=%b", result, fflags);
 
     // FMAX.D(qNaN, qNaN) → canonical qNaN, no NV
     apply(FP_FMAX, 1'b1, 64'h7FF8_0000_0000_0000, 64'h7FF8_0000_0000_0000);
-    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[FP_FFLAG_NV] !== 1'b0)
+    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b0)
       $fatal(1, "fmax.d both-qNaN: r=%h f=%b", result, fflags);
 
     // FMAX.S(-0, -0) → -0  [covers the -0/-0 equal-zero branch for FMAX.S]
@@ -356,45 +356,45 @@ module tb_fpu_fmisc;
         // --- FEQ.S ---
         apply(FP_FEQ, 1'b0, {32'hFFFF_FFFF, ra32}, {32'hFFFF_FFFF, rb32});
         rand_total++;
-        if (result[0] !== ref_feq || (fflags[FP_FFLAG_NV] !== exp_nv_eq)) begin
+        if (result[0] !== ref_feq || (fflags[kronos_pkg::FP_FFLAG_NV] !== exp_nv_eq)) begin
           $error("[FEQ.S rand %0d] a=%h b=%h dut=%b/%b ref=%b nv_exp=%b",
-                 k, ra32, rb32, result[0], fflags[FP_FFLAG_NV], ref_feq, exp_nv_eq);
+                 k, ra32, rb32, result[0], fflags[kronos_pkg::FP_FFLAG_NV], ref_feq, exp_nv_eq);
           rand_errors++;
         end
 
         // --- FLT.S ---
         apply(FP_FLT, 1'b0, {32'hFFFF_FFFF, ra32}, {32'hFFFF_FFFF, rb32});
         rand_total++;
-        if (result[0] !== ref_flt || (fflags[FP_FFLAG_NV] !== exp_nv_lt)) begin
+        if (result[0] !== ref_flt || (fflags[kronos_pkg::FP_FFLAG_NV] !== exp_nv_lt)) begin
           $error("[FLT.S rand %0d] a=%h b=%h dut=%b/%b ref=%b nv_exp=%b",
-                 k, ra32, rb32, result[0], fflags[FP_FFLAG_NV], ref_flt, exp_nv_lt);
+                 k, ra32, rb32, result[0], fflags[kronos_pkg::FP_FFLAG_NV], ref_flt, exp_nv_lt);
           rand_errors++;
         end
 
         // --- FLE.S ---
         apply(FP_FLE, 1'b0, {32'hFFFF_FFFF, ra32}, {32'hFFFF_FFFF, rb32});
         rand_total++;
-        if (result[0] !== ref_fle || (fflags[FP_FFLAG_NV] !== exp_nv_le)) begin
+        if (result[0] !== ref_fle || (fflags[kronos_pkg::FP_FFLAG_NV] !== exp_nv_le)) begin
           $error("[FLE.S rand %0d] a=%h b=%h dut=%b/%b ref=%b nv_exp=%b",
-                 k, ra32, rb32, result[0], fflags[FP_FFLAG_NV], ref_fle, exp_nv_le);
+                 k, ra32, rb32, result[0], fflags[kronos_pkg::FP_FFLAG_NV], ref_fle, exp_nv_le);
           rand_errors++;
         end
 
         // --- FMIN.S --- (NaN inputs are now tested, not skipped)
         apply(FP_FMIN, 1'b0, {32'hFFFF_FFFF, ra32}, {32'hFFFF_FFFF, rb32});
         rand_total++;
-        if (result[31:0] !== ref_fmin || (fflags[FP_FFLAG_NV] !== exp_nv_min)) begin
+        if (result[31:0] !== ref_fmin || (fflags[kronos_pkg::FP_FFLAG_NV] !== exp_nv_min)) begin
           $error("[FMIN.S rand %0d] a=%h b=%h dut=%h/%b ref=%h nv_exp=%b",
-                 k, ra32, rb32, result[31:0], fflags[FP_FFLAG_NV], ref_fmin, exp_nv_min);
+                 k, ra32, rb32, result[31:0], fflags[kronos_pkg::FP_FFLAG_NV], ref_fmin, exp_nv_min);
           rand_errors++;
         end
 
         // --- FMAX.S --- (NaN inputs are now tested, not skipped)
         apply(FP_FMAX, 1'b0, {32'hFFFF_FFFF, ra32}, {32'hFFFF_FFFF, rb32});
         rand_total++;
-        if (result[31:0] !== ref_fmax || (fflags[FP_FFLAG_NV] !== exp_nv_max)) begin
+        if (result[31:0] !== ref_fmax || (fflags[kronos_pkg::FP_FFLAG_NV] !== exp_nv_max)) begin
           $error("[FMAX.S rand %0d] a=%h b=%h dut=%h/%b ref=%h nv_exp=%b",
-                 k, ra32, rb32, result[31:0], fflags[FP_FFLAG_NV], ref_fmax, exp_nv_max);
+                 k, ra32, rb32, result[31:0], fflags[kronos_pkg::FP_FFLAG_NV], ref_fmax, exp_nv_max);
           rand_errors++;
         end
       end

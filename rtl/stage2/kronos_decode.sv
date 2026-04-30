@@ -44,7 +44,7 @@ module kronos_decode
   assign funct7 = instr_i[31:25];
 
   always_comb begin
-    dec_o          = DECODED_INSTR_ZERO;
+    dec_o          = kronos_pkg::DECODED_INSTR_ZERO;
     dec_o.rs1      = rs1;
     dec_o.rs2      = rs2;
     dec_o.rd       = rd;

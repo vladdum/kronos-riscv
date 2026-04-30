@@ -30,13 +30,13 @@ module kronos_fpu_top
   input  fp_op_e      op_i,
   input  logic        fmt_d_i,
   input  logic [2:0]  rm_i,
-  input  logic [FLEN-1:0] a_i,
-  input  logic [FLEN-1:0] b_i,
-  input  logic [FLEN-1:0] c_i,
+  input  logic [kronos_pkg::FLEN-1:0] a_i,
+  input  logic [kronos_pkg::FLEN-1:0] b_i,
+  input  logic [kronos_pkg::FLEN-1:0] c_i,
   input  fpu_tag_t    tag_i,
   output logic        busy_o,
   output logic        out_valid_o,
-  output logic [FLEN-1:0] result_o,
+  output logic [kronos_pkg::FLEN-1:0] result_o,
   output logic [4:0]  fflags_o,
   output fpu_tag_t    tag_o
 );
@@ -69,12 +69,12 @@ module kronos_fpu_top
   logic        fmul_out_valid;
   logic        fma_out_valid;
   logic        iter_out_valid;
-  logic [FLEN-1:0] fmisc_result;
-  logic [FLEN-1:0] fcvt_result;
-  logic [FLEN-1:0] fadd_result;
-  logic [FLEN-1:0] fmul_result;
-  logic [FLEN-1:0] fma_result;
-  logic [FLEN-1:0] iter_result;
+  logic [kronos_pkg::FLEN-1:0] fmisc_result;
+  logic [kronos_pkg::FLEN-1:0] fcvt_result;
+  logic [kronos_pkg::FLEN-1:0] fadd_result;
+  logic [kronos_pkg::FLEN-1:0] fmul_result;
+  logic [kronos_pkg::FLEN-1:0] fma_result;
+  logic [kronos_pkg::FLEN-1:0] iter_result;
   logic [4:0]  fmisc_fflags;
   logic [4:0]  fcvt_fflags;
   logic [4:0]  fadd_fflags;
@@ -289,7 +289,7 @@ module kronos_fpu_top
   always_comb begin
     out_valid_o = fmisc_out_valid | fcvt_out_valid | fadd_out_valid
                 | fmul_out_valid  | fma_out_valid  | iter_out_valid;
-    result_o = {FLEN{1'b0}};
+    result_o = {kronos_pkg::FLEN{1'b0}};
     fflags_o = 5'h0;
     tag_o    = fpu_tag_t'(0);
     if (fmisc_out_valid) begin

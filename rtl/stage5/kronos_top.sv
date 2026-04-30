@@ -906,9 +906,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex_q <= ID_EX_REG_ZERO;
+      id_ex_q <= kronos_pkg::ID_EX_REG_ZERO;
     end else if (id_ex_flush) begin
-      id_ex_q <= ID_EX_REG_ZERO;
+      id_ex_q <= kronos_pkg::ID_EX_REG_ZERO;
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
@@ -1237,18 +1237,18 @@ module kronos_top
   // mispredict=0x1E↔0x02) so the consolidated taxonomy table is contiguous.
   assign event_bus[18]    = 1'b0;
   assign event_bus[19]    = 1'b0;
-  assign event_bus[EVT_LOAD_USE_STALL]      = load_use_event;
-  assign event_bus[EVT_JALR_FWD_STALL]      = jalr_fwd_event;
-  assign event_bus[EVT_FP_RAW_STALL]        = fp_load_use_event;
-  assign event_bus[EVT_FRM_HAZARD_STALL]    = id_ex_is_frm_write & if_id_fp_dyn_rm;
-  assign event_bus[EVT_FP_INFLIGHT_STALL]   = fpu_stall;
-  assign event_bus[EVT_FENCE_I_DRAIN_STALL] = fence_i_active_q;
-  assign event_bus[EVT_MEM_BUSY_STALL]      = lsu_mem_stall | dcache_stall;
-  assign event_bus[EVT_MULDIV_STALL]        = muldiv_stall;
-  assign event_bus[EVT_FPU_STALL]           = fpu_busy_any;
-  assign event_bus[EVT_INSTR_FETCH_STALL]   = instr_fetch_stall;
-  assign event_bus[EVT_BRANCH_MISPREDICT]   = bpred_mispredict_pulse;
-  assign event_bus[EVT_EX_REDIRECT]         = ex_redirect;
+  assign event_bus[kronos_pkg::EVT_LOAD_USE_STALL]      = load_use_event;
+  assign event_bus[kronos_pkg::EVT_JALR_FWD_STALL]      = jalr_fwd_event;
+  assign event_bus[kronos_pkg::EVT_FP_RAW_STALL]        = fp_load_use_event;
+  assign event_bus[kronos_pkg::EVT_FRM_HAZARD_STALL]    = id_ex_is_frm_write & if_id_fp_dyn_rm;
+  assign event_bus[kronos_pkg::EVT_FP_INFLIGHT_STALL]   = fpu_stall;
+  assign event_bus[kronos_pkg::EVT_FENCE_I_DRAIN_STALL] = fence_i_active_q;
+  assign event_bus[kronos_pkg::EVT_MEM_BUSY_STALL]      = lsu_mem_stall | dcache_stall;
+  assign event_bus[kronos_pkg::EVT_MULDIV_STALL]        = muldiv_stall;
+  assign event_bus[kronos_pkg::EVT_FPU_STALL]           = fpu_busy_any;
+  assign event_bus[kronos_pkg::EVT_INSTR_FETCH_STALL]   = instr_fetch_stall;
+  assign event_bus[kronos_pkg::EVT_BRANCH_MISPREDICT]   = bpred_mispredict_pulse;
+  assign event_bus[kronos_pkg::EVT_EX_REDIRECT]         = ex_redirect;
 
   assign retire_valid_o      = retire_advance;
   assign retire_pc_o         = {32'b0, mem_wb_q.pc};

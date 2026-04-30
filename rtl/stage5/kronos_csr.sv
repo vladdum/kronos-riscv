@@ -6,7 +6,7 @@
 // Implements mstatus, misa, mie, mtvec, mscratch, mepc, mcause, mip.
 // Handles trap entry (ECALL/EBREAK/illegal), MRET, and CSR read/write.
 // FFLAGS/FRM/FCSR floating-point CSRs and mstatus.FS storage are included.
-// All CSR data paths are 64 bits wide (MXL=10, XLEN=64).
+// All CSR data paths are 64 bits wide (MXL=10, kronos_pkg::XLEN=64).
 module kronos_csr #(
   // MISA extension bits [25:0]. Default = I+M+A+C+F+D (bits 8,12,0,2,5,3).
   parameter logic [25:0] MISA_EXT = 26'h0_112D

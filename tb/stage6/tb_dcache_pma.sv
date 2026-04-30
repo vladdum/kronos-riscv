@@ -274,9 +274,9 @@ module tb_dcache_pma
     end
   endtask
 
-  // ---- Case 1: LB at MMIO_BASE + 8 --------------------------------------
+  // ---- Case 1: LB at kronos_pkg::MMIO_BASE + 8 --------------------------------------
   task automatic test_nc_lb_at_0x4000_0008();
-    drv_load(MMIO_BASE + 64'h8, 3'd0);
+    drv_load(kronos_pkg::MMIO_BASE + 64'h8, 3'd0);
     check(last_ar_size  == 3'd0, "case 1: ar.size != 0");
     check(last_ar_len   == 8'd0, "case 1: ar.len != 0");
     check(last_ar_burst == 2'b01, "case 1: ar.burst != INCR");
@@ -284,33 +284,33 @@ module tb_dcache_pma
     check(ar_beat_count == 1,    "case 1: beat count != 1");
   endtask
 
-  // ---- Case 2: LH at MMIO_BASE + 0x10 -----------------------------------
+  // ---- Case 2: LH at kronos_pkg::MMIO_BASE + 0x10 -----------------------------------
   task automatic test_nc_lh_at_0x4000_0010();
-    drv_load(MMIO_BASE + 64'h10, 3'd1);
+    drv_load(kronos_pkg::MMIO_BASE + 64'h10, 3'd1);
     check(last_ar_size  == 3'd1, "case 2: ar.size != 1");
     check(last_ar_len   == 8'd0, "case 2: ar.len != 0");
     check(ar_beat_count == 1,    "case 2: beat count != 1");
   endtask
 
-  // ---- Case 3: LW at MMIO_BASE + 0x1_0000 -------------------------------
+  // ---- Case 3: LW at kronos_pkg::MMIO_BASE + 0x1_0000 -------------------------------
   task automatic test_nc_lw_at_0x4001_0000();
-    drv_load(MMIO_BASE + 64'h1_0000, 3'd2);
+    drv_load(kronos_pkg::MMIO_BASE + 64'h1_0000, 3'd2);
     check(last_ar_size  == 3'd2, "case 3: ar.size != 2");
     check(last_ar_len   == 8'd0, "case 3: ar.len != 0");
     check(ar_beat_count == 1,    "case 3: beat count != 1");
   endtask
 
-  // ---- Case 4: LD at MMIO_BASE + 0x20 -----------------------------------
+  // ---- Case 4: LD at kronos_pkg::MMIO_BASE + 0x20 -----------------------------------
   task automatic test_nc_ld_at_0x4000_0020();
-    drv_load(MMIO_BASE + 64'h20, 3'd3);
+    drv_load(kronos_pkg::MMIO_BASE + 64'h20, 3'd3);
     check(last_ar_size  == 3'd3, "case 4: ar.size != 3");
     check(last_ar_len   == 8'd0, "case 4: ar.len != 0");
     check(ar_beat_count == 1,    "case 4: beat count != 1");
   endtask
 
-  // ---- Case 5: SB at MMIO_BASE + 1 --------------------------------------
+  // ---- Case 5: SB at kronos_pkg::MMIO_BASE + 1 --------------------------------------
   task automatic test_nc_sb_at_0x4000_0001();
-    drv_store(MMIO_BASE + 64'h1, 3'd0, 64'h0000_0000_0000_00AB);
+    drv_store(kronos_pkg::MMIO_BASE + 64'h1, 3'd0, 64'h0000_0000_0000_00AB);
     check(last_aw_size  == 3'd0,        "case 5: aw.size != 0");
     check(last_aw_len   == 8'd0,        "case 5: aw.len != 0");
     check(last_aw_burst == 2'b01,       "case 5: aw.burst != INCR");
@@ -319,18 +319,18 @@ module tb_dcache_pma
     check(aw_beat_count == 1,           "case 5: beat count != 1");
   endtask
 
-  // ---- Case 6: SW at MMIO_BASE + 0x1_0004 -------------------------------
+  // ---- Case 6: SW at kronos_pkg::MMIO_BASE + 0x1_0004 -------------------------------
   task automatic test_nc_sw_at_0x4001_0004();
-    drv_store(MMIO_BASE + 64'h1_0004, 3'd2, 64'hDEAD_BEEF_CAFE_BABE);
+    drv_store(kronos_pkg::MMIO_BASE + 64'h1_0004, 3'd2, 64'hDEAD_BEEF_CAFE_BABE);
     check(last_aw_size  == 3'd2,        "case 6: aw.size != 2");
     check(last_aw_len   == 8'd0,        "case 6: aw.len != 0");
     check(last_w_strb   == 8'b1111_0000, "case 6: w.strb wrong");
     check(aw_beat_count == 1,           "case 6: beat count != 1");
   endtask
 
-  // ---- Case 7: SD at MMIO_BASE + 0x30 -----------------------------------
+  // ---- Case 7: SD at kronos_pkg::MMIO_BASE + 0x30 -----------------------------------
   task automatic test_nc_sd_at_0x4000_0030();
-    drv_store(MMIO_BASE + 64'h30, 3'd3, 64'h0123_4567_89AB_CDEF);
+    drv_store(kronos_pkg::MMIO_BASE + 64'h30, 3'd3, 64'h0123_4567_89AB_CDEF);
     check(last_aw_size  == 3'd3,        "case 7: aw.size != 3");
     check(last_aw_len   == 8'd0,        "case 7: aw.len != 0");
     check(last_w_strb   == 8'hFF,       "case 7: w.strb != 0xFF");
@@ -350,7 +350,7 @@ module tb_dcache_pma
     check(ar_beat_count == 8,           "case 8: refill beat count != 8");
   endtask
 
-  // ---- Case 9: LR.W at MMIO_BASE -- expect amo_nc_fault, no AXI --------
+  // ---- Case 9: LR.W at kronos_pkg::MMIO_BASE -- expect amo_nc_fault, no AXI --------
   task automatic test_lr_on_nc();
     int saw_fault = 0;
     int saw_axi   = 0;
@@ -361,13 +361,13 @@ module tb_dcache_pma
       begin
         repeat (8) begin @(posedge clk_i); if (axi_req.ar_valid) saw_axi = 1; end
       end
-      drv_amo(MMIO_BASE, 5'b00010);     // LR
+      drv_amo(kronos_pkg::MMIO_BASE, 5'b00010);     // LR
     join
     check(saw_fault == 1, "case 9: amo_nc_fault not asserted");
     check(saw_axi   == 0, "case 9: AXI AR fired on NC LR (must not)");
   endtask
 
-  // ---- Case 10: AMOSWAP.W at MMIO_BASE -- expect amo_nc_fault ----------
+  // ---- Case 10: AMOSWAP.W at kronos_pkg::MMIO_BASE -- expect amo_nc_fault ----------
   task automatic test_amoswap_on_nc();
     int saw_fault = 0;
     int saw_axi   = 0;
@@ -378,7 +378,7 @@ module tb_dcache_pma
       begin
         repeat (8) begin @(posedge clk_i); if (axi_req.ar_valid) saw_axi = 1; end
       end
-      drv_amo(MMIO_BASE, 5'b00001);     // AMOSWAP
+      drv_amo(kronos_pkg::MMIO_BASE, 5'b00001);     // AMOSWAP
     join
     check(saw_fault == 1, "case 10: amo_nc_fault not asserted");
     check(saw_axi   == 0, "case 10: AXI AR fired on NC AMOSWAP (must not)");
@@ -386,7 +386,7 @@ module tb_dcache_pma
 
   // ---- Case 11: LW at 0x4FFF_FFFC (boundary, in NC range) --------------
   task automatic test_nc_lw_at_boundary_inside();
-    drv_load(MMIO_BASE + 64'hFFF_FFFC, 3'd2);
+    drv_load(kronos_pkg::MMIO_BASE + 64'hFFF_FFFC, 3'd2);
     check(last_ar_len   == 8'd0,        "case 11: ar.len != 0 (in-range)");
     check(last_ar_burst == 2'b01,       "case 11: ar.burst != INCR");
   endtask
@@ -403,8 +403,8 @@ module tb_dcache_pma
 
   // ---- Case 13: NC store then NC load -- back-to-back ------------------
   task automatic test_nc_back_to_back();
-    drv_store(MMIO_BASE + 64'h1_0010, 3'd2, 64'h0000_0000_DEAD_BEEF);
-    drv_load (MMIO_BASE + 64'h1_0010, 3'd2);
+    drv_store(kronos_pkg::MMIO_BASE + 64'h1_0010, 3'd2, 64'h0000_0000_DEAD_BEEF);
+    drv_load (kronos_pkg::MMIO_BASE + 64'h1_0010, 3'd2);
     // The most recent transaction was the load → AR shape captured.
     check(last_ar_len   == 8'd0,        "case 13: ar.len != 0");
     check(last_ar_burst == 2'b01,       "case 13: ar.burst != INCR");
@@ -414,7 +414,7 @@ module tb_dcache_pma
 
   // ---- Case 14: NC store then cacheable load — no cross-pollination ----
   task automatic test_nc_then_cacheable();
-    drv_store(MMIO_BASE + 64'h1_0020, 3'd2, 64'hCAFE_BABE_0000_0000);
+    drv_store(kronos_pkg::MMIO_BASE + 64'h1_0020, 3'd2, 64'hCAFE_BABE_0000_0000);
     for (int b = 0; b < 8; b++) mem[29'h1000_0010 + 29'(b)] = 64'hFEED_FACE_DEAD_BEEF;
     drv_load (64'h8000_0080, 3'd2);
     // CWF fires data_valid on beat 0; wait for full refill before checking burst shape.

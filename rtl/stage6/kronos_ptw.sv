@@ -64,8 +64,8 @@ module kronos_ptw
 
   // 1. Constants
   localparam logic [2:0]      PTE_BYTE_OFFSET = 3'b000;
-  localparam logic [XLEN-1:0] PTE_A_MASK      = XLEN'('h40);  // bit 6
-  localparam logic [XLEN-1:0] PTE_D_MASK      = XLEN'('h80);  // bit 7
+  localparam logic [kronos_pkg::XLEN-1:0] PTE_A_MASK      = kronos_pkg::XLEN'('h40);  // bit 6
+  localparam logic [kronos_pkg::XLEN-1:0] PTE_D_MASK      = kronos_pkg::XLEN'('h80);  // bit 7
 
   // 2. Types
   typedef enum logic [3:0] {
@@ -102,14 +102,14 @@ module kronos_ptw
   logic [1:0]  start_level;
 
   // PTE field accessors
-  function automatic logic pte_v(input logic [63:0] p); return p[PTE_V_BIT]; endfunction
-  function automatic logic pte_r(input logic [63:0] p); return p[PTE_R_BIT]; endfunction
-  function automatic logic pte_w(input logic [63:0] p); return p[PTE_W_BIT]; endfunction
-  function automatic logic pte_x(input logic [63:0] p); return p[PTE_X_BIT]; endfunction
-  function automatic logic pte_u(input logic [63:0] p); return p[PTE_U_BIT]; endfunction
-  function automatic logic pte_g(input logic [63:0] p); return p[PTE_G_BIT]; endfunction
-  function automatic logic pte_a(input logic [63:0] p); return p[PTE_A_BIT]; endfunction
-  function automatic logic pte_d(input logic [63:0] p); return p[PTE_D_BIT]; endfunction
+  function automatic logic pte_v(input logic [63:0] p); return p[kronos_pkg::PTE_V_BIT]; endfunction
+  function automatic logic pte_r(input logic [63:0] p); return p[kronos_pkg::PTE_R_BIT]; endfunction
+  function automatic logic pte_w(input logic [63:0] p); return p[kronos_pkg::PTE_W_BIT]; endfunction
+  function automatic logic pte_x(input logic [63:0] p); return p[kronos_pkg::PTE_X_BIT]; endfunction
+  function automatic logic pte_u(input logic [63:0] p); return p[kronos_pkg::PTE_U_BIT]; endfunction
+  function automatic logic pte_g(input logic [63:0] p); return p[kronos_pkg::PTE_G_BIT]; endfunction
+  function automatic logic pte_a(input logic [63:0] p); return p[kronos_pkg::PTE_A_BIT]; endfunction
+  function automatic logic pte_d(input logic [63:0] p); return p[kronos_pkg::PTE_D_BIT]; endfunction
   function automatic logic [43:0] pte_ppn(input logic [63:0] p); return p[53:10]; endfunction
   function automatic logic pte_reserved_set(input logic [63:0] p); return |p[63:54]; endfunction
   function automatic logic pte_is_leaf(input logic [63:0] p);
@@ -175,14 +175,14 @@ module kronos_ptw
     end
   end
 
-  assign start_level = (satp_mode_i == SATP_MODE_SV48) ? 2'd3 : 2'd2;
+  assign start_level = (satp_mode_i == kronos_pkg::SATP_MODE_SV48) ? 2'd3 : 2'd2;
 
   always_comb begin
     state_d             = state_q;
     dcache_req_valid_o  = 1'b0;
     dcache_req_addr_o   = walk_addr_q;
     dcache_req_we_o     = 1'b0;
-    dcache_req_wdata_o  = {XLEN{1'b0}};
+    dcache_req_wdata_o  = {kronos_pkg::XLEN{1'b0}};
     dcache_req_size_o   = 3'd3;
     dcache_req_is_lr_o  = 1'b0;
     dcache_req_is_sc_o  = 1'b0;
@@ -197,7 +197,7 @@ module kronos_ptw
 
     unique case (state_q)
       S_IDLE: begin
-        if (accept_req & (satp_mode_i != SATP_MODE_BARE)) state_d = S_FETCH_REQ;
+        if (accept_req & (satp_mode_i != kronos_pkg::SATP_MODE_BARE)) state_d = S_FETCH_REQ;
       end
 
       S_FETCH_REQ: begin
@@ -247,8 +247,8 @@ module kronos_ptw
         dcache_req_is_sc_o = 1'b1;
         // Bit 6 = A, bit 7 = D
         dcache_req_wdata_o = cur_pte_q
-                              | (needs_a_q ? PTE_A_MASK : XLEN'(0))
-                              | (needs_d_q ? PTE_D_MASK : XLEN'(0));
+                              | (needs_a_q ? PTE_A_MASK : kronos_pkg::XLEN'(0))
+                              | (needs_d_q ? PTE_D_MASK : kronos_pkg::XLEN'(0));
         if (dcache_rsp_valid_i) state_d = S_AD_SC_WAIT;
       end
 
@@ -265,9 +265,9 @@ module kronos_ptw
 
       S_PAGE_FAULT: begin
         page_fault_o       = 1'b1;
-        page_fault_cause_o = (walk_which_q == TLB_FETCH) ? CAUSE_INSTR_PAGE_FAULT
-                            : (walk_which_q == TLB_LOAD)  ? CAUSE_LOAD_PAGE_FAULT
-                                                          : CAUSE_STORE_PAGE_FAULT;
+        page_fault_cause_o = (walk_which_q == TLB_FETCH) ? kronos_pkg::CAUSE_INSTR_PAGE_FAULT
+                            : (walk_which_q == TLB_LOAD)  ? kronos_pkg::CAUSE_LOAD_PAGE_FAULT
+                                                          : kronos_pkg::CAUSE_STORE_PAGE_FAULT;
         page_fault_tval_o  = walk_va_q;
         page_fault_which_o = walk_which_q;
         state_d = S_IDLE;
@@ -295,7 +295,7 @@ module kronos_ptw
       walk_va_q        <= 64'd0;
       walk_level_q     <= 2'd0;
       walk_addr_q      <= 56'd0;
-      cur_pte_q        <= {XLEN{1'b0}};
+      cur_pte_q        <= {kronos_pkg::XLEN{1'b0}};
       walk_which_q     <= TLB_NONE;
       walk_is_load_q   <= 1'b0;
       walk_is_store_q  <= 1'b0;
@@ -304,7 +304,7 @@ module kronos_ptw
     end else begin
       state_q <= state_d;
 
-      if (state_q == S_IDLE & accept_req & (satp_mode_i != SATP_MODE_BARE)) begin
+      if (state_q == S_IDLE & accept_req & (satp_mode_i != kronos_pkg::SATP_MODE_BARE)) begin
         walk_va_q       <= accepted_va;
         walk_level_q    <= start_level;
         walk_addr_q     <= {satp_ppn_i, vpn_at_level(accepted_va, start_level), PTE_BYTE_OFFSET};

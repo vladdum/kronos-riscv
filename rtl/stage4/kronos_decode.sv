@@ -11,7 +11,7 @@
 //   - OP-32    (0111011): ADDW/SUBW/SLLW/SRLW/SRAW + MULW/DIVW/DIVUW/REMW/REMUW
 //   - AMO      (0101111): LR/SC/AMO*
 // Defaults for new fields (is_word_op, is_lr, is_sc, is_amo, amo_funct5) come
-// from the DECODED_INSTR_ZERO assignment at the top of always_comb, which
+// from the kronos_pkg::DECODED_INSTR_ZERO assignment at the top of always_comb, which
 // zero-initialises every field of the decoded_instr_t struct.
 module kronos_decode
   import kronos_pkg::*;
@@ -51,7 +51,7 @@ module kronos_decode
   assign funct7 = instr_i[31:25];
 
   always_comb begin
-    dec_o          = DECODED_INSTR_ZERO;
+    dec_o          = kronos_pkg::DECODED_INSTR_ZERO;
     dec_o.rs1      = rs1;
     dec_o.rs2      = rs2;
     dec_o.rd       = rd;

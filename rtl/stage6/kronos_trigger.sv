@@ -16,8 +16,8 @@ module kronos_trigger
   input  logic            csr_req_i,
   input  logic [11:0]     csr_addr_i,
   input  logic            csr_we_i,
-  input  logic [XLEN-1:0] csr_wdata_i,
-  output logic [XLEN-1:0] csr_rdata_o,
+  input  logic [kronos_pkg::XLEN-1:0] csr_wdata_i,
+  output logic [kronos_pkg::XLEN-1:0] csr_rdata_o,
   output logic            csr_match_o,   // 1 = csr_addr_i is a trigger CSR
 
   // EX-stage probe (sample exactly when valid_i is high).
@@ -25,7 +25,7 @@ module kronos_trigger
   input  logic [31:0]     ex_pc_i,
   input  logic            ex_is_load_i,
   input  logic            ex_is_store_i,
-  input  logic [XLEN-1:0] ex_mem_addr_i,
+  input  logic [kronos_pkg::XLEN-1:0] ex_mem_addr_i,
 
   // Match output.  Combinational: hit_o pulses high for one cycle when
   // an EX-stage instruction matches an enabled trigger.
@@ -41,7 +41,7 @@ module kronos_trigger
     logic            store;    // tdata1[2]
     logic            load;     // tdata1[1]
     logic            hit;      // tdata1[10] (sticky-set on match; RW1C)
-    logic [XLEN-1:0] tdata2;
+    logic [kronos_pkg::XLEN-1:0] tdata2;
   } trigger_t;
 
   // State registers
@@ -55,9 +55,9 @@ module kronos_trigger
   logic       store_match [0:3];
 
   // Build a tdata1 view from per-trigger fields.
-  function automatic logic [XLEN-1:0] pack_tdata1(input trigger_t t);
-    logic [XLEN-1:0] v;
-    v          = {XLEN{1'b0}};
+  function automatic logic [kronos_pkg::XLEN-1:0] pack_tdata1(input trigger_t t);
+    logic [kronos_pkg::XLEN-1:0] v;
+    v          = {kronos_pkg::XLEN{1'b0}};
     v[63:60]   = 4'h6;       // type=mcontrol6
     v[59]      = 1'b0;       // dmode=0
     v[10]      = t.hit;
@@ -70,13 +70,13 @@ module kronos_trigger
 
   // CSR read mux.
   always_comb begin
-    csr_rdata_o   = {XLEN{1'b0}};
+    csr_rdata_o   = {kronos_pkg::XLEN{1'b0}};
     csr_match_o   = 1'b0;
     unique case (csr_addr_i)
-      12'h7A0: begin csr_match_o = 1'b1; csr_rdata_o = {{XLEN-2{1'b0}}, tselect_q}; end
+      12'h7A0: begin csr_match_o = 1'b1; csr_rdata_o = {{kronos_pkg::XLEN-2{1'b0}}, tselect_q}; end
       12'h7A1: begin csr_match_o = 1'b1; csr_rdata_o = pack_tdata1(triggers_q[tselect_q]); end
       12'h7A2: begin csr_match_o = 1'b1; csr_rdata_o = triggers_q[tselect_q].tdata2; end
-      12'h7A3: begin csr_match_o = 1'b1; csr_rdata_o = {XLEN{1'b0}}; end
+      12'h7A3: begin csr_match_o = 1'b1; csr_rdata_o = {kronos_pkg::XLEN{1'b0}}; end
       12'h7A4: begin csr_match_o = 1'b1; csr_rdata_o = 64'h0000_0000_0000_0040; end // bit 6 = mcontrol6
       default: ;
     endcase
@@ -92,7 +92,7 @@ module kronos_trigger
     end
     for (int i = 0; i < 4; i++) begin
       exec_match[i]  = triggers_q[i].m & triggers_q[i].execute & ex_valid_i &
-                       ({{XLEN-32{1'b0}}, ex_pc_i} == triggers_q[i].tdata2);
+                       ({{kronos_pkg::XLEN-32{1'b0}}, ex_pc_i} == triggers_q[i].tdata2);
       load_match[i]  = triggers_q[i].m & triggers_q[i].load    & ex_valid_i & ex_is_load_i  &
                        (ex_mem_addr_i == triggers_q[i].tdata2);
       store_match[i] = triggers_q[i].m & triggers_q[i].store   & ex_valid_i & ex_is_store_i &
@@ -114,7 +114,7 @@ module kronos_trigger
         triggers_q[i].store   <= 1'b0;
         triggers_q[i].load    <= 1'b0;
         triggers_q[i].hit     <= 1'b0;
-        triggers_q[i].tdata2  <= {XLEN{1'b0}};
+        triggers_q[i].tdata2  <= {kronos_pkg::XLEN{1'b0}};
       end
     end else begin
       // Sticky-hit update — set on match, regardless of CSR write.

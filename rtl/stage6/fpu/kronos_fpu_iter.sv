@@ -30,13 +30,13 @@ module kronos_fpu_iter
   input  fp_op_e          op_i,
   input  logic            fmt_d_i,
   input  logic [2:0]      rm_i,
-  input  logic [FLEN-1:0] a_i,
-  input  logic [FLEN-1:0] b_i,
+  input  logic [kronos_pkg::FLEN-1:0] a_i,
+  input  logic [kronos_pkg::FLEN-1:0] b_i,
   input  fpu_tag_t        tag_i,
 
   output logic            busy_o,
   output logic            out_valid_o,
-  output logic [FLEN-1:0] result_o,
+  output logic [kronos_pkg::FLEN-1:0] result_o,
   output logic [4:0]      fflags_o,
   output fpu_tag_t        tag_o,
 
@@ -50,22 +50,22 @@ module kronos_fpu_iter
   // 1. Constants
   // -----------------------------------------------------------------------
   // Canonical bit patterns for double precision
-  localparam logic [FLEN-1:0] D_QNAN  = 64'h7FF8_0000_0000_0000;
-  localparam logic [FLEN-1:0] D_PINF  = 64'h7FF0_0000_0000_0000;
-  localparam logic [FLEN-1:0] D_NINF  = 64'hFFF0_0000_0000_0000;
-  localparam logic [FLEN-1:0] D_PZERO = {FLEN{1'b0}};
-  localparam logic [FLEN-1:0] D_NZERO = 64'h8000_0000_0000_0000;
+  localparam logic [kronos_pkg::FLEN-1:0] D_QNAN  = 64'h7FF8_0000_0000_0000;
+  localparam logic [kronos_pkg::FLEN-1:0] D_PINF  = 64'h7FF0_0000_0000_0000;
+  localparam logic [kronos_pkg::FLEN-1:0] D_NINF  = 64'hFFF0_0000_0000_0000;
+  localparam logic [kronos_pkg::FLEN-1:0] D_PZERO = {kronos_pkg::FLEN{1'b0}};
+  localparam logic [kronos_pkg::FLEN-1:0] D_NZERO = 64'h8000_0000_0000_0000;
 
   // Canonical bit patterns for single precision (NaN-boxed to 64 bits)
-  localparam logic [FLEN-1:0] S_QNAN  = {FP_NANBOX_UPPER, 32'h7FC0_0000};
-  localparam logic [FLEN-1:0] S_PINF  = {FP_NANBOX_UPPER, 32'h7F80_0000};
-  localparam logic [FLEN-1:0] S_NINF  = {FP_NANBOX_UPPER, 32'hFF80_0000};
-  localparam logic [FLEN-1:0] S_PZERO = {FP_NANBOX_UPPER, 32'h0000_0000};
-  localparam logic [FLEN-1:0] S_NZERO = {FP_NANBOX_UPPER, 32'h8000_0000};
+  localparam logic [kronos_pkg::FLEN-1:0] S_QNAN  = {kronos_pkg::FP_NANBOX_UPPER, 32'h7FC0_0000};
+  localparam logic [kronos_pkg::FLEN-1:0] S_PINF  = {kronos_pkg::FP_NANBOX_UPPER, 32'h7F80_0000};
+  localparam logic [kronos_pkg::FLEN-1:0] S_NINF  = {kronos_pkg::FP_NANBOX_UPPER, 32'hFF80_0000};
+  localparam logic [kronos_pkg::FLEN-1:0] S_PZERO = {kronos_pkg::FP_NANBOX_UPPER, 32'h0000_0000};
+  localparam logic [kronos_pkg::FLEN-1:0] S_NZERO = {kronos_pkg::FP_NANBOX_UPPER, 32'h8000_0000};
 
   // Flag bits
-  localparam logic [4:0] FL_NV = 5'(1) << FP_FFLAG_NV;
-  localparam logic [4:0] FL_DZ = 5'(1) << FP_FFLAG_DZ;
+  localparam logic [4:0] FL_NV = 5'(1) << kronos_pkg::FP_FFLAG_NV;
+  localparam logic [4:0] FL_DZ = 5'(1) << kronos_pkg::FP_FFLAG_DZ;
 
   // -----------------------------------------------------------------------
   // 2. Types
@@ -116,8 +116,8 @@ module kronos_fpu_iter
   logic               fmt_d_q;
   logic [2:0]         rm_q;
   fpu_tag_t           tag_q;
-  logic [FLEN-1:0]    a_raw_q;
-  logic [FLEN-1:0]    b_raw_q;
+  logic [kronos_pkg::FLEN-1:0]    a_raw_q;
+  logic [kronos_pkg::FLEN-1:0]    b_raw_q;
 
   // Classified operands (registered in UNPACK1 -> UNPACK2 transition)
   fp_class_t          a_class_q;
@@ -129,18 +129,18 @@ module kronos_fpu_iter
   logic [53:0]        a_sqrt_q;     // fsqrt: 54-bit normalized sig
 
   // Unbiased true exponents (latched UNPACK1 -> UNPACK2)
-  logic signed [FP_EXP_EXT_W-1:0] a_true_exp_q;
-  logic signed [FP_EXP_EXT_W-1:0] b_true_exp_q;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] a_true_exp_q;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] b_true_exp_q;
 
   // Specials result/flags latched in UNPACK1, consumed in UNPACK2
   logic               is_special_q;
-  logic [FLEN-1:0]    special_result_q;
+  logic [kronos_pkg::FLEN-1:0]    special_result_q;
   logic [4:0]         special_fflags_q;
 
   // Final biased result exponent + sign (computed in UNPACK2 combinationally,
   // latched UNPACK2 -> ITER into result_sign_q / result_exp_q)
   logic               result_sign_q;
-  logic signed [FP_EXP_EXT_W-1:0] result_exp_q;        // signed intermediate exponent
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] result_exp_q;        // signed intermediate exponent
 
   // Raw quotient from core (latched on core_done)
   logic [55:0]        raw_q;
@@ -152,7 +152,7 @@ module kronos_fpu_iter
   logic               rnd_new_g_q;
   logic               rnd_new_r_q;
   logic               rnd_new_s_q;
-  logic signed [FP_EXP_EXT_W-1:0] rnd_final_exp_q;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] rnd_final_exp_q;
   logic               rnd_tiny_q;
 
   // core_start: delayed by one cycle from UNPACK2 -> ITER so that
@@ -161,7 +161,7 @@ module kronos_fpu_iter
   logic               core_start_q;
 
   // Result / fflags registers
-  logic [FLEN-1:0]    result_q;
+  logic [kronos_pkg::FLEN-1:0]    result_q;
   logic [4:0]         fflags_q;
 
   // -----------------------------------------------------------------------
@@ -173,16 +173,16 @@ module kronos_fpu_iter
 
   // Specials
   logic               is_special;
-  logic [FLEN-1:0]    special_result;
+  logic [kronos_pkg::FLEN-1:0]    special_result;
   logic [4:0]         special_fflags;
   logic               sp_result_sign;
-  logic [FLEN-1:0]    sp_qnan;
-  logic [FLEN-1:0]    sp_pinf;
-  logic [FLEN-1:0]    sp_ninf;
-  logic [FLEN-1:0]    sp_pzero;
-  logic [FLEN-1:0]    sp_nzero;
-  logic [FLEN-1:0]    sp_signed_inf;
-  logic [FLEN-1:0]    sp_signed_zero;
+  logic [kronos_pkg::FLEN-1:0]    sp_qnan;
+  logic [kronos_pkg::FLEN-1:0]    sp_pinf;
+  logic [kronos_pkg::FLEN-1:0]    sp_ninf;
+  logic [kronos_pkg::FLEN-1:0]    sp_pzero;
+  logic [kronos_pkg::FLEN-1:0]    sp_nzero;
+  logic [kronos_pkg::FLEN-1:0]    sp_signed_inf;
+  logic [kronos_pkg::FLEN-1:0]    sp_signed_zero;
   logic               sp_a_nan;
   logic               sp_b_nan;
   logic               sp_any_snan;
@@ -192,21 +192,21 @@ module kronos_fpu_iter
   logic [52:0]        a_norm;       // fdiv normalized significand
   logic [52:0]        b_norm;       // fdiv normalized significand
   logic [53:0]        a_sqrt;       // fsqrt normalized significand
-  logic signed [FP_EXP_EXT_W-1:0] a_true_exp;
-  logic signed [FP_EXP_EXT_W-1:0] b_true_exp;
-  logic signed [FP_EXP_EXT_W-1:0] bias;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] a_true_exp;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] b_true_exp;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] bias;
 
   // UNPACK2 result-exp / sign
-  logic signed [FP_EXP_EXT_W-1:0] result_exp_comb;    // biased result exponent
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] result_exp_comb;    // biased result exponent
   logic               result_sign_comb;   // result sign
 
   // ROUND state - rounding logic (combinational)
-  logic [FLEN-1:0]    round_result;
+  logic [kronos_pkg::FLEN-1:0]    round_result;
   logic [4:0]         round_fflags;
 
   // Post-normalization shift signals
   logic [55:0]        rnd_shifted;
-  logic signed [FP_EXP_EXT_W-1:0] rnd_adj_exp;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] rnd_adj_exp;
   logic               rnd_sticky_shift;
 
   // Mantissa extraction
@@ -223,7 +223,7 @@ module kronos_fpu_iter
   logic               rnd_new_g;
   logic               rnd_new_r;
   logic               rnd_new_s;
-  logic signed [FP_EXP_EXT_W-1:0] rnd_final_exp;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] rnd_final_exp;
   logic [6:0]         rnd_shift_amt;
   logic [55:0]        rnd_combined_d;
   logic [55:0]        rnd_shifted_out_d;
@@ -241,7 +241,7 @@ module kronos_fpu_iter
   logic               rnd_carry;
 
   // Pack helpers (hoisted out of inner begin block)
-  logic signed [FP_EXP_EXT_W-1:0] rnd_exp_pack;
+  logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] rnd_exp_pack;
   logic [52:0]        rnd_mant_pack;
 
   // Overflow
@@ -286,14 +286,14 @@ module kronos_fpu_iter
       a_class.sig  = a_raw_q[51:0];
     end else begin
       // Single precision -- check NaN-boxing
-      if (a_raw_q[63:32] == FP_NANBOX_UPPER) begin
+      if (a_raw_q[63:32] == kronos_pkg::FP_NANBOX_UPPER) begin
         a_class.sign = a_raw_q[31];
         a_class.exp  = {3'b0, a_raw_q[30:23]};
         a_class.sig  = {a_raw_q[22:0], 29'b0};
       end else begin
         // Not properly NaN-boxed: treat as canonical qNaN
         a_class.sign    = 1'b0;
-        a_class.exp     = FP_D_EXP_MAX;
+        a_class.exp     = kronos_pkg::FP_D_EXP_MAX;
         a_class.sig     = {1'b1, 51'b0};
         a_class.is_qnan = 1'b1;
       end
@@ -302,27 +302,27 @@ module kronos_fpu_iter
     // Classification (only if not already forced to qNaN by NaN-box check)
     if (!a_class.is_qnan) begin
       if (fmt_d_q) begin
-        a_class.is_zero    = (a_class.exp == 11'h000) && (a_class.sig == {FP_D_MANT_W{1'b0}});
-        a_class.is_subnorm = (a_class.exp == 11'h000) && (a_class.sig != {FP_D_MANT_W{1'b0}});
-        a_class.is_inf     = (a_class.exp == FP_D_EXP_MAX) && (a_class.sig == {FP_D_MANT_W{1'b0}});
-        a_class.is_snan    = (a_class.exp == FP_D_EXP_MAX) && (a_class.sig != {FP_D_MANT_W{1'b0}})
+        a_class.is_zero    = (a_class.exp == 11'h000) && (a_class.sig == {kronos_pkg::FP_D_MANT_W{1'b0}});
+        a_class.is_subnorm = (a_class.exp == 11'h000) && (a_class.sig != {kronos_pkg::FP_D_MANT_W{1'b0}});
+        a_class.is_inf     = (a_class.exp == kronos_pkg::FP_D_EXP_MAX) && (a_class.sig == {kronos_pkg::FP_D_MANT_W{1'b0}});
+        a_class.is_snan    = (a_class.exp == kronos_pkg::FP_D_EXP_MAX) && (a_class.sig != {kronos_pkg::FP_D_MANT_W{1'b0}})
                              && !a_class.sig[51];
-        a_class.is_qnan    = (a_class.exp == FP_D_EXP_MAX) && a_class.sig[51];
+        a_class.is_qnan    = (a_class.exp == kronos_pkg::FP_D_EXP_MAX) && a_class.sig[51];
         a_class.is_normal  = !a_class.is_zero && !a_class.is_subnorm
                              && !a_class.is_inf && !a_class.is_snan
                              && !a_class.is_qnan;
       end else begin
         // Single: exponent is in [7:0] of a_class.exp, sig in [51:29]
         a_class.is_zero    = (a_class.exp[7:0] == 8'h00)
-                             && (a_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
+                             && (a_class.sig[51:29] == {kronos_pkg::FP_S_MANT_W{1'b0}});
         a_class.is_subnorm = (a_class.exp[7:0] == 8'h00)
-                             && (a_class.sig[51:29] != {FP_S_MANT_W{1'b0}});
-        a_class.is_inf     = (a_class.exp[7:0] == FP_S_EXP_MAX)
-                             && (a_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
-        a_class.is_snan    = (a_class.exp[7:0] == FP_S_EXP_MAX)
-                             && (a_class.sig[51:29] != {FP_S_MANT_W{1'b0}})
+                             && (a_class.sig[51:29] != {kronos_pkg::FP_S_MANT_W{1'b0}});
+        a_class.is_inf     = (a_class.exp[7:0] == kronos_pkg::FP_S_EXP_MAX)
+                             && (a_class.sig[51:29] == {kronos_pkg::FP_S_MANT_W{1'b0}});
+        a_class.is_snan    = (a_class.exp[7:0] == kronos_pkg::FP_S_EXP_MAX)
+                             && (a_class.sig[51:29] != {kronos_pkg::FP_S_MANT_W{1'b0}})
                              && !a_class.sig[51];
-        a_class.is_qnan    = (a_class.exp[7:0] == FP_S_EXP_MAX)
+        a_class.is_qnan    = (a_class.exp[7:0] == kronos_pkg::FP_S_EXP_MAX)
                              && a_class.sig[51];
         a_class.is_normal  = !a_class.is_zero && !a_class.is_subnorm
                              && !a_class.is_inf && !a_class.is_snan
@@ -347,14 +347,14 @@ module kronos_fpu_iter
       b_class.sig  = b_raw_q[51:0];
     end else begin
       // Single precision -- check NaN-boxing
-      if (b_raw_q[63:32] == FP_NANBOX_UPPER) begin
+      if (b_raw_q[63:32] == kronos_pkg::FP_NANBOX_UPPER) begin
         b_class.sign = b_raw_q[31];
         b_class.exp  = {3'b0, b_raw_q[30:23]};
         b_class.sig  = {b_raw_q[22:0], 29'b0};
       end else begin
         // Not properly NaN-boxed: treat as canonical qNaN
         b_class.sign    = 1'b0;
-        b_class.exp     = FP_D_EXP_MAX;
+        b_class.exp     = kronos_pkg::FP_D_EXP_MAX;
         b_class.sig     = {1'b1, 51'b0};
         b_class.is_qnan = 1'b1;
       end
@@ -363,27 +363,27 @@ module kronos_fpu_iter
     // Classification
     if (!b_class.is_qnan) begin
       if (fmt_d_q) begin
-        b_class.is_zero    = (b_class.exp == 11'h000) && (b_class.sig == {FP_D_MANT_W{1'b0}});
-        b_class.is_subnorm = (b_class.exp == 11'h000) && (b_class.sig != {FP_D_MANT_W{1'b0}});
-        b_class.is_inf     = (b_class.exp == FP_D_EXP_MAX) && (b_class.sig == {FP_D_MANT_W{1'b0}});
-        b_class.is_snan    = (b_class.exp == FP_D_EXP_MAX) && (b_class.sig != {FP_D_MANT_W{1'b0}})
+        b_class.is_zero    = (b_class.exp == 11'h000) && (b_class.sig == {kronos_pkg::FP_D_MANT_W{1'b0}});
+        b_class.is_subnorm = (b_class.exp == 11'h000) && (b_class.sig != {kronos_pkg::FP_D_MANT_W{1'b0}});
+        b_class.is_inf     = (b_class.exp == kronos_pkg::FP_D_EXP_MAX) && (b_class.sig == {kronos_pkg::FP_D_MANT_W{1'b0}});
+        b_class.is_snan    = (b_class.exp == kronos_pkg::FP_D_EXP_MAX) && (b_class.sig != {kronos_pkg::FP_D_MANT_W{1'b0}})
                              && !b_class.sig[51];
-        b_class.is_qnan    = (b_class.exp == FP_D_EXP_MAX) && b_class.sig[51];
+        b_class.is_qnan    = (b_class.exp == kronos_pkg::FP_D_EXP_MAX) && b_class.sig[51];
         b_class.is_normal  = !b_class.is_zero && !b_class.is_subnorm
                              && !b_class.is_inf && !b_class.is_snan
                              && !b_class.is_qnan;
       end else begin
         // Single: exponent is in [7:0] of b_class.exp, sig in [51:29]
         b_class.is_zero    = (b_class.exp[7:0] == 8'h00)
-                             && (b_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
+                             && (b_class.sig[51:29] == {kronos_pkg::FP_S_MANT_W{1'b0}});
         b_class.is_subnorm = (b_class.exp[7:0] == 8'h00)
-                             && (b_class.sig[51:29] != {FP_S_MANT_W{1'b0}});
-        b_class.is_inf     = (b_class.exp[7:0] == FP_S_EXP_MAX)
-                             && (b_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
-        b_class.is_snan    = (b_class.exp[7:0] == FP_S_EXP_MAX)
-                             && (b_class.sig[51:29] != {FP_S_MANT_W{1'b0}})
+                             && (b_class.sig[51:29] != {kronos_pkg::FP_S_MANT_W{1'b0}});
+        b_class.is_inf     = (b_class.exp[7:0] == kronos_pkg::FP_S_EXP_MAX)
+                             && (b_class.sig[51:29] == {kronos_pkg::FP_S_MANT_W{1'b0}});
+        b_class.is_snan    = (b_class.exp[7:0] == kronos_pkg::FP_S_EXP_MAX)
+                             && (b_class.sig[51:29] != {kronos_pkg::FP_S_MANT_W{1'b0}})
                              && !b_class.sig[51];
-        b_class.is_qnan    = (b_class.exp[7:0] == FP_S_EXP_MAX)
+        b_class.is_qnan    = (b_class.exp[7:0] == kronos_pkg::FP_S_EXP_MAX)
                              && b_class.sig[51];
         b_class.is_normal  = !b_class.is_zero && !b_class.is_subnorm
                              && !b_class.is_inf && !b_class.is_snan
@@ -404,16 +404,16 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_comb begin : proc_specials
     is_special     = 1'b0;
-    special_result = {FLEN{1'b0}};
+    special_result = {kronos_pkg::FLEN{1'b0}};
     special_fflags = 5'h0;
     sp_result_sign = 1'b0;
-    sp_qnan        = {FLEN{1'b0}};
-    sp_pinf        = {FLEN{1'b0}};
-    sp_ninf        = {FLEN{1'b0}};
-    sp_pzero       = {FLEN{1'b0}};
-    sp_nzero       = {FLEN{1'b0}};
-    sp_signed_inf  = {FLEN{1'b0}};
-    sp_signed_zero = {FLEN{1'b0}};
+    sp_qnan        = {kronos_pkg::FLEN{1'b0}};
+    sp_pinf        = {kronos_pkg::FLEN{1'b0}};
+    sp_ninf        = {kronos_pkg::FLEN{1'b0}};
+    sp_pzero       = {kronos_pkg::FLEN{1'b0}};
+    sp_nzero       = {kronos_pkg::FLEN{1'b0}};
+    sp_signed_inf  = {kronos_pkg::FLEN{1'b0}};
+    sp_signed_zero = {kronos_pkg::FLEN{1'b0}};
     sp_a_nan       = 1'b0;
     sp_b_nan       = 1'b0;
     sp_any_snan    = 1'b0;
@@ -521,26 +521,26 @@ module kronos_fpu_iter
     a_norm     = 53'h0;
     b_norm     = 53'h0;
     a_sqrt     = 54'h0;
-    a_true_exp = {FP_EXP_EXT_W{1'b0}};
-    b_true_exp = {FP_EXP_EXT_W{1'b0}};
+    a_true_exp = {kronos_pkg::FP_EXP_EXT_W{1'b0}};
+    b_true_exp = {kronos_pkg::FP_EXP_EXT_W{1'b0}};
 
-    bias = fmt_d_q ? FP_EXP_EXT_W'(FP_D_BIAS) : FP_EXP_EXT_W'(FP_S_BIAS);
+    bias = fmt_d_q ? kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_D_BIAS) : kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_S_BIAS);
 
     // --- Operand A normalization ---
     if (a_class.is_subnorm) begin
-      a_true_exp = $signed(FP_EXP_EXT_W'(1)) - bias - $signed(FP_EXP_EXT_W'(a_class.clz));
+      a_true_exp = $signed(kronos_pkg::FP_EXP_EXT_W'(1)) - bias - $signed(kronos_pkg::FP_EXP_EXT_W'(a_class.clz));
       a_norm     = {1'b0, a_class.sig} << a_class.clz;
     end else begin
-      a_true_exp = $signed(FP_EXP_EXT_W'(a_class.exp)) - bias;
+      a_true_exp = $signed(kronos_pkg::FP_EXP_EXT_W'(a_class.exp)) - bias;
       a_norm     = {1'b1, a_class.sig};
     end
 
     // --- Operand B normalization (FDIV only; harmless for FSQRT) ---
     if (b_class.is_subnorm) begin
-      b_true_exp = $signed(FP_EXP_EXT_W'(1)) - bias - $signed(FP_EXP_EXT_W'(b_class.clz));
+      b_true_exp = $signed(kronos_pkg::FP_EXP_EXT_W'(1)) - bias - $signed(kronos_pkg::FP_EXP_EXT_W'(b_class.clz));
       b_norm     = {1'b0, b_class.sig} << b_class.clz;
     end else begin
-      b_true_exp = $signed(FP_EXP_EXT_W'(b_class.exp)) - bias;
+      b_true_exp = $signed(kronos_pkg::FP_EXP_EXT_W'(b_class.exp)) - bias;
       b_norm     = {1'b1, b_class.sig};
     end
 
@@ -560,7 +560,7 @@ module kronos_fpu_iter
   // classify+normalize+exp-compute cone into two cycles is the C4 fix.
   // -----------------------------------------------------------------------
   always_comb begin : proc_result_exp
-    result_exp_comb  = {FP_EXP_EXT_W{1'b0}};
+    result_exp_comb  = {kronos_pkg::FP_EXP_EXT_W{1'b0}};
     result_sign_comb = 1'b0;
 
     // Result sign: FDIV = sign_a ^ sign_b, FSQRT = 0 (negative caught as special).
@@ -571,14 +571,14 @@ module kronos_fpu_iter
     if (op_q == FP_FDIV) begin
       // FDIV: result_exp (biased) = (a_true - b_true) + bias
       result_exp_comb = a_true_exp_q - b_true_exp_q
-                        + (fmt_d_q ? FP_EXP_EXT_W'(FP_D_BIAS)
-                                   : FP_EXP_EXT_W'(FP_S_BIAS));
+                        + (fmt_d_q ? kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_D_BIAS)
+                                   : kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_S_BIAS));
     end else begin
       // FSQRT: result_exp (biased) = floor(a_true / 2) + bias
       // arithmetic right shift by 1 gives floor(x/2) for signed x
       result_exp_comb = (a_true_exp_q >>> 1)
-                        + (fmt_d_q ? FP_EXP_EXT_W'(FP_D_BIAS)
-                                   : FP_EXP_EXT_W'(FP_S_BIAS));
+                        + (fmt_d_q ? kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_D_BIAS)
+                                   : kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_S_BIAS));
     end
   end
 
@@ -588,20 +588,20 @@ module kronos_fpu_iter
   always_comb begin : proc_round1
     // Defaults
     rnd_shifted            = 56'h0;
-    rnd_adj_exp            = {FP_EXP_EXT_W{1'b0}};
+    rnd_adj_exp            = {kronos_pkg::FP_EXP_EXT_W{1'b0}};
     rnd_sticky_shift       = 1'b0;
-    rnd_mantissa           = {FP_D_MANT_W{1'b0}};
+    rnd_mantissa           = {kronos_pkg::FP_D_MANT_W{1'b0}};
     rnd_lsb                = 1'b0;
     rnd_g                  = 1'b0;
     rnd_r                  = 1'b0;
     rnd_s                  = 1'b0;
     rnd_tiny               = 1'b0;
-    rnd_mant_shifted       = {FP_D_MANT_W{1'b0}};
+    rnd_mant_shifted       = {kronos_pkg::FP_D_MANT_W{1'b0}};
     rnd_new_lsb            = 1'b0;
     rnd_new_g              = 1'b0;
     rnd_new_r              = 1'b0;
     rnd_new_s              = 1'b0;
-    rnd_final_exp          = {FP_EXP_EXT_W{1'b0}};
+    rnd_final_exp          = {kronos_pkg::FP_EXP_EXT_W{1'b0}};
     rnd_shift_amt          = 7'h0;
     rnd_combined_d         = 56'h0;
     rnd_shifted_out_d      = 56'h0;
@@ -618,7 +618,7 @@ module kronos_fpu_iter
       rnd_need_shift = fmt_d_q ? !raw_q[55] : !raw_q[26];
       if (rnd_need_shift) begin
         rnd_shifted = {raw_q[54:0], raw_sticky_q};
-        rnd_adj_exp = result_exp_q - $signed(FP_EXP_EXT_W'(1));
+        rnd_adj_exp = result_exp_q - $signed(kronos_pkg::FP_EXP_EXT_W'(1));
         rnd_sticky_shift = 1'b0;
       end else begin
         rnd_shifted = raw_q;
@@ -641,7 +641,7 @@ module kronos_fpu_iter
       rnd_r        = rnd_shifted[1];
       rnd_s        = rnd_sticky_shift | rnd_shifted[0];
     end else begin
-      rnd_mantissa = {{(FP_D_MANT_W-FP_S_MANT_W){1'b0}}, rnd_shifted[25:3]};
+      rnd_mantissa = {{(kronos_pkg::FP_D_MANT_W-kronos_pkg::FP_S_MANT_W){1'b0}}, rnd_shifted[25:3]};
       rnd_lsb      = rnd_shifted[3];
       rnd_g        = rnd_shifted[2];
       rnd_r        = rnd_shifted[1];
@@ -651,15 +651,15 @@ module kronos_fpu_iter
     // ------------------------------------------------------------------
     // 3. Tininess detection and subnormal shift (before rounding)
     // ------------------------------------------------------------------
-    rnd_tiny = (rnd_adj_exp <= $signed({FP_EXP_EXT_W{1'b0}}));
+    rnd_tiny = (rnd_adj_exp <= $signed({kronos_pkg::FP_EXP_EXT_W{1'b0}}));
 
     if (rnd_tiny) begin
       if (fmt_d_q) begin
-        rnd_shift_amt = (($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp) > 13'sd56)
-                        ? 7'd56 : 7'($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp);
+        rnd_shift_amt = (($signed(kronos_pkg::FP_EXP_EXT_W'(1)) - rnd_adj_exp) > 13'sd56)
+                        ? 7'd56 : 7'($signed(kronos_pkg::FP_EXP_EXT_W'(1)) - rnd_adj_exp);
       end else begin
-        rnd_shift_amt = (($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp) > 13'sd27)
-                        ? 7'd27 : 7'($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp);
+        rnd_shift_amt = (($signed(kronos_pkg::FP_EXP_EXT_W'(1)) - rnd_adj_exp) > 13'sd27)
+                        ? 7'd27 : 7'($signed(kronos_pkg::FP_EXP_EXT_W'(1)) - rnd_adj_exp);
       end
 
       if (fmt_d_q) begin
@@ -675,14 +675,14 @@ module kronos_fpu_iter
         rnd_combined_s = rnd_shifted[26:0];
         rnd_shifted_out_s = rnd_combined_s & ((27'd1 << rnd_shift_amt) - 27'd1);
         rnd_combined_shifted_s = rnd_combined_s >> rnd_shift_amt;
-        rnd_mant_shifted = {{(FP_D_MANT_W-FP_S_MANT_W){1'b0}}, rnd_combined_shifted_s[25:3]};
+        rnd_mant_shifted = {{(kronos_pkg::FP_D_MANT_W-kronos_pkg::FP_S_MANT_W){1'b0}}, rnd_combined_shifted_s[25:3]};
         rnd_new_lsb = rnd_combined_shifted_s[3];
         rnd_new_g   = rnd_combined_shifted_s[2];
         rnd_new_r   = rnd_combined_shifted_s[1];
         rnd_new_s   = rnd_s | rnd_combined_shifted_s[0] | (|rnd_shifted_out_s);
       end
 
-      rnd_final_exp = $signed({FP_EXP_EXT_W{1'b0}});
+      rnd_final_exp = $signed({kronos_pkg::FP_EXP_EXT_W{1'b0}});
     end else begin
       rnd_mant_shifted = rnd_mantissa;
       rnd_new_lsb = rnd_lsb;
@@ -698,12 +698,12 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_round1_latch
     if (!rst_ni) begin
-      rnd_mant_shifted_q <= {FP_D_MANT_W{1'b0}};
+      rnd_mant_shifted_q <= {kronos_pkg::FP_D_MANT_W{1'b0}};
       rnd_new_lsb_q      <= 1'b0;
       rnd_new_g_q        <= 1'b0;
       rnd_new_r_q        <= 1'b0;
       rnd_new_s_q        <= 1'b0;
-      rnd_final_exp_q    <= {FP_EXP_EXT_W{1'b0}};
+      rnd_final_exp_q    <= {kronos_pkg::FP_EXP_EXT_W{1'b0}};
       rnd_tiny_q         <= 1'b0;
     end else if (state_q == ROUND1) begin
       rnd_mant_shifted_q <= rnd_mant_shifted;
@@ -721,13 +721,13 @@ module kronos_fpu_iter
   // Reads ROUND1 latches; writes round_result / round_fflags
   // -----------------------------------------------------------------------
   always_comb begin : proc_round2
-    round_result        = {FLEN{1'b0}};
+    round_result        = {kronos_pkg::FLEN{1'b0}};
     round_fflags        = 5'h0;
     rnd_round_up        = 1'b0;
     rnd_inexact         = 1'b0;
     rnd_rounded_mant    = 53'h0;
     rnd_carry           = 1'b0;
-    rnd_exp_pack        = {FP_EXP_EXT_W{1'b0}};
+    rnd_exp_pack        = {kronos_pkg::FP_EXP_EXT_W{1'b0}};
     rnd_mant_pack       = 53'h0;
     rnd_overflow        = 1'b0;
     rnd_overflow_to_inf = 1'b0;
@@ -754,10 +754,10 @@ module kronos_fpu_iter
     // 5. Add rounding increment
     // ------------------------------------------------------------------
     if (fmt_d_q) begin
-      rnd_rounded_mant = {1'b0, rnd_mant_shifted_q} + {{FP_D_MANT_W{1'b0}}, rnd_round_up};
+      rnd_rounded_mant = {1'b0, rnd_mant_shifted_q} + {{kronos_pkg::FP_D_MANT_W{1'b0}}, rnd_round_up};
     end else begin
-      rnd_rounded_mant = {{(FP_D_MANT_W+1-FP_S_MANT_W){1'b0}}, rnd_mant_shifted_q[22:0]}
-                       + {{FP_D_MANT_W{1'b0}}, rnd_round_up};
+      rnd_rounded_mant = {{(kronos_pkg::FP_D_MANT_W+1-kronos_pkg::FP_S_MANT_W){1'b0}}, rnd_mant_shifted_q[22:0]}
+                       + {{kronos_pkg::FP_D_MANT_W{1'b0}}, rnd_round_up};
     end
 
     rnd_carry = fmt_d_q ? rnd_rounded_mant[52] : rnd_rounded_mant[23];
@@ -766,15 +766,15 @@ module kronos_fpu_iter
     rnd_exp_pack  = rnd_final_exp_q;
     rnd_mant_pack = rnd_rounded_mant;
     if (rnd_carry) begin
-      rnd_exp_pack  = rnd_final_exp_q + $signed(FP_EXP_EXT_W'(1));
+      rnd_exp_pack  = rnd_final_exp_q + $signed(kronos_pkg::FP_EXP_EXT_W'(1));
       rnd_mant_pack = 53'h0;
     end
 
     // ----------------------------------------------------------------
     // 6. Overflow detection
     // ----------------------------------------------------------------
-    rnd_overflow = fmt_d_q ? (rnd_exp_pack >= FP_EXP_EXT_W'(FP_D_EXP_MAX))
-                           : (rnd_exp_pack >= FP_EXP_EXT_W'(FP_S_EXP_MAX));
+    rnd_overflow = fmt_d_q ? (rnd_exp_pack >= kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_D_EXP_MAX))
+                           : (rnd_exp_pack >= kronos_pkg::FP_EXP_EXT_W'(kronos_pkg::FP_S_EXP_MAX));
 
     if (rnd_overflow) begin
       unique case (rm_q)
@@ -800,22 +800,22 @@ module kronos_fpu_iter
     if (rnd_overflow) begin
       if (rnd_overflow_to_inf) begin
         if (fmt_d_q) begin
-          round_result = {result_sign_q, FP_D_EXP_MAX, {FP_D_MANT_W{1'b0}}};
+          round_result = {result_sign_q, kronos_pkg::FP_D_EXP_MAX, {kronos_pkg::FP_D_MANT_W{1'b0}}};
         end else begin
-          round_result = {FP_NANBOX_UPPER, result_sign_q, FP_S_EXP_MAX, {FP_S_MANT_W{1'b0}}};
+          round_result = {kronos_pkg::FP_NANBOX_UPPER, result_sign_q, kronos_pkg::FP_S_EXP_MAX, {kronos_pkg::FP_S_MANT_W{1'b0}}};
         end
       end else begin
         if (fmt_d_q) begin
-          round_result = {result_sign_q, FP_D_EXP_PENULT, {FP_D_MANT_W{1'b1}}};
+          round_result = {result_sign_q, kronos_pkg::FP_D_EXP_PENULT, {kronos_pkg::FP_D_MANT_W{1'b1}}};
         end else begin
-          round_result = {FP_NANBOX_UPPER, result_sign_q, FP_S_EXP_PENULT, {FP_S_MANT_W{1'b1}}};
+          round_result = {kronos_pkg::FP_NANBOX_UPPER, result_sign_q, kronos_pkg::FP_S_EXP_PENULT, {kronos_pkg::FP_S_MANT_W{1'b1}}};
         end
       end
     end else begin
       if (fmt_d_q) begin
-        round_result = {result_sign_q, rnd_exp_pack[FP_D_EXP_W-1:0], rnd_mant_pack[FP_D_MANT_W-1:0]};
+        round_result = {result_sign_q, rnd_exp_pack[kronos_pkg::FP_D_EXP_W-1:0], rnd_mant_pack[kronos_pkg::FP_D_MANT_W-1:0]};
       end else begin
-        round_result = {FP_NANBOX_UPPER, result_sign_q, rnd_exp_pack[FP_S_EXP_W-1:0], rnd_mant_pack[FP_S_MANT_W-1:0]};
+        round_result = {kronos_pkg::FP_NANBOX_UPPER, result_sign_q, rnd_exp_pack[kronos_pkg::FP_S_EXP_W-1:0], rnd_mant_pack[kronos_pkg::FP_S_MANT_W-1:0]};
       end
     end
   end
@@ -909,8 +909,8 @@ module kronos_fpu_iter
       fmt_d_q <= 1'b0;
       rm_q    <= 3'b0;
       tag_q   <= '{default: '0};
-      a_raw_q <= {FLEN{1'b0}};
-      b_raw_q <= {FLEN{1'b0}};
+      a_raw_q <= {kronos_pkg::FLEN{1'b0}};
+      b_raw_q <= {kronos_pkg::FLEN{1'b0}};
     end else if (state_q == IDLE && in_valid_i) begin
       op_q    <= op_i;
       fmt_d_q <= fmt_d_i;
@@ -942,10 +942,10 @@ module kronos_fpu_iter
       a_norm_q         <= 53'h0;
       b_norm_q         <= 53'h0;
       a_sqrt_q         <= 54'h0;
-      a_true_exp_q     <= {FP_EXP_EXT_W{1'b0}};
-      b_true_exp_q     <= {FP_EXP_EXT_W{1'b0}};
+      a_true_exp_q     <= {kronos_pkg::FP_EXP_EXT_W{1'b0}};
+      b_true_exp_q     <= {kronos_pkg::FP_EXP_EXT_W{1'b0}};
       is_special_q     <= 1'b0;
-      special_result_q <= {FLEN{1'b0}};
+      special_result_q <= {kronos_pkg::FLEN{1'b0}};
       special_fflags_q <= 5'h0;
     end else if (state_q == UNPACK1) begin
       a_norm_q         <= a_norm;
@@ -965,7 +965,7 @@ module kronos_fpu_iter
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_unpack2_latch
     if (!rst_ni) begin
       result_sign_q <= 1'b0;
-      result_exp_q  <= {FP_EXP_EXT_W{1'b0}};
+      result_exp_q  <= {kronos_pkg::FP_EXP_EXT_W{1'b0}};
     end else if (state_q == UNPACK2 && !is_special_q) begin
       result_sign_q <= result_sign_comb;
       result_exp_q  <= result_exp_comb;
@@ -990,7 +990,7 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_result_latch
     if (!rst_ni) begin
-      result_q <= {FLEN{1'b0}};
+      result_q <= {kronos_pkg::FLEN{1'b0}};
       fflags_q <= 5'h0;
     end else if (state_q == UNPACK2 && is_special_q) begin
       result_q <= special_result_q;

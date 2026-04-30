@@ -458,9 +458,9 @@ module kronos_top
   // =========================================================================
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex_q <= ID_EX_REG_ZERO;
+      id_ex_q <= kronos_pkg::ID_EX_REG_ZERO;
     end else if (id_ex_flush) begin
-      id_ex_q <= ID_EX_REG_ZERO;
+      id_ex_q <= kronos_pkg::ID_EX_REG_ZERO;
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
