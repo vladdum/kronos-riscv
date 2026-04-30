@@ -51,3 +51,22 @@ lint_off -rule BLKSEQ -file "*/tb/*"
 // (e.g. addRecFN.v). Upstream convention; cannot fix in our tree.
 // ---------------------------------------------------------------------------
 lint_off -rule DECLFILENAME -file "*/vendor/hardfloat/*"
+
+// ---------------------------------------------------------------------------
+// VARHIDDEN — per-stage decoders and decompress modules shadowed by kronos_pkg
+// opcode constants. The 20 RV64IMAFDC opcode localparams (OP, OP_IMM, BRANCH,
+// LOAD, ...) added to kronos_pkg for the stage-6 decoder split are also defined
+// module-locally in the legacy decoders (stages 0/2/4/5) and in every
+// decompress module (stages 3/4/5/6, which build expanded 32-bit encodings
+// from RVC). Values agree (they are the same RISC-V opcode encodings), so the
+// shadowing is a false alarm. Older stages are frozen; the decompress modules
+// could later be refactored to use pkg constants but are out of scope here.
+// ---------------------------------------------------------------------------
+lint_off -rule VARHIDDEN -file "*/rtl/stage0/kronos_decode.sv"
+lint_off -rule VARHIDDEN -file "*/rtl/stage2/kronos_decode.sv"
+lint_off -rule VARHIDDEN -file "*/rtl/stage4/kronos_decode.sv"
+lint_off -rule VARHIDDEN -file "*/rtl/stage5/kronos_decode.sv"
+lint_off -rule VARHIDDEN -file "*/rtl/stage3/kronos_decompress.sv"
+lint_off -rule VARHIDDEN -file "*/rtl/stage4/kronos_decompress.sv"
+lint_off -rule VARHIDDEN -file "*/rtl/stage5/kronos_decompress.sv"
+lint_off -rule VARHIDDEN -file "*/rtl/stage6/kronos_decompress.sv"

@@ -1015,6 +1015,11 @@ SV_FILES_S6 := $(AXI_PKG_SV) \
                $(RTL_DIR_COMMON)/kronos_ram.sv \
                $(RTL_DIR_S6)/kronos_alu.sv \
                $(RTL_DIR_S6)/kronos_decode.sv \
+               $(RTL_DIR_S6)/kronos_decode_int.sv \
+               $(RTL_DIR_S6)/kronos_decode_ctrl.sv \
+               $(RTL_DIR_S6)/kronos_decode_mem.sv \
+               $(RTL_DIR_S6)/kronos_decode_sys.sv \
+               $(RTL_DIR_S6)/kronos_decode_fp.sv \
                $(RTL_DIR)/stage0/kronos_regfile.sv \
                $(RTL_DIR_S6)/kronos_icache.sv \
                $(RTL_DIR_S6)/kronos_csr.sv \
@@ -1258,6 +1263,24 @@ sim-alu-s6:
 	  --top-module tb_alu_s6 $(TB_ALU_S6_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_alu_s6
 	$(OBJ_DIR)/tb_alu_s6/Vtb_alu_s6
+
+# ── Stage 6 decode unit TB (equivalence vs frozen legacy snapshot) ─────────
+TB_DECODE_S6_FILES := $(AXI_PKG_SV) \
+                      $(RTL_DIR)/kronos_pkg.sv \
+                      $(RTL_DIR)/stage6/kronos_decode_ctrl.sv \
+                      $(RTL_DIR)/stage6/kronos_decode_sys.sv \
+                      $(RTL_DIR)/stage6/kronos_decode_mem.sv \
+                      $(RTL_DIR)/stage6/kronos_decode_int.sv \
+                      $(RTL_DIR)/stage6/kronos_decode_fp.sv \
+                      $(RTL_DIR)/stage6/kronos_decode.sv \
+                      $(TB_DIR)/stage6/kronos_decode_legacy.sv \
+                      $(TB_DIR)/stage6/tb_decode_s6.sv
+sim-decode-s6-tb:
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --Wno-VARHIDDEN \
+	  --top-module tb_decode_s6 $(TB_DECODE_S6_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_decode_s6
+	$(OBJ_DIR)/tb_decode_s6/Vtb_decode_s6
 
 TB_TLB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                  $(RTL_DIR)/stage6/kronos_tlb.sv \
