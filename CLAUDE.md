@@ -320,7 +320,7 @@ commits.
 ```systemverilog
 // Correct
 always_ff @(posedge clk_i or negedge rst_ni) begin
-  if (!rst_ni) q <= '0;
+  if (!rst_ni) q <= 32'h0;     // explicit width — q is 32-bit
   else         q <= d;
 end
 
@@ -332,20 +332,43 @@ end
 
 ### Combinational Logic
 
-- Use `unique case` (not `case`) — it enables lint checks for full coverage and mutual exclusivity.
+- Use `unique case` (not `case`) inside `always_ff` and `always_comb` blocks — it enables lint checks for full coverage and mutual exclusivity. Inside `function automatic` bodies, plain `case` with an explicit `default` is preferred (the `unique` annotation gates lint checks that are less load-bearing when the function returns a value).
 - Always include a `default` branch in every `case` statement.
 - Do not use `casex` or `casez` — use explicit don't-care masks instead.
 - Assign all outputs of an `always_comb` block at the top (defaults), then override in branches. This prevents unintended latches.
+- **`if` / `else` bodies on a separate line must use `begin` / `end`.** Single-line bodies (`if (cond) stmt;`) and the reset idiom (`if (!rst_ni) q <= 32'h0; else q <= ...;`) are exempt. The rule prevents the dangling-statement footgun: a future edit that adds a second body line would silently fall outside the `if`.
+
+```systemverilog
+// BAD — multi-line if without begin/end
+if (fmt_d_q)
+  result = double_path;
+else
+  result = single_path;
+
+// GOOD — wrapped
+if (fmt_d_q) begin
+  result = double_path;
+end else begin
+  result = single_path;
+end
+
+// GOOD — one-liner exemption
+if (cond) flag = 1'b1;
+
+// GOOD — reset idiom exemption
+if (!rst_ni) q <= 32'h0;
+else         q <= d;
+```
 
 ```systemverilog
 // Correct: default first, then overrides
 always_comb begin
-  out = '0;           // default
+  out = 32'h0;        // default — explicit width matches `out`
   unique case (sel)
     2'b00: out = a;
     2'b01: out = b;
     2'b10: out = c;
-    default: out = '0;
+    default: out = 32'h0;
   endcase
 end
 ```
@@ -355,58 +378,96 @@ end
 - Declare all signals as `logic`. Do not use `wire` or `reg`.
 - Use packed structs and enums from `kronos_pkg` rather than raw bit vectors where it aids readability.
 - Avoid implicit net declarations — every signal must be explicitly declared.
-- Use `'0` and `'1` for zero/all-ones literals (width-agnostic). Use explicit widths for constants that have a specific meaning (e.g. `32'hDEAD_BEEF`).
+- **Never use `'0` or `'1` in plain assignments.** Every zero / all-ones / numeric literal assignment must use an explicit width — `64'h0`, `{XLEN{1'b0}}`, `32'hDEAD_BEEF`, `1'b0`, `1'b1`, etc. The explicit width documents the signal's bit width at the use site, helps catch width-mismatch bugs at lint time, and matches established project style. This applies to assignments, defaults inside `always_comb`/`always_ff`, and reset values inside `if (!rst_ni)` branches.
+- **Recognized exception — struct-pattern initializers:** `'{default: '0}` is the standard SystemVerilog idiom for zero-initializing a struct that contains a mix of `logic` and enum fields. Inside the struct pattern, `'0` is per-field-typed (it picks each enum's first value and zeros each `logic` field at its declared width). Verilator rejects `'{default: 1'b0}` for enum fields, so use `'{default: '0}` for struct-zero defaults and resets.
 - Use underscores in long literals for readability: `32'hDEAD_BEEF`, `16'b1010_0101_1111_0000`.
 
 ### Signal Declaration Order
 
-Declare all signals at the top of the module, after the port list and before any `always` blocks or instantiations. Group them in this order:
+All module signals (`logic`, struct/enum instances) must be declared in a single block immediately after the port list, in this order:
 
 1. `localparam` / `parameter` constants
-2. Imported type instances (structs, enums from `kronos_pkg`)
-3. State registers (signals driven by `always_ff`)
-4. Combinational signals (signals driven by `always_comb` or `assign`)
-5. Submodule interface signals (inputs/outputs to instances)
+2. Imported types (struct / enum instances from `kronos_pkg`)
+3. State registers (signals driven by `always_ff`, suffixed `_q`)
+4. Combinational signals (signals driven by `always_comb` / `assign`)
+5. Submodule interface signals (inputs/outputs of instances)
 
-Exception: signals local to a `generate` block may be declared inside it.
+No additional `logic` / struct / enum declarations may appear elsewhere in the module body. Section comments inside the declaration block are encouraged for grouping (`// PTW signals`, `// miss FSM`).
+
+**Exception:** declarations inside `generate` blocks are allowed (per-instance scope).
+**Exception:** `for (int i = …; …)` loop indices may be declared in the loop header.
+
+### No `automatic` variables
+
+Banned in `always_ff`, `always_comb`, `for` / `begin` blocks, and at module scope. The keyword `automatic` may appear **only** on `function` and `task` declarations.
+
+`function automatic` is **allowed and recommended** as the safe default for all helper functions — it provides per-call locals and avoids simulation re-entrancy hazards. Locals declared inside a function are scoped per call and are not affected by the no-in-process-declarations rule.
 
 ```systemverilog
-module kronos_example
-  import kronos_pkg::*;
-(
-  input  logic        clk_i,
-  input  logic        rst_ni,
-  input  logic [31:0] data_i,
-  output logic [31:0] data_o
-);
-  // 1. Constants
-  localparam int unsigned DEPTH = 4;
-
-  // 2. Structs / enums
-  decoded_instr_t dec;
-
-  // 3. State registers
-  logic [31:0] count_q;
-
-  // 4. Combinational signals
-  logic [31:0] count_next;
-  logic        overflow;
-
-  // 5. Submodule interface signals
-  logic [31:0] sub_result;
-
-  // --- logic below ---
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) count_q <= '0;
-    else         count_q <= count_next;
+// BAD — automatic variable inside always_comb
+always_comb begin
+  for (int i = 0; i < 4; i++) begin
+    automatic logic match = (key == table_q[i]);  // banned
   end
+end
 
-  assign count_next = count_q + 32'd1;
-  assign overflow   = (count_q == '1);
-  assign data_o     = sub_result;
+// GOOD — declare at module scope, use inside the loop
+logic [3:0] match;
+always_comb begin
+  for (int i = 0; i < 4; i++) match[i] = (key == table_q[i]);
+end
 
-endmodule
+// GOOD — function automatic is allowed
+function automatic logic [7:0] strobes(input logic [2:0] sz, input logic [2:0] off);
+  logic [7:0] s;        // function-local, fine
+  ...
+endfunction
 ```
+
+### No declarations inside processes
+
+`always_ff` and `always_comb` bodies contain only assignments and control flow. No `logic`, `int`, `bit`, `reg`, struct, or enum declarations.
+
+**Exception:** `for (int i = …; …)` loop indices may be declared in the loop header.
+
+### State suffix discipline: `_q` and `_d`
+
+Every state-holding signal is named `<name>_q` and is the output of an `always_ff`. Its next-state combinational driver is `<name>_d`, written by an `always_comb` (or a continuous `assign`). At any read site, `foo_q` vs `foo_d` immediately tells you whether you are reading a flop output or a wire.
+
+Port suffixes (`_i`, `_o`, `_ni`) are unchanged. The `_q` / `_d` suffix is internal-only. Use `_d` (not `_next`).
+
+```systemverilog
+logic [31:0] count_q, count_d;
+
+always_ff @(posedge clk_i or negedge rst_ni) begin
+  if (!rst_ni) count_q <= 32'h0;
+  else         count_q <= count_d;
+end
+
+always_comb begin
+  count_d = count_q + 32'd1;
+end
+```
+
+### One always block per logical group
+
+One `always_ff` per related state group, one `always_comb` per related output group. No monolithic always blocks driving many unrelated signals. The test is "are these signals naturally read and written together?".
+
+### `always_comb` must default-assign every driven signal at the top
+
+Every signal driven by an `always_comb` block must be assigned a default value at the top of the block before any `if` / `case` overrides. This prevents inferred latches when a branch is missing.
+
+### No magic numbers — prefer `kronos_pkg` parameters
+
+Bare numeric literals in RTL are discouraged. Before writing a numeric literal, check whether `kronos_pkg` already defines a named parameter for that value (`XLEN`, `FLEN`, `FP_S_BIAS`, `MMIO_BASE`, etc.) and use the package name instead.
+
+Promotion rules:
+
+- **Project-wide constants** (data width, FP widths/biases, address regions, CSR masks, AXI widths) live in `kronos_pkg.sv` and are referenced by name from every consumer. If a literal would be reused by more than one module, add the parameter to `kronos_pkg` rather than a per-file `localparam`.
+- **Module-local constants** (cache way count for one cache, FSM state encodings, internal pipeline-stage indices) may stay as a per-file `localparam` if they are not reused outside that module.
+- **Single-use literals with obvious meaning** are exempt: `1'b0`, `1'b1`, small loop bounds (`for (int i = 0; i < 4; i++)`), and bit-field widths in port declarations.
+
+Width literals representing data-bus width (`64`, `[63:0]`) must reference `XLEN` from `kronos_pkg`, not the bare number.
 
 ### Module Ports
 
@@ -432,11 +493,31 @@ module kronos_alu
 - Do not instantiate clock buffers or reset synchronizers inside IP modules — that is the top-level's responsibility.
 - Do not use `initial` blocks in synthesisable RTL.
 
+### No history-flavor comments in committed RTL
+
+Comments must describe *what* the code does and *why*, not *when* it was added. Strip the following patterns from any new or edited comment:
+
+- Sub-stage prefixes: `// Stage 6b: ...`, `// Stage 5h: ...`, `// (Stage 6e) ...`. Stage history belongs in commit messages and the design spec, not the RTL — the prefix decays into noise as soon as the next stage starts.
+- Bug/issue references: `// Fix #2: ...`, `// Bug #N: ...`, `// per ticket ABC-123 ...`. Bug context belongs in the PR description and `git blame`.
+- Author/date attributions: `// added by X on YYYY-MM-DD`. Use `git blame`.
+
+If the comment after the prefix is substantive (explains a non-obvious invariant, hidden constraint, or workaround), keep the substantive part and drop the prefix. If the comment is only the prefix plus a restatement of what the code already shows, delete the whole comment.
+
+```systemverilog
+// BAD
+// Stage 6b: cross-page 32-bit fetch fault. Asserted only when translation is on.
+// Fix #2: ID-stage forwarding helper signals.
+
+// GOOD
+// Cross-page 32-bit fetch fault. Asserted only when translation is on.
+// ID-stage forwarding helper signals.
+```
+
 ### Lint Cleanliness
 
 - All RTL must pass Verilator lint with `--Wall --Wno-UNUSED` before committing.
 - No undriven outputs, no implicit truncations, no width mismatches.
-- If a port is intentionally unconnected at the instantiation site, tie it explicitly: `()` for outputs, `'0` for inputs.
+- If a port is intentionally unconnected at the instantiation site, tie it explicitly: `()` for outputs, an explicit-width zero (`64'h0`, `{XLEN{1'b0}}`, etc.) for inputs — never `'0`.
 - Avoid `$display`, `$finish`, `$readmemh` in synthesisable RTL — testbench only.
 
 ### Packages and Imports

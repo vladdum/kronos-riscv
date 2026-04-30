@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_tlb.sv — Stage 6b N-entry fully-associative TLB.
+// kronos_tlb.sv — N-entry fully-associative TLB.
 // Stores per-entry {V, ASID, page_size, VPN, PPN, perm{U,X,W,R}, A, D, global}.
 // Lookup: parallel CAM compare with size-masked VPN equality + ASID/global
 // match + permission compare.  Refill: pseudo-LRU victim selection.
@@ -18,7 +18,7 @@ module kronos_tlb
 
   // Lookup port (combinational).
   input  logic              lookup_valid_i,
-  input  logic [63:0]       lookup_va_i,
+  input  logic [XLEN-1:0]   lookup_va_i,
   input  logic [15:0]       lookup_asid_i,
   input  priv_e             lookup_priv_i,
   input  logic              is_load_i,
@@ -47,21 +47,42 @@ module kronos_tlb
   input  logic              flush_valid_i,
   input  logic              flush_va_valid_i,
   input  logic              flush_asid_valid_i,
-  input  logic [63:0]       flush_va_i,
+  input  logic [XLEN-1:0]   flush_va_i,
   input  logic [15:0]       flush_asid_i
 );
 
-  // Per-entry state
-  logic        valid     [N];
-  logic        global_   [N];
-  logic [15:0] asid      [N];
-  logic [1:0]  page_size [N];
-  logic [35:0] vpn       [N];
-  logic [43:0] ppn       [N];
-  logic [3:0]  perm      [N];
-  logic        a_bit     [N];
-  logic        d_bit     [N];
-  logic [N-2:0] plru_tree;
+  // 1. Constants
+  localparam int unsigned IDX_W = $clog2(N);
+
+  // 2. Types (none beyond pkg imports)
+
+  // 3. State registers
+  logic              valid     [N];
+  logic              global_   [N];
+  logic [15:0]       asid      [N];
+  logic [1:0]        page_size [N];
+  logic [35:0]       vpn       [N];
+  logic [43:0]       ppn       [N];
+  logic [3:0]        perm      [N];
+  logic              a_bit     [N];
+  logic              d_bit     [N];
+  logic [N-2:0]      plru_tree;
+
+  // 4. Combinational signals
+  logic [N-1:0]      hit;
+  logic [35:0]       lookup_vpn;
+  logic [IDX_W-1:0]  hit_idx;
+  logic [43:0]       hit_ppn;
+  logic [1:0]        hit_size;
+  logic              hit_u;
+  logic              hit_x;
+  logic              hit_w;
+  logic              hit_r;
+  logic [IDX_W-1:0]  victim_idx;
+  logic [IDX_W-1:0]  refill_idx;
+  logic              has_invalid;
+
+  // 5. Submodule interface signals (none)
 
   // VPN comparison helper
   function automatic logic vpn_match(input logic [35:0] a,
@@ -77,8 +98,6 @@ module kronos_tlb
   endfunction
 
   // Lookup hit per entry
-  logic [N-1:0] hit;
-  logic [35:0]  lookup_vpn;
   assign lookup_vpn = lookup_va_i[47:12];
 
   for (genvar i = 0; i < N; i++) begin : gen_hit
@@ -89,12 +108,11 @@ module kronos_tlb
   end
 
   // Priority encode (lowest index)
-  logic [$clog2(N)-1:0] hit_idx;
   always_comb begin
-    hit_idx = '0;
+    hit_idx = {IDX_W{1'b0}};
     for (int i = 0; i < N; i++) begin
       if (hit[i]) begin
-        hit_idx = i[$clog2(N)-1:0];
+        hit_idx = i[IDX_W-1:0];
         break;
       end
     end
@@ -103,26 +121,23 @@ module kronos_tlb
   assign lookup_hit_o = |hit;
 
   // PA reconstruction by page size
-  logic [43:0] hit_ppn;
-  logic [1:0]  hit_size;
   always_comb begin
     hit_ppn  = ppn[hit_idx];
     hit_size = page_size[hit_idx];
   end
 
   always_comb begin
-    lookup_pa_o = '0;
+    lookup_pa_o = 56'd0;
     unique case (hit_size)
       2'b00: lookup_pa_o = {hit_ppn,        lookup_va_i[11:0]};
       2'b01: lookup_pa_o = {hit_ppn[43:9],  lookup_va_i[20:0]};
       2'b10: lookup_pa_o = {hit_ppn[43:18], lookup_va_i[29:0]};
       2'b11: lookup_pa_o = {hit_ppn[43:27], lookup_va_i[38:0]};
-      default: lookup_pa_o = '0;
+      default: lookup_pa_o = 56'd0;
     endcase
   end
 
   // Permission resolution
-  logic hit_u, hit_x, hit_w, hit_r;
   always_comb begin
     hit_u = perm[hit_idx][3];
     hit_x = perm[hit_idx][2];
@@ -147,26 +162,28 @@ module kronos_tlb
   assign lookup_d_zero_o = lookup_hit_o & is_store_i & ~d_bit[hit_idx];
 
   // Pseudo-LRU victim selection (3-bit tree for N=8)
-  logic [$clog2(N)-1:0] victim_idx;
   generate
     if (N == 8) begin : gen_plru8
       always_comb begin
+        victim_idx = {IDX_W{1'b0}};
         if (plru_tree[0] == 0) begin
-          if (plru_tree[1] == 0)
+          if (plru_tree[1] == 0) begin
             victim_idx = plru_tree[3] ? 3'd1 : 3'd0;
-          else
+          end else begin
             victim_idx = plru_tree[4] ? 3'd3 : 3'd2;
+          end
         end else begin
-          if (plru_tree[2] == 0)
+          if (plru_tree[2] == 0) begin
             victim_idx = plru_tree[5] ? 3'd5 : 3'd4;
-          else
+          end else begin
             victim_idx = plru_tree[6] ? 3'd7 : 3'd6;
+          end
         end
       end
     end else begin : gen_plru_round_robin
-      logic [$clog2(N)-1:0] rr_q;
+      logic [IDX_W-1:0] rr_q;
       always_ff @(posedge clk_i or negedge rst_ni) begin
-        if (!rst_ni) rr_q <= '0;
+        if (!rst_ni) rr_q <= {IDX_W{1'b0}};
         else if (refill_valid_i) rr_q <= rr_q + 1'b1;
       end
       assign victim_idx = rr_q;
@@ -174,14 +191,12 @@ module kronos_tlb
   endgenerate
 
   // Refill destination: prefer invalid; otherwise victim
-  logic [$clog2(N)-1:0] refill_idx;
-  logic                 has_invalid;
   always_comb begin
     refill_idx  = victim_idx;
     has_invalid = 1'b0;
     for (int i = 0; i < N; i++) begin
       if (!valid[i] & !has_invalid) begin
-        refill_idx  = i[$clog2(N)-1:0];
+        refill_idx  = i[IDX_W-1:0];
         has_invalid = 1'b1;
       end
     end
@@ -193,29 +208,27 @@ module kronos_tlb
       for (int i = 0; i < N; i++) begin
         valid[i]     <= 1'b0;
         global_[i]   <= 1'b0;
-        asid[i]      <= '0;
-        page_size[i] <= '0;
-        vpn[i]       <= '0;
-        ppn[i]       <= '0;
-        perm[i]      <= '0;
+        asid[i]      <= 16'd0;
+        page_size[i] <= 2'd0;
+        vpn[i]       <= 36'd0;
+        ppn[i]       <= 44'd0;
+        perm[i]      <= 4'd0;
         a_bit[i]     <= 1'b0;
         d_bit[i]     <= 1'b0;
       end
-      plru_tree <= '0;
+      plru_tree <= {(N-1){1'b0}};
     end else begin
       // sfence.vma takes priority over refill
       if (flush_valid_i) begin
         for (int i = 0; i < N; i++) begin
-          automatic logic v_ok = ~flush_va_valid_i |
-                                  vpn_match(flush_va_i[47:12], vpn[i], page_size[i]);
-          automatic logic a_ok = ~flush_asid_valid_i |
-                                  ((asid[i] == flush_asid_i) & ~global_[i]);
-          if (v_ok & a_ok) valid[i] <= 1'b0;
+          if ((~flush_va_valid_i | vpn_match(flush_va_i[47:12], vpn[i], page_size[i])) &
+              (~flush_asid_valid_i | ((asid[i] == flush_asid_i) & ~global_[i])))
+            valid[i] <= 1'b0;
         end
       end
       // refill
       else if (refill_valid_i) begin
-        // Stage 6b: invalidate any existing entries matching this refill VPN
+        // invalidate any existing entries matching this refill VPN
         // (any page-size match) before installing the new entry.  Without
         // this, an A/D-driven re-walk would refill into a fresh slot while
         // the stale entry (e.g. A=1 D=0) still answers lookups at a lower

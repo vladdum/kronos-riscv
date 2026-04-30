@@ -699,8 +699,8 @@ module tb_fpu_fma;
     // 5e-324 * 5e-324 + 0: tiny and inexact, use RM modes 1-5
     begin : blk_fma_tiny_rm
       for (int rm_i = 1; rm_i <= 5; rm_i++) begin
-        automatic longint unsigned sf_r;
-        automatic byte unsigned sf_f;
+        longint unsigned sf_r;
+        byte unsigned sf_f;
         sf_reset();
         sf_r = sf_f64_mulAdd(64'h1, 64'h1, 64'h0,
                              (rm_i < 5) ? 8'(rm_i) : 8'd0);

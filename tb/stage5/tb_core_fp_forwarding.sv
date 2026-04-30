@@ -87,33 +87,38 @@ module tb_core_fp_forwarding;
   logic [7:0]  instr_ar_len_q;
   logic [7:0]  instr_r_beat;
 
+  // TB memory-index helpers (promoted from `automatic` block-locals; see R2).
+  int          instr_wi;
+  int          data_r_wi;
+  logic [63:0] data_w_beat_addr;
+  int          data_w_wi_lo;
+  int          data_w_wi_hi;
+
   always_comb begin
-    instr_rsp          = '0;
+    instr_rsp          = '{default: '0};
     instr_rsp.ar_ready = ~instr_r_pend;
     instr_rsp.r_valid  = instr_r_pend;
-    begin
-      automatic int wi = int'(({25'b0, instr_ar_addr_q[9:3]} + {24'b0, instr_r_beat}) & 32'h3F) * 2;
-      instr_rsp.r.data = {mem[wi+1], mem[wi]};
-    end
-    instr_rsp.r.last = (instr_r_beat == instr_ar_len_q);
+    instr_wi           = int'(({25'b0, instr_ar_addr_q[9:3]} + {24'b0, instr_r_beat}) & 32'h3F) * 2;
+    instr_rsp.r.data   = {mem[instr_wi+1], mem[instr_wi]};
+    instr_rsp.r.last   = (instr_r_beat == instr_ar_len_q);
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       instr_r_pend    <= 1'b0;
-      instr_ar_addr_q <= '0;
-      instr_ar_len_q  <= '0;
-      instr_r_beat    <= '0;
+      instr_ar_addr_q <= 64'h0;
+      instr_ar_len_q  <= 8'h0;
+      instr_r_beat    <= 8'h0;
     end else begin
       if (!instr_r_pend && instr_req.ar_valid) begin
         instr_ar_addr_q <= instr_req.ar.addr;
         instr_ar_len_q  <= instr_req.ar.len;
-        instr_r_beat    <= '0;
+        instr_r_beat    <= 8'h0;
         instr_r_pend    <= 1'b1;
       end else if (instr_r_pend && instr_req.r_ready) begin
         if (instr_r_beat == instr_ar_len_q) begin
           instr_r_pend <= 1'b0;
-          instr_r_beat <= '0;
+          instr_r_beat    <= 8'h0;
         end else begin
           instr_r_beat <= instr_r_beat + 8'd1;
         end
@@ -138,41 +143,39 @@ module tb_core_fp_forwarding;
   logic [31:0] halted;
 
   always_comb begin
-    data_rsp          = '0;
+    data_rsp          = '{default: '0};
     data_rsp.ar_ready = ~data_r_pend;
     data_rsp.aw_ready = ~data_aw_pend;
     data_rsp.w_ready  = data_aw_pend;
     data_rsp.r_valid  = data_r_pend;
     data_rsp.r.last   = (data_r_beat == data_ar_len_q);
     data_rsp.b_valid  = data_b_pend;
-    begin
-      automatic int wi = int'(({25'b0, data_ar_addr_q[9:3]} + {24'b0, data_r_beat}) & 32'h3F) * 2;
-      data_rsp.r.data = {mem[wi+1], mem[wi]};
-    end
+    data_r_wi         = int'(({25'b0, data_ar_addr_q[9:3]} + {24'b0, data_r_beat}) & 32'h3F) * 2;
+    data_rsp.r.data   = {mem[data_r_wi+1], mem[data_r_wi]};
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       data_r_pend    <= 1'b0;
-      data_ar_addr_q <= '0;
-      data_ar_len_q  <= '0;
-      data_r_beat    <= '0;
+      data_ar_addr_q <= 64'h0;
+      data_ar_len_q  <= 8'h0;
+      data_r_beat    <= 8'h0;
       data_aw_pend   <= 1'b0;
-      data_aw_addr_q <= '0;
-      data_aw_len_q  <= '0;
-      data_w_beat    <= '0;
+      data_aw_addr_q <= 64'h0;
+      data_aw_len_q  <= 8'h0;
+      data_w_beat    <= 8'h0;
       data_b_pend    <= 1'b0;
     end else begin
       // ---- Read ----
       if (!data_r_pend && data_req.ar_valid) begin
         data_ar_addr_q <= data_req.ar.addr;
         data_ar_len_q  <= data_req.ar.len;
-        data_r_beat    <= '0;
+        data_r_beat    <= 8'h0;
         data_r_pend    <= 1'b1;
       end else if (data_r_pend && data_req.r_ready) begin
         if (data_r_beat == data_ar_len_q) begin
           data_r_pend <= 1'b0;
-          data_r_beat <= '0;
+          data_r_beat    <= 8'h0;
         end else begin
           data_r_beat <= data_r_beat + 8'd1;
         end
@@ -182,26 +185,28 @@ module tb_core_fp_forwarding;
       if (!data_aw_pend && data_req.aw_valid) begin
         data_aw_addr_q <= data_req.aw.addr;
         data_aw_len_q  <= data_req.aw.len;
-        data_w_beat    <= '0;
+        data_w_beat    <= 8'h0;
         data_aw_pend   <= 1'b1;
       end
 
       // ---- Write W beats ----
       if (data_aw_pend && data_req.w_valid) begin
-        automatic logic [63:0] beat_addr = data_aw_addr_q + {56'b0, data_w_beat} * 8;
-        automatic int wi_lo = int'(beat_addr[9:3]) * 2;
-        automatic int wi_hi = wi_lo + 1;
+        // Compute beat-aligned word indices into the per-word backing store.
+        // Promoted from `automatic` block-locals (R2).
+        data_w_beat_addr = data_aw_addr_q + {56'b0, data_w_beat} * 8;
+        data_w_wi_lo     = int'(data_w_beat_addr[9:3]) * 2;
+        data_w_wi_hi     = data_w_wi_lo + 1;
         if (1'b0) begin
           // halt detection moved to retire_mem path
         end else begin
-          if (data_req.w.strb[0]) mem[wi_lo][ 7: 0] <= data_req.w.data[ 7: 0];
-          if (data_req.w.strb[1]) mem[wi_lo][15: 8] <= data_req.w.data[15: 8];
-          if (data_req.w.strb[2]) mem[wi_lo][23:16] <= data_req.w.data[23:16];
-          if (data_req.w.strb[3]) mem[wi_lo][31:24] <= data_req.w.data[31:24];
-          if (data_req.w.strb[4]) mem[wi_hi][ 7: 0] <= data_req.w.data[39:32];
-          if (data_req.w.strb[5]) mem[wi_hi][15: 8] <= data_req.w.data[47:40];
-          if (data_req.w.strb[6]) mem[wi_hi][23:16] <= data_req.w.data[55:48];
-          if (data_req.w.strb[7]) mem[wi_hi][31:24] <= data_req.w.data[63:56];
+          if (data_req.w.strb[0]) mem[data_w_wi_lo][ 7: 0] <= data_req.w.data[ 7: 0];
+          if (data_req.w.strb[1]) mem[data_w_wi_lo][15: 8] <= data_req.w.data[15: 8];
+          if (data_req.w.strb[2]) mem[data_w_wi_lo][23:16] <= data_req.w.data[23:16];
+          if (data_req.w.strb[3]) mem[data_w_wi_lo][31:24] <= data_req.w.data[31:24];
+          if (data_req.w.strb[4]) mem[data_w_wi_hi][ 7: 0] <= data_req.w.data[39:32];
+          if (data_req.w.strb[5]) mem[data_w_wi_hi][15: 8] <= data_req.w.data[47:40];
+          if (data_req.w.strb[6]) mem[data_w_wi_hi][23:16] <= data_req.w.data[55:48];
+          if (data_req.w.strb[7]) mem[data_w_wi_hi][31:24] <= data_req.w.data[63:56];
         end
         data_w_beat <= data_w_beat + 8'd1;
         if (data_req.w.last) begin

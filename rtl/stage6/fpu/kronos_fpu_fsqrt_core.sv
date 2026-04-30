@@ -29,6 +29,14 @@ module kronos_fpu_fsqrt_core (
 );
 
   // -------------------------------------------------------------------------
+  // Constants
+  // -------------------------------------------------------------------------
+  localparam int unsigned TOTAL_S = 53;  // n=27 + 26
+  localparam int unsigned TOTAL_D = 82;  // n=56 + 26
+  localparam int unsigned Q_W     = 82;  // max q width (total_D iterations)
+  localparam int unsigned R_W     = 84;  // r < trial < 2^83, use 84 bits
+
+  // -------------------------------------------------------------------------
   // FSM encoding
   // -------------------------------------------------------------------------
   typedef enum logic [1:0] {
@@ -37,14 +45,6 @@ module kronos_fpu_fsqrt_core (
     ST_UPD  = 2'b10,
     ST_DONE = 2'b11
   } state_e;
-
-  // -------------------------------------------------------------------------
-  // Constants
-  // -------------------------------------------------------------------------
-  localparam int unsigned TOTAL_S = 53;  // n=27 + 26
-  localparam int unsigned TOTAL_D = 82;  // n=56 + 26
-  localparam int unsigned Q_W     = 82;  // max q width (total_D iterations)
-  localparam int unsigned R_W     = 84;  // r < trial < 2^83, use 84 bits
 
   // -------------------------------------------------------------------------
   // State registers
@@ -62,10 +62,10 @@ module kronos_fpu_fsqrt_core (
   // -------------------------------------------------------------------------
   // Combinational signals
   // -------------------------------------------------------------------------
-  state_e           state_n;
-  logic [R_W-1:0]   r_n;
-  logic [Q_W-1:0]   q_n;
-  logic [6:0]        ctr_n;
+  state_e           state_d;
+  logic [R_W-1:0]   r_d;
+  logic [Q_W-1:0]   q_d;
+  logic [6:0]        ctr_d;
   logic [1:0]        pair;        // 2-bit input pair for current iteration
   logic [R_W-1:0]   r_shifted;   // r << 2 | pair
   logic [R_W-1:0]   trial;       // (q << 2) | 1
@@ -128,17 +128,17 @@ module kronos_fpu_fsqrt_core (
   // Combinational next-state and datapath
   // -------------------------------------------------------------------------
   always_comb begin
-    state_n   = state_q;
-    r_n       = r_q;
-    q_n       = q_q;
-    ctr_n     = ctr_q;
+    state_d   = state_q;
+    r_d       = r_q;
+    q_d       = q_q;
+    ctr_d     = ctr_q;
     ge        = 1'b0;
     r_shifted = {R_W{1'b0}};
     trial     = {R_W{1'b0}};
 
     unique case (state_q)
       ST_IDLE: begin
-        if (start_i) state_n = ST_CMP;
+        if (start_i) state_d = ST_CMP;
       end
 
       ST_CMP: begin
@@ -146,32 +146,32 @@ module kronos_fpu_fsqrt_core (
         r_shifted = {r_q[R_W-3:0], pair};
         trial     = {q_q, 2'b01} & {R_W{1'b1}};
         ge        = (r_shifted >= trial);
-        state_n   = ST_UPD;
+        state_d   = ST_UPD;
       end
 
       ST_UPD: begin
         // Phase B: use registered phase-A results to update r_q and q_q
         if (ge_q) begin
-          r_n = r_shifted_q - trial_q;
-          q_n = {q_q[Q_W-2:0], 1'b1};
+          r_d = r_shifted_q - trial_q;
+          q_d = {q_q[Q_W-2:0], 1'b1};
         end else begin
-          r_n = r_shifted_q;
-          q_n = {q_q[Q_W-2:0], 1'b0};
+          r_d = r_shifted_q;
+          q_d = {q_q[Q_W-2:0], 1'b0};
         end
-        ctr_n = ctr_q + 7'd1;
-        if (ctr_n == target) state_n = ST_DONE;
-        else                  state_n = ST_CMP;
+        ctr_d = ctr_q + 7'd1;
+        if (ctr_d == target) state_d = ST_DONE;
+        else                  state_d = ST_CMP;
       end
 
       ST_DONE: begin
-        state_n = ST_IDLE;
+        state_d = ST_IDLE;
       end
 
-      default: state_n = ST_IDLE;
+      default: state_d = ST_IDLE;
     endcase
 
     if (flush_i) begin
-      state_n = ST_IDLE;
+      state_d = ST_IDLE;
     end
   end
 
@@ -190,7 +190,7 @@ module kronos_fpu_fsqrt_core (
       trial_q     <= {R_W{1'b0}};
       ge_q        <= 1'b0;
     end else begin
-      state_q <= state_n;
+      state_q <= state_d;
 
       // Capture phase-A results at end of ST_CMP cycle
       if (state_q == ST_CMP) begin
@@ -208,9 +208,9 @@ module kronos_fpu_fsqrt_core (
         q_q     <= {Q_W{1'b0}};
         ctr_q   <= 7'h0;
       end else begin
-        r_q   <= r_n;
-        q_q   <= q_n;
-        ctr_q <= ctr_n;
+        r_q   <= r_d;
+        q_q   <= q_d;
+        ctr_q <= ctr_d;
       end
     end
   end

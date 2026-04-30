@@ -13,44 +13,51 @@ module kronos_trigger
   input  logic        rst_ni,
 
   // CSR access (one address per cycle, single-ported).
-  input  logic        csr_req_i,
-  input  logic [11:0] csr_addr_i,
-  input  logic        csr_we_i,
-  input  logic [63:0] csr_wdata_i,
-  output logic [63:0] csr_rdata_o,
-  output logic        csr_match_o,   // 1 = csr_addr_i is a trigger CSR
+  input  logic            csr_req_i,
+  input  logic [11:0]     csr_addr_i,
+  input  logic            csr_we_i,
+  input  logic [XLEN-1:0] csr_wdata_i,
+  output logic [XLEN-1:0] csr_rdata_o,
+  output logic            csr_match_o,   // 1 = csr_addr_i is a trigger CSR
 
   // EX-stage probe (sample exactly when valid_i is high).
-  input  logic        ex_valid_i,
-  input  logic [31:0] ex_pc_i,
-  input  logic        ex_is_load_i,
-  input  logic        ex_is_store_i,
-  input  logic [63:0] ex_mem_addr_i,
+  input  logic            ex_valid_i,
+  input  logic [31:0]     ex_pc_i,
+  input  logic            ex_is_load_i,
+  input  logic            ex_is_store_i,
+  input  logic [XLEN-1:0] ex_mem_addr_i,
 
   // Match output.  Combinational: hit_o pulses high for one cycle when
   // an EX-stage instruction matches an enabled trigger.
-  output logic        hit_o,
-  output logic [31:0] hit_pc_o
+  output logic            hit_o,
+  output logic [31:0]     hit_pc_o
 );
 
   // Per-trigger state.  Only the writable bits are stored; the rest are
   // synthesized as constants on read.
   typedef struct packed {
-    logic        m;        // tdata1[6]
-    logic        execute;  // tdata1[3]
-    logic        store;    // tdata1[2]
-    logic        load;     // tdata1[1]
-    logic        hit;      // tdata1[10] (sticky-set on match; RW1C)
-    logic [63:0] tdata2;
+    logic            m;        // tdata1[6]
+    logic            execute;  // tdata1[3]
+    logic            store;    // tdata1[2]
+    logic            load;     // tdata1[1]
+    logic            hit;      // tdata1[10] (sticky-set on match; RW1C)
+    logic [XLEN-1:0] tdata2;
   } trigger_t;
 
+  // State registers
   trigger_t    triggers_q [0:3];
   logic [1:0]  tselect_q;
 
+  // Combinational signals
+  logic [3:0] match_vec;
+  logic       exec_match  [0:3];
+  logic       load_match  [0:3];
+  logic       store_match [0:3];
+
   // Build a tdata1 view from per-trigger fields.
-  function automatic logic [63:0] pack_tdata1(input trigger_t t);
-    logic [63:0] v;
-    v          = '0;
+  function automatic logic [XLEN-1:0] pack_tdata1(input trigger_t t);
+    logic [XLEN-1:0] v;
+    v          = {XLEN{1'b0}};
     v[63:60]   = 4'h6;       // type=mcontrol6
     v[59]      = 1'b0;       // dmode=0
     v[10]      = t.hit;
@@ -63,27 +70,34 @@ module kronos_trigger
 
   // CSR read mux.
   always_comb begin
-    csr_rdata_o   = '0;
+    csr_rdata_o   = {XLEN{1'b0}};
     csr_match_o   = 1'b0;
     unique case (csr_addr_i)
-      12'h7A0: begin csr_match_o = 1'b1; csr_rdata_o = {62'b0, tselect_q}; end
+      12'h7A0: begin csr_match_o = 1'b1; csr_rdata_o = {{XLEN-2{1'b0}}, tselect_q}; end
       12'h7A1: begin csr_match_o = 1'b1; csr_rdata_o = pack_tdata1(triggers_q[tselect_q]); end
       12'h7A2: begin csr_match_o = 1'b1; csr_rdata_o = triggers_q[tselect_q].tdata2; end
-      12'h7A3: begin csr_match_o = 1'b1; csr_rdata_o = '0; end
+      12'h7A3: begin csr_match_o = 1'b1; csr_rdata_o = {XLEN{1'b0}}; end
       12'h7A4: begin csr_match_o = 1'b1; csr_rdata_o = 64'h0000_0000_0000_0040; end // bit 6 = mcontrol6
       default: ;
     endcase
   end
 
   // Per-trigger combinational match (one bit per trigger).
-  logic [3:0] match_vec;
   always_comb begin
     for (int i = 0; i < 4; i++) begin
-      automatic trigger_t t          = triggers_q[i];
-      automatic logic     exec_match  = t.m & t.execute & ex_valid_i & ({32'b0, ex_pc_i} == t.tdata2);
-      automatic logic     load_match  = t.m & t.load    & ex_valid_i & ex_is_load_i  & (ex_mem_addr_i == t.tdata2);
-      automatic logic     store_match = t.m & t.store   & ex_valid_i & ex_is_store_i & (ex_mem_addr_i == t.tdata2);
-      match_vec[i] = exec_match | load_match | store_match;
+      exec_match[i]  = 1'b0;
+      load_match[i]  = 1'b0;
+      store_match[i] = 1'b0;
+      match_vec[i]   = 1'b0;
+    end
+    for (int i = 0; i < 4; i++) begin
+      exec_match[i]  = triggers_q[i].m & triggers_q[i].execute & ex_valid_i &
+                       ({{XLEN-32{1'b0}}, ex_pc_i} == triggers_q[i].tdata2);
+      load_match[i]  = triggers_q[i].m & triggers_q[i].load    & ex_valid_i & ex_is_load_i  &
+                       (ex_mem_addr_i == triggers_q[i].tdata2);
+      store_match[i] = triggers_q[i].m & triggers_q[i].store   & ex_valid_i & ex_is_store_i &
+                       (ex_mem_addr_i == triggers_q[i].tdata2);
+      match_vec[i]   = exec_match[i] | load_match[i] | store_match[i];
     end
   end
 
@@ -100,7 +114,7 @@ module kronos_trigger
         triggers_q[i].store   <= 1'b0;
         triggers_q[i].load    <= 1'b0;
         triggers_q[i].hit     <= 1'b0;
-        triggers_q[i].tdata2  <= '0;
+        triggers_q[i].tdata2  <= {XLEN{1'b0}};
       end
     end else begin
       // Sticky-hit update — set on match, regardless of CSR write.

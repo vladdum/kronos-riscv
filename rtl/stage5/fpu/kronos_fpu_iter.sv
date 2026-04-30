@@ -139,7 +139,7 @@ module kronos_fpu_iter
   // Reads from a_raw_q / b_raw_q (latched in IDLE)
   // -----------------------------------------------------------------------
   always_comb begin : proc_classify_a
-    a_class = '0;
+    a_class = '{default: '0};
     if (fmt_d_q) begin
       // Double precision
       a_class.sign = a_raw_q[63];
@@ -192,14 +192,15 @@ module kronos_fpu_iter
     end
 
     // CLZ for subnormals
-    if (fmt_d_q)
+    if (fmt_d_q) begin
       a_class.clz = clz53({1'b0, a_class.sig});
-    else
+    end else begin
       a_class.clz = clz53({1'b0, a_class.sig[51:29], 29'b0});
+    end
   end
 
   always_comb begin : proc_classify_b
-    b_class = '0;
+    b_class = '{default: '0};
     if (fmt_d_q) begin
       // Double precision
       b_class.sign = b_raw_q[63];
@@ -252,10 +253,11 @@ module kronos_fpu_iter
     end
 
     // CLZ for subnormals
-    if (fmt_d_q)
+    if (fmt_d_q) begin
       b_class.clz = clz53({1'b0, b_class.sig});
-    else
+    end else begin
       b_class.clz = clz53({1'b0, b_class.sig[51:29], 29'b0});
+    end
   end
 
   // -----------------------------------------------------------------------
@@ -672,10 +674,11 @@ module kronos_fpu_iter
     // ------------------------------------------------------------------
     // 5. Add rounding increment
     // ------------------------------------------------------------------
-    if (fmt_d_q)
+    if (fmt_d_q) begin
       rnd_rounded_mant = {1'b0, rnd_mant_shifted_q} + {52'b0, rnd_round_up};
-    else
+    end else begin
       rnd_rounded_mant = {30'b0, rnd_mant_shifted_q[22:0]} + {52'b0, rnd_round_up};
+    end
 
     rnd_carry = fmt_d_q ? rnd_rounded_mant[52] : rnd_rounded_mant[23];
 
@@ -720,21 +723,24 @@ module kronos_fpu_iter
       // ----------------------------------------------------------------
       if (rnd_overflow) begin
         if (rnd_overflow_to_inf) begin
-          if (fmt_d_q)
+          if (fmt_d_q) begin
             round_result = {result_sign_q, 11'h7FF, 52'b0};
-          else
+          end else begin
             round_result = {32'hFFFF_FFFF, result_sign_q, 8'hFF, 23'b0};
+          end
         end else begin
-          if (fmt_d_q)
+          if (fmt_d_q) begin
             round_result = {result_sign_q, 11'h7FE, {52{1'b1}}};
-          else
+          end else begin
             round_result = {32'hFFFF_FFFF, result_sign_q, 8'hFE, {23{1'b1}}};
+          end
         end
       end else begin
-        if (fmt_d_q)
+        if (fmt_d_q) begin
           round_result = {result_sign_q, exp_pack[10:0], mant_pack[51:0]};
-        else
+        end else begin
           round_result = {32'hFFFF_FFFF, result_sign_q, exp_pack[7:0], mant_pack[22:0]};
+        end
       end
     end
   end
@@ -801,7 +807,7 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   // FSM next-state logic
   // -----------------------------------------------------------------------
-  always_comb begin : proc_fsm_next
+  always_comb begin : proc_fsm_d
     state_d = state_q;
     unique case (state_q)
       IDLE:    if (in_valid_i) state_d = UNPACK1;
@@ -846,7 +852,7 @@ module kronos_fpu_iter
       op_q    <= fp_op_e'('0);
       fmt_d_q <= 1'b0;
       rm_q    <= 3'b0;
-      tag_q   <= '0;
+      tag_q <= '{default: '0};
       a_raw_q <= 64'h0;
       b_raw_q <= 64'h0;
     end else if (state_q == IDLE && in_valid_i) begin
@@ -864,8 +870,8 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_class_latch
     if (!rst_ni) begin
-      a_class_q <= '0;
-      b_class_q <= '0;
+      a_class_q <= '{default: '0};
+      b_class_q <= '{default: '0};
     end else if (state_q == UNPACK1) begin
       a_class_q <= a_class;
       b_class_q <= b_class;

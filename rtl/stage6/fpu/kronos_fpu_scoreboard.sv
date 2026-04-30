@@ -21,41 +21,51 @@ module kronos_fpu_scoreboard #(
   input  logic [3:0] late_latency_i,
   output logic       late_grant_comb_o
 );
+  // Types
   typedef struct packed {
     logic fp;
     logic intr;
   } slot_t;
 
+  // State registers
   // slots_q[i] = reservation for writeback arriving (i+1) cycles from now.
   // The vector shifts left every clock: slot[0] is consumed, slot[DEPTH-1] freed.
   //
   // Indexing: for a dispatch with latency L, the writeback slot is slots_q[L-1].
   //   - Collision check: read slots_q[L-1] before this posedge.
-  //   - Reservation write: override slots_n[L-1] (post-shift) with the grant.
-  //     Because the shift computes slots_n[i]=slots_q[i+1], overriding slots_n[L-1]
+  //   - Reservation write: override slots_d[L-1] (post-shift) with the grant.
+  //     Because the shift computes slots_d[i]=slots_q[i+1], overriding slots_d[L-1]
   //     leaves slots_q[L-1] = reserved after this posedge, which naturally drifts
   //     toward slot[0] over L clock cycles.
   slot_t slots_q [DEPTH];
-  slot_t slots_n [DEPTH];
-
   // Registered grant: captures the combinational decision at posedge so that
   // the TB's "@(posedge clk) #1" read sees a stable value.
-  logic grant_q;
-  logic grant_comb;
+  logic  grant_q;
 
+  // Combinational signals
+  slot_t slots_d [DEPTH];
+  logic  grant_comb;
   // Target slot fields, selected by latency.
-  logic target_fp, target_intr;
-  logic collision;
-
+  logic  target_fp;
+  logic  target_intr;
+  logic  collision;
   // Late-probe signals.
-  logic late_target_fp;
-  logic late_collision;
-  logic late_grant_comb;
+  logic  late_target_fp;
+  logic  late_collision;
+  logic  late_grant_comb;
 
   always_comb begin
+    // Defaults
+    target_fp       = 1'b0;
+    target_intr     = 1'b0;
+    collision       = 1'b0;
+    grant_comb      = 1'b0;
+    late_target_fp  = 1'b0;
+    late_collision  = 1'b0;
+    late_grant_comb = 1'b0;
+    for (int i = 0; i < DEPTH; i++) slots_d[i] = 2'b00;
+
     // Select the target slot for the incoming dispatch (latency L → slot L-1).
-    target_fp   = 1'b0;
-    target_intr = 1'b0;
     unique case (latency_i)
       4'd1:    begin target_fp = slots_q[0].fp; target_intr = slots_q[0].intr; end
       4'd2:    begin target_fp = slots_q[1].fp; target_intr = slots_q[1].intr; end
@@ -69,7 +79,6 @@ module kronos_fpu_scoreboard #(
       default: begin target_fp = 1'b0;          target_intr = 1'b0;            end
     endcase
 
-    collision = 1'b0;
     if (req_i) begin
       if (fp_dest_i  && target_fp)   collision = 1'b1;
       if (int_dest_i && target_intr) collision = 1'b1;
@@ -78,38 +87,37 @@ module kronos_fpu_scoreboard #(
     grant_comb = req_i & ~collision;
 
     // Shift: consume slot[0], free slot[DEPTH-1].
-    for (int i = 0; i < DEPTH-1; i++) slots_n[i] = slots_q[i+1];
-    slots_n[DEPTH-1] = '0;
+    for (int i = 0; i < DEPTH-1; i++) slots_d[i] = slots_q[i+1];
+    slots_d[DEPTH-1] = 2'b00;
 
     // On grant, reserve slot L-1 in the next state (overrides the shift result
     // for that index, preserving it one more cycle and allowing time to elapse).
     if (grant_comb) begin
       unique case (latency_i)
-        4'd1:    begin slots_n[0].fp = slots_n[0].fp | fp_dest_i;
-                       slots_n[0].intr = slots_n[0].intr | int_dest_i; end
-        4'd2:    begin slots_n[1].fp = slots_n[1].fp | fp_dest_i;
-                       slots_n[1].intr = slots_n[1].intr | int_dest_i; end
-        4'd3:    begin slots_n[2].fp = slots_n[2].fp | fp_dest_i;
-                       slots_n[2].intr = slots_n[2].intr | int_dest_i; end
-        4'd4:    begin slots_n[3].fp = slots_n[3].fp | fp_dest_i;
-                       slots_n[3].intr = slots_n[3].intr | int_dest_i; end
-        4'd5:    begin slots_n[4].fp = slots_n[4].fp | fp_dest_i;
-                       slots_n[4].intr = slots_n[4].intr | int_dest_i; end
-        4'd6:    begin slots_n[5].fp = slots_n[5].fp | fp_dest_i;
-                       slots_n[5].intr = slots_n[5].intr | int_dest_i; end
-        4'd7:    begin slots_n[6].fp = slots_n[6].fp | fp_dest_i;
-                       slots_n[6].intr = slots_n[6].intr | int_dest_i; end
-        4'd8:    begin slots_n[7].fp = slots_n[7].fp | fp_dest_i;
-                       slots_n[7].intr = slots_n[7].intr | int_dest_i; end
-        4'd9:    begin slots_n[8].fp = slots_n[8].fp | fp_dest_i;
-                       slots_n[8].intr = slots_n[8].intr | int_dest_i; end
+        4'd1:    begin slots_d[0].fp = slots_d[0].fp | fp_dest_i;
+                       slots_d[0].intr = slots_d[0].intr | int_dest_i; end
+        4'd2:    begin slots_d[1].fp = slots_d[1].fp | fp_dest_i;
+                       slots_d[1].intr = slots_d[1].intr | int_dest_i; end
+        4'd3:    begin slots_d[2].fp = slots_d[2].fp | fp_dest_i;
+                       slots_d[2].intr = slots_d[2].intr | int_dest_i; end
+        4'd4:    begin slots_d[3].fp = slots_d[3].fp | fp_dest_i;
+                       slots_d[3].intr = slots_d[3].intr | int_dest_i; end
+        4'd5:    begin slots_d[4].fp = slots_d[4].fp | fp_dest_i;
+                       slots_d[4].intr = slots_d[4].intr | int_dest_i; end
+        4'd6:    begin slots_d[5].fp = slots_d[5].fp | fp_dest_i;
+                       slots_d[5].intr = slots_d[5].intr | int_dest_i; end
+        4'd7:    begin slots_d[6].fp = slots_d[6].fp | fp_dest_i;
+                       slots_d[6].intr = slots_d[6].intr | int_dest_i; end
+        4'd8:    begin slots_d[7].fp = slots_d[7].fp | fp_dest_i;
+                       slots_d[7].intr = slots_d[7].intr | int_dest_i; end
+        4'd9:    begin slots_d[8].fp = slots_d[8].fp | fp_dest_i;
+                       slots_d[8].intr = slots_d[8].intr | int_dest_i; end
         default: ; // latency out of range, do nothing
       endcase
     end
 
     // Late probe: iterative unit reserves a writeback slot at ROUND time.
     // Collision check is FP-only (iterative unit always writes FP regfile).
-    late_target_fp = 1'b0;
     unique case (late_latency_i)
       4'd1:    late_target_fp = slots_q[0].fp;
       4'd2:    late_target_fp = slots_q[1].fp;
@@ -130,15 +138,15 @@ module kronos_fpu_scoreboard #(
     // at the system level, but structurally OR'd for safety).
     if (late_grant_comb) begin
       unique case (late_latency_i)
-        4'd1:    slots_n[0].fp = slots_n[0].fp | late_fp_dest_i;
-        4'd2:    slots_n[1].fp = slots_n[1].fp | late_fp_dest_i;
-        4'd3:    slots_n[2].fp = slots_n[2].fp | late_fp_dest_i;
-        4'd4:    slots_n[3].fp = slots_n[3].fp | late_fp_dest_i;
-        4'd5:    slots_n[4].fp = slots_n[4].fp | late_fp_dest_i;
-        4'd6:    slots_n[5].fp = slots_n[5].fp | late_fp_dest_i;
-        4'd7:    slots_n[6].fp = slots_n[6].fp | late_fp_dest_i;
-        4'd8:    slots_n[7].fp = slots_n[7].fp | late_fp_dest_i;
-        4'd9:    slots_n[8].fp = slots_n[8].fp | late_fp_dest_i;
+        4'd1:    slots_d[0].fp = slots_d[0].fp | late_fp_dest_i;
+        4'd2:    slots_d[1].fp = slots_d[1].fp | late_fp_dest_i;
+        4'd3:    slots_d[2].fp = slots_d[2].fp | late_fp_dest_i;
+        4'd4:    slots_d[3].fp = slots_d[3].fp | late_fp_dest_i;
+        4'd5:    slots_d[4].fp = slots_d[4].fp | late_fp_dest_i;
+        4'd6:    slots_d[5].fp = slots_d[5].fp | late_fp_dest_i;
+        4'd7:    slots_d[6].fp = slots_d[6].fp | late_fp_dest_i;
+        4'd8:    slots_d[7].fp = slots_d[7].fp | late_fp_dest_i;
+        4'd9:    slots_d[8].fp = slots_d[8].fp | late_fp_dest_i;
         default: ; // latency out of range, do nothing
       endcase
     end
@@ -147,10 +155,10 @@ module kronos_fpu_scoreboard #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni || flush_i) begin
       grant_q <= 1'b0;
-      for (int i = 0; i < DEPTH; i++) slots_q[i] <= '0;
+      for (int i = 0; i < DEPTH; i++) slots_q[i] <= 2'b00;
     end else begin
       grant_q <= grant_comb;
-      for (int i = 0; i < DEPTH; i++) slots_q[i] <= slots_n[i];
+      for (int i = 0; i < DEPTH; i++) slots_q[i] <= slots_d[i];
     end
   end
 

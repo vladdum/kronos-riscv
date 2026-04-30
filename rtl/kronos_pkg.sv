@@ -22,6 +22,57 @@ package kronos_pkg;
     kronos_axi_addr_t, kronos_axi_id_t, kronos_axi_data_t,
     kronos_axi_strb_t, kronos_axi_user_t)
 
+  // -------------------------------------------------------------------------
+  // Core data widths
+  // -------------------------------------------------------------------------
+  localparam int unsigned XLEN       = 64;                  // integer register / data bus width
+  localparam int unsigned XLEN_BYTES = XLEN/8;              // = 8
+  localparam int unsigned INST_W     = 32;                  // RISC-V base instruction width
+
+  // -------------------------------------------------------------------------
+  // Floating-point widths and biases (IEEE-754 binary32 / binary64)
+  // -------------------------------------------------------------------------
+  localparam int unsigned FLEN          = 64;
+  localparam int unsigned FP_S_EXP_W    = 8;
+  localparam int unsigned FP_S_MANT_W   = 23;
+  localparam int unsigned FP_S_TOTAL_W  = 32;               // 1 + FP_S_EXP_W + FP_S_MANT_W
+  localparam int unsigned FP_D_EXP_W    = 11;
+  localparam int unsigned FP_D_MANT_W   = 52;
+  localparam int unsigned FP_D_TOTAL_W  = 64;               // 1 + FP_D_EXP_W + FP_D_MANT_W
+  localparam int          FP_S_BIAS     = 127;
+  localparam int          FP_D_BIAS     = 1023;
+  localparam logic [FP_S_EXP_W-1:0] FP_S_EXP_MAX = 8'hFF;
+  localparam logic [FP_D_EXP_W-1:0] FP_D_EXP_MAX = 11'h7FF;
+  // Penultimate biased exponents (max finite encoded value)
+  localparam logic [FP_S_EXP_W-1:0] FP_S_EXP_PENULT = 8'hFE;
+  localparam logic [FP_D_EXP_W-1:0] FP_D_EXP_PENULT = 11'h7FE;
+  // Minimum normal unbiased exponents (1 - bias)
+  localparam int FP_S_EMIN_NORM = -126;
+  localparam int FP_D_EMIN_NORM = -1022;
+  // Extended signed exponent width used by internal FPU datapath
+  // (wide enough to hold +/-2*BIAS plus shift margin)
+  localparam int unsigned FP_EXP_EXT_W = 13;
+
+  // FCLASS one-hot bit positions (RISC-V FCLASS instruction)
+  localparam logic [9:0] FCLASS_NEG_INF       = 10'b00_0000_0001; // bit 0
+  localparam logic [9:0] FCLASS_NEG_NORMAL    = 10'b00_0000_0010; // bit 1
+  localparam logic [9:0] FCLASS_NEG_SUBNORMAL = 10'b00_0000_0100; // bit 2
+  localparam logic [9:0] FCLASS_NEG_ZERO      = 10'b00_0000_1000; // bit 3
+  localparam logic [9:0] FCLASS_POS_ZERO      = 10'b00_0001_0000; // bit 4
+  localparam logic [9:0] FCLASS_POS_SUBNORMAL = 10'b00_0010_0000; // bit 5
+  localparam logic [9:0] FCLASS_POS_NORMAL    = 10'b00_0100_0000; // bit 6
+  localparam logic [9:0] FCLASS_POS_INF       = 10'b00_1000_0000; // bit 7
+  localparam logic [9:0] FCLASS_SNAN          = 10'b01_0000_0000; // bit 8
+  localparam logic [9:0] FCLASS_QNAN          = 10'b10_0000_0000; // bit 9
+
+  // -------------------------------------------------------------------------
+  // Memory map / addressing
+  // -------------------------------------------------------------------------
+  // Base of the default non-cacheable / MMIO window. Matches the dcache PMA
+  // default region (issue #67: 0x4000_0000-0x4FFF_FFFF) so RTL can reference
+  // a single named constant instead of the bare literal.
+  localparam logic [XLEN-1:0] MMIO_BASE = 64'h0000_0000_4000_0000;
+
   // ALU operation select
   typedef enum logic [3:0] {
     ALU_ADD   = 4'd0,
@@ -252,6 +303,27 @@ package kronos_pkg;
     logic [63:0]    mem_wdata;   // ex_mem_q.rs2_data at MEM (store data)
     logic [63:0]    csr_wdata;   // rs1 data presented to kronos_csr at EX
   } mem_wb_reg_t;
+
+  // -------------------------------------------------------------------------
+  // Typed zero constants for structs that contain enum fields.
+  // Strict lint mode rejects '{default: '0} for enum members; these
+  // constants name each enum field with its zero value and let the remaining
+  // logic fields default to 0.
+  // -------------------------------------------------------------------------
+  localparam decoded_instr_t DECODED_INSTR_ZERO = '{
+    alu_op:    ALU_ADD,
+    muldiv_op: MULDIV_MUL,
+    wb_sel:    WB_ALU,
+    fp_op:     FP_FSGNJ,
+    default:   '0
+  };
+
+  localparam id_ex_reg_t ID_EX_REG_ZERO = '{
+    dec:         DECODED_INSTR_ZERO,
+    fwd_rs1_sel: FWD_NONE,
+    fwd_rs2_sel: FWD_NONE,
+    default:     '0
+  };
 
   // -------------------------------------------------------------------------
   // Stage 5a: Floating-point types and constants

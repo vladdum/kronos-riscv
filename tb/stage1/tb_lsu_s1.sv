@@ -50,8 +50,8 @@ module tb_lsu_s1;
   endtask
 
   initial begin
-    rst_n = 0; req = 0; we = 0; addr = '0; wdata = '0;
-    funct3 = 3'b010; data_gnt = 0; data_rvalid = 0; data_rdata = '0; data_err = 0;
+    rst_n = 0; req = 0; we = 0; addr = 32'h0; wdata = 32'h0;
+    funct3 = 3'b010; data_gnt = 0; data_rvalid = 0; data_rdata = 32'h0; data_err = 0;
     @(posedge clk); #1; rst_n = 1; @(posedge clk); #1;
 
     // Test 1: no request — no stall, no valid

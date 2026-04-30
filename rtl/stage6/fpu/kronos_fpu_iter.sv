@@ -22,33 +22,55 @@
 module kronos_fpu_iter
   import kronos_pkg::*;
 (
-  input  logic        clk_i,
-  input  logic        rst_ni,
-  input  logic        flush_i,
+  input  logic            clk_i,
+  input  logic            rst_ni,
+  input  logic            flush_i,
 
-  input  logic        in_valid_i,
-  input  fp_op_e      op_i,
-  input  logic        fmt_d_i,
-  input  logic [2:0]  rm_i,
-  input  logic [63:0] a_i,
-  input  logic [63:0] b_i,
-  input  fpu_tag_t    tag_i,
+  input  logic            in_valid_i,
+  input  fp_op_e          op_i,
+  input  logic            fmt_d_i,
+  input  logic [2:0]      rm_i,
+  input  logic [FLEN-1:0] a_i,
+  input  logic [FLEN-1:0] b_i,
+  input  fpu_tag_t        tag_i,
 
-  output logic        busy_o,
-  output logic        out_valid_o,
-  output logic [63:0] result_o,
-  output logic [4:0]  fflags_o,
-  output fpu_tag_t    tag_o,
+  output logic            busy_o,
+  output logic            out_valid_o,
+  output logic [FLEN-1:0] result_o,
+  output logic [4:0]      fflags_o,
+  output fpu_tag_t        tag_o,
 
   // Late-reservation handshake to scoreboard (request slot, wait for grant).
-  output logic        sb_late_req_o,
-  output logic        sb_late_fp_dest_o,
-  input  logic        sb_late_grant_i
+  output logic            sb_late_req_o,
+  output logic            sb_late_fp_dest_o,
+  input  logic            sb_late_grant_i
 );
 
   // -----------------------------------------------------------------------
-  // FSM states
+  // 1. Constants
   // -----------------------------------------------------------------------
+  // Canonical bit patterns for double precision
+  localparam logic [FLEN-1:0] D_QNAN  = 64'h7FF8_0000_0000_0000;
+  localparam logic [FLEN-1:0] D_PINF  = 64'h7FF0_0000_0000_0000;
+  localparam logic [FLEN-1:0] D_NINF  = 64'hFFF0_0000_0000_0000;
+  localparam logic [FLEN-1:0] D_PZERO = {FLEN{1'b0}};
+  localparam logic [FLEN-1:0] D_NZERO = 64'h8000_0000_0000_0000;
+
+  // Canonical bit patterns for single precision (NaN-boxed to 64 bits)
+  localparam logic [FLEN-1:0] S_QNAN  = {FP_NANBOX_UPPER, 32'h7FC0_0000};
+  localparam logic [FLEN-1:0] S_PINF  = {FP_NANBOX_UPPER, 32'h7F80_0000};
+  localparam logic [FLEN-1:0] S_NINF  = {FP_NANBOX_UPPER, 32'hFF80_0000};
+  localparam logic [FLEN-1:0] S_PZERO = {FP_NANBOX_UPPER, 32'h0000_0000};
+  localparam logic [FLEN-1:0] S_NZERO = {FP_NANBOX_UPPER, 32'h8000_0000};
+
+  // Flag bits
+  localparam logic [4:0] FL_NV = 5'(1) << FP_FFLAG_NV;
+  localparam logic [4:0] FL_DZ = 5'(1) << FP_FFLAG_DZ;
+
+  // -----------------------------------------------------------------------
+  // 2. Types
+  // -----------------------------------------------------------------------
+  // FSM states
   typedef enum logic [2:0] {
     IDLE    = 3'd0,
     UNPACK1 = 3'd1,
@@ -59,9 +81,7 @@ module kronos_fpu_iter
     PACK    = 3'd6
   } state_e;
 
-  // -----------------------------------------------------------------------
   // Operand classification
-  // -----------------------------------------------------------------------
   typedef struct packed {
     logic        sign;
     logic [10:0] exp;       // biased exponent (11 bits covers both S and D)
@@ -86,60 +106,179 @@ module kronos_fpu_iter
   endfunction
 
   // -----------------------------------------------------------------------
-  // State registers
+  // 3. State registers
   // -----------------------------------------------------------------------
-  state_e    state_q;
-  logic      iter_busy_q;  // look-ahead flop of (state_d != IDLE); breaks deep busy_o cone
+  state_e             state_q;
+  logic               iter_busy_q;  // look-ahead flop of (state_d != IDLE); breaks deep busy_o cone
 
   // Latched raw inputs (IDLE -> UNPACK1)
-  fp_op_e    op_q;
-  logic      fmt_d_q;
-  logic [2:0] rm_q;
-  fpu_tag_t  tag_q;
-  logic [63:0] a_raw_q, b_raw_q;
+  fp_op_e             op_q;
+  logic               fmt_d_q;
+  logic [2:0]         rm_q;
+  fpu_tag_t           tag_q;
+  logic [FLEN-1:0]    a_raw_q;
+  logic [FLEN-1:0]    b_raw_q;
 
   // Classified operands (registered in UNPACK1 -> UNPACK2 transition)
-  fp_class_t a_class_q, b_class_q;
+  fp_class_t          a_class_q;
+  fp_class_t          b_class_q;
 
   // Normalized operands (latched UNPACK1 -> UNPACK2)
-  logic [52:0]       a_norm_q, b_norm_q;   // fdiv: 53-bit normalized sigs
-  logic [53:0]       a_sqrt_q;             // fsqrt: 54-bit normalized sig
+  logic [52:0]        a_norm_q;     // fdiv: 53-bit normalized sig
+  logic [52:0]        b_norm_q;     // fdiv: 53-bit normalized sig
+  logic [53:0]        a_sqrt_q;     // fsqrt: 54-bit normalized sig
 
   // Unbiased true exponents (latched UNPACK1 -> UNPACK2)
-  logic signed [12:0] a_true_exp_q, b_true_exp_q;
+  logic signed [FP_EXP_EXT_W-1:0] a_true_exp_q;
+  logic signed [FP_EXP_EXT_W-1:0] b_true_exp_q;
 
   // Specials result/flags latched in UNPACK1, consumed in UNPACK2
   logic               is_special_q;
-  logic [63:0]        special_result_q;
+  logic [FLEN-1:0]    special_result_q;
   logic [4:0]         special_fflags_q;
 
   // Final biased result exponent + sign (computed in UNPACK2 combinationally,
   // latched UNPACK2 -> ITER into result_sign_q / result_exp_q)
-  logic              result_sign_q;
-  logic signed [12:0] result_exp_q;        // signed intermediate exponent
+  logic               result_sign_q;
+  logic signed [FP_EXP_EXT_W-1:0] result_exp_q;        // signed intermediate exponent
 
   // Raw quotient from core (latched on core_done)
-  logic [55:0] raw_q_q;
-  logic        raw_sticky_q;
+  logic [55:0]        raw_q;
+  logic               raw_sticky_q;
 
   // ROUND1 -> ROUND2 latches (timing-closure split: see proc_round1_latch)
   logic [51:0]        rnd_mant_shifted_q;
-  logic               rnd_new_lsb_q, rnd_new_g_q, rnd_new_r_q, rnd_new_s_q;
-  logic signed [12:0] rnd_final_exp_q;
+  logic               rnd_new_lsb_q;
+  logic               rnd_new_g_q;
+  logic               rnd_new_r_q;
+  logic               rnd_new_s_q;
+  logic signed [FP_EXP_EXT_W-1:0] rnd_final_exp_q;
   logic               rnd_tiny_q;
 
+  // core_start: delayed by one cycle from UNPACK2 -> ITER so that
+  // a_norm_q / b_norm_q / a_sqrt_q are already latched when the core
+  // samples start_i.  High for exactly one clock in the first ITER cycle.
+  logic               core_start_q;
+
+  // Result / fflags registers
+  logic [FLEN-1:0]    result_q;
+  logic [4:0]         fflags_q;
+
   // -----------------------------------------------------------------------
-  // Combinational signals
+  // 4. Combinational signals
   // -----------------------------------------------------------------------
-  state_e    state_d;
-  fp_class_t a_class, b_class;
+  state_e             state_d;
+  fp_class_t          a_class;
+  fp_class_t          b_class;
+
+  // Specials
+  logic               is_special;
+  logic [FLEN-1:0]    special_result;
+  logic [4:0]         special_fflags;
+  logic               sp_result_sign;
+  logic [FLEN-1:0]    sp_qnan;
+  logic [FLEN-1:0]    sp_pinf;
+  logic [FLEN-1:0]    sp_ninf;
+  logic [FLEN-1:0]    sp_pzero;
+  logic [FLEN-1:0]    sp_nzero;
+  logic [FLEN-1:0]    sp_signed_inf;
+  logic [FLEN-1:0]    sp_signed_zero;
+  logic               sp_a_nan;
+  logic               sp_b_nan;
+  logic               sp_any_snan;
+  logic               sp_any_nan;
+
+  // Normalization
+  logic [52:0]        a_norm;       // fdiv normalized significand
+  logic [52:0]        b_norm;       // fdiv normalized significand
+  logic [53:0]        a_sqrt;       // fsqrt normalized significand
+  logic signed [FP_EXP_EXT_W-1:0] a_true_exp;
+  logic signed [FP_EXP_EXT_W-1:0] b_true_exp;
+  logic signed [FP_EXP_EXT_W-1:0] bias;
+
+  // UNPACK2 result-exp / sign
+  logic signed [FP_EXP_EXT_W-1:0] result_exp_comb;    // biased result exponent
+  logic               result_sign_comb;   // result sign
+
+  // ROUND state - rounding logic (combinational)
+  logic [FLEN-1:0]    round_result;
+  logic [4:0]         round_fflags;
+
+  // Post-normalization shift signals
+  logic [55:0]        rnd_shifted;
+  logic signed [FP_EXP_EXT_W-1:0] rnd_adj_exp;
+  logic               rnd_sticky_shift;
+
+  // Mantissa extraction
+  logic [51:0]        rnd_mantissa;
+  logic               rnd_lsb;
+  logic               rnd_g;
+  logic               rnd_r;
+  logic               rnd_s;
+
+  // Tininess and subnormal shift
+  logic               rnd_tiny;
+  logic [51:0]        rnd_mant_shifted;
+  logic               rnd_new_lsb;
+  logic               rnd_new_g;
+  logic               rnd_new_r;
+  logic               rnd_new_s;
+  logic signed [FP_EXP_EXT_W-1:0] rnd_final_exp;
+  logic [6:0]         rnd_shift_amt;
+  logic [55:0]        rnd_combined_d;
+  logic [55:0]        rnd_shifted_out_d;
+  logic [55:0]        rnd_combined_shifted_d;
+  logic [26:0]        rnd_combined_s;
+  logic [26:0]        rnd_shifted_out_s;
+  logic [26:0]        rnd_combined_shifted_s;
+
+  // Rounding decision
+  logic               rnd_round_up;
+  logic               rnd_inexact;
+
+  // Rounded mantissa
+  logic [52:0]        rnd_rounded_mant;
+  logic               rnd_carry;
+
+  // Pack helpers (hoisted out of inner begin block)
+  logic signed [FP_EXP_EXT_W-1:0] rnd_exp_pack;
+  logic [52:0]        rnd_mant_pack;
+
+  // Overflow
+  logic               rnd_overflow;
+  logic               rnd_overflow_to_inf;
+  logic               rnd_to_max;
+
+  // Flags
+  logic               rnd_uf;
+  logic               rnd_of;
+  logic               rnd_nx;
+
+  // FDIV normalization helper
+  logic               rnd_need_shift;
+
+  // -----------------------------------------------------------------------
+  // 5. Submodule interface signals
+  // -----------------------------------------------------------------------
+  logic               core_start;
+  logic               core_done_div;
+  logic               core_done_sqrt;
+  logic [55:0]        q_div;
+  logic [55:0]        q_sqrt;
+  logic               rem_nz_div;
+  logic               rem_nz_sqrt;
+
+  // Mux of core outputs
+  logic [55:0]        raw;
+  logic               raw_sticky;
+  logic               core_done;
 
   // -----------------------------------------------------------------------
   // Operand classify (combinational, used in UNPACK1)
   // Reads from a_raw_q / b_raw_q (latched in IDLE)
   // -----------------------------------------------------------------------
   always_comb begin : proc_classify_a
-    a_class = '0;
+    a_class = '{default: '0};
     if (fmt_d_q) begin
       // Double precision
       a_class.sign = a_raw_q[63];
@@ -147,14 +286,14 @@ module kronos_fpu_iter
       a_class.sig  = a_raw_q[51:0];
     end else begin
       // Single precision -- check NaN-boxing
-      if (a_raw_q[63:32] == 32'hFFFF_FFFF) begin
+      if (a_raw_q[63:32] == FP_NANBOX_UPPER) begin
         a_class.sign = a_raw_q[31];
         a_class.exp  = {3'b0, a_raw_q[30:23]};
         a_class.sig  = {a_raw_q[22:0], 29'b0};
       end else begin
         // Not properly NaN-boxed: treat as canonical qNaN
         a_class.sign    = 1'b0;
-        a_class.exp     = 11'h7FF;
+        a_class.exp     = FP_D_EXP_MAX;
         a_class.sig     = {1'b1, 51'b0};
         a_class.is_qnan = 1'b1;
       end
@@ -163,27 +302,27 @@ module kronos_fpu_iter
     // Classification (only if not already forced to qNaN by NaN-box check)
     if (!a_class.is_qnan) begin
       if (fmt_d_q) begin
-        a_class.is_zero    = (a_class.exp == 11'h000) && (a_class.sig == 52'b0);
-        a_class.is_subnorm = (a_class.exp == 11'h000) && (a_class.sig != 52'b0);
-        a_class.is_inf     = (a_class.exp == 11'h7FF) && (a_class.sig == 52'b0);
-        a_class.is_snan    = (a_class.exp == 11'h7FF) && (a_class.sig != 52'b0)
+        a_class.is_zero    = (a_class.exp == 11'h000) && (a_class.sig == {FP_D_MANT_W{1'b0}});
+        a_class.is_subnorm = (a_class.exp == 11'h000) && (a_class.sig != {FP_D_MANT_W{1'b0}});
+        a_class.is_inf     = (a_class.exp == FP_D_EXP_MAX) && (a_class.sig == {FP_D_MANT_W{1'b0}});
+        a_class.is_snan    = (a_class.exp == FP_D_EXP_MAX) && (a_class.sig != {FP_D_MANT_W{1'b0}})
                              && !a_class.sig[51];
-        a_class.is_qnan    = (a_class.exp == 11'h7FF) && a_class.sig[51];
+        a_class.is_qnan    = (a_class.exp == FP_D_EXP_MAX) && a_class.sig[51];
         a_class.is_normal  = !a_class.is_zero && !a_class.is_subnorm
                              && !a_class.is_inf && !a_class.is_snan
                              && !a_class.is_qnan;
       end else begin
         // Single: exponent is in [7:0] of a_class.exp, sig in [51:29]
         a_class.is_zero    = (a_class.exp[7:0] == 8'h00)
-                             && (a_class.sig[51:29] == 23'b0);
+                             && (a_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
         a_class.is_subnorm = (a_class.exp[7:0] == 8'h00)
-                             && (a_class.sig[51:29] != 23'b0);
-        a_class.is_inf     = (a_class.exp[7:0] == 8'hFF)
-                             && (a_class.sig[51:29] == 23'b0);
-        a_class.is_snan    = (a_class.exp[7:0] == 8'hFF)
-                             && (a_class.sig[51:29] != 23'b0)
+                             && (a_class.sig[51:29] != {FP_S_MANT_W{1'b0}});
+        a_class.is_inf     = (a_class.exp[7:0] == FP_S_EXP_MAX)
+                             && (a_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
+        a_class.is_snan    = (a_class.exp[7:0] == FP_S_EXP_MAX)
+                             && (a_class.sig[51:29] != {FP_S_MANT_W{1'b0}})
                              && !a_class.sig[51];
-        a_class.is_qnan    = (a_class.exp[7:0] == 8'hFF)
+        a_class.is_qnan    = (a_class.exp[7:0] == FP_S_EXP_MAX)
                              && a_class.sig[51];
         a_class.is_normal  = !a_class.is_zero && !a_class.is_subnorm
                              && !a_class.is_inf && !a_class.is_snan
@@ -192,14 +331,15 @@ module kronos_fpu_iter
     end
 
     // CLZ for subnormals
-    if (fmt_d_q)
+    if (fmt_d_q) begin
       a_class.clz = clz53({1'b0, a_class.sig});
-    else
+    end else begin
       a_class.clz = clz53({1'b0, a_class.sig[51:29], 29'b0});
+    end
   end
 
   always_comb begin : proc_classify_b
-    b_class = '0;
+    b_class = '{default: '0};
     if (fmt_d_q) begin
       // Double precision
       b_class.sign = b_raw_q[63];
@@ -207,14 +347,14 @@ module kronos_fpu_iter
       b_class.sig  = b_raw_q[51:0];
     end else begin
       // Single precision -- check NaN-boxing
-      if (b_raw_q[63:32] == 32'hFFFF_FFFF) begin
+      if (b_raw_q[63:32] == FP_NANBOX_UPPER) begin
         b_class.sign = b_raw_q[31];
         b_class.exp  = {3'b0, b_raw_q[30:23]};
         b_class.sig  = {b_raw_q[22:0], 29'b0};
       end else begin
         // Not properly NaN-boxed: treat as canonical qNaN
         b_class.sign    = 1'b0;
-        b_class.exp     = 11'h7FF;
+        b_class.exp     = FP_D_EXP_MAX;
         b_class.sig     = {1'b1, 51'b0};
         b_class.is_qnan = 1'b1;
       end
@@ -223,27 +363,27 @@ module kronos_fpu_iter
     // Classification
     if (!b_class.is_qnan) begin
       if (fmt_d_q) begin
-        b_class.is_zero    = (b_class.exp == 11'h000) && (b_class.sig == 52'b0);
-        b_class.is_subnorm = (b_class.exp == 11'h000) && (b_class.sig != 52'b0);
-        b_class.is_inf     = (b_class.exp == 11'h7FF) && (b_class.sig == 52'b0);
-        b_class.is_snan    = (b_class.exp == 11'h7FF) && (b_class.sig != 52'b0)
+        b_class.is_zero    = (b_class.exp == 11'h000) && (b_class.sig == {FP_D_MANT_W{1'b0}});
+        b_class.is_subnorm = (b_class.exp == 11'h000) && (b_class.sig != {FP_D_MANT_W{1'b0}});
+        b_class.is_inf     = (b_class.exp == FP_D_EXP_MAX) && (b_class.sig == {FP_D_MANT_W{1'b0}});
+        b_class.is_snan    = (b_class.exp == FP_D_EXP_MAX) && (b_class.sig != {FP_D_MANT_W{1'b0}})
                              && !b_class.sig[51];
-        b_class.is_qnan    = (b_class.exp == 11'h7FF) && b_class.sig[51];
+        b_class.is_qnan    = (b_class.exp == FP_D_EXP_MAX) && b_class.sig[51];
         b_class.is_normal  = !b_class.is_zero && !b_class.is_subnorm
                              && !b_class.is_inf && !b_class.is_snan
                              && !b_class.is_qnan;
       end else begin
         // Single: exponent is in [7:0] of b_class.exp, sig in [51:29]
         b_class.is_zero    = (b_class.exp[7:0] == 8'h00)
-                             && (b_class.sig[51:29] == 23'b0);
+                             && (b_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
         b_class.is_subnorm = (b_class.exp[7:0] == 8'h00)
-                             && (b_class.sig[51:29] != 23'b0);
-        b_class.is_inf     = (b_class.exp[7:0] == 8'hFF)
-                             && (b_class.sig[51:29] == 23'b0);
-        b_class.is_snan    = (b_class.exp[7:0] == 8'hFF)
-                             && (b_class.sig[51:29] != 23'b0)
+                             && (b_class.sig[51:29] != {FP_S_MANT_W{1'b0}});
+        b_class.is_inf     = (b_class.exp[7:0] == FP_S_EXP_MAX)
+                             && (b_class.sig[51:29] == {FP_S_MANT_W{1'b0}});
+        b_class.is_snan    = (b_class.exp[7:0] == FP_S_EXP_MAX)
+                             && (b_class.sig[51:29] != {FP_S_MANT_W{1'b0}})
                              && !b_class.sig[51];
-        b_class.is_qnan    = (b_class.exp[7:0] == 8'hFF)
+        b_class.is_qnan    = (b_class.exp[7:0] == FP_S_EXP_MAX)
                              && b_class.sig[51];
         b_class.is_normal  = !b_class.is_zero && !b_class.is_subnorm
                              && !b_class.is_inf && !b_class.is_snan
@@ -252,47 +392,32 @@ module kronos_fpu_iter
     end
 
     // CLZ for subnormals
-    if (fmt_d_q)
+    if (fmt_d_q) begin
       b_class.clz = clz53({1'b0, b_class.sig});
-    else
+    end else begin
       b_class.clz = clz53({1'b0, b_class.sig[51:29], 29'b0});
+    end
   end
 
   // -----------------------------------------------------------------------
   // Specials short-circuit (combinational, used in UNPACK1)
   // -----------------------------------------------------------------------
-  logic        is_special;
-  logic [63:0] special_result;
-  logic [4:0]  special_fflags;
-
-  // Canonical bit patterns for double precision
-  localparam logic [63:0] D_QNAN  = 64'h7FF8_0000_0000_0000;
-  localparam logic [63:0] D_PINF  = 64'h7FF0_0000_0000_0000;
-  localparam logic [63:0] D_NINF  = 64'hFFF0_0000_0000_0000;
-  localparam logic [63:0] D_PZERO = 64'h0000_0000_0000_0000;
-  localparam logic [63:0] D_NZERO = 64'h8000_0000_0000_0000;
-
-  // Canonical bit patterns for single precision (NaN-boxed to 64 bits)
-  localparam logic [63:0] S_QNAN  = 64'hFFFF_FFFF_7FC0_0000;
-  localparam logic [63:0] S_PINF  = 64'hFFFF_FFFF_7F80_0000;
-  localparam logic [63:0] S_NINF  = 64'hFFFF_FFFF_FF80_0000;
-  localparam logic [63:0] S_PZERO = 64'hFFFF_FFFF_0000_0000;
-  localparam logic [63:0] S_NZERO = 64'hFFFF_FFFF_8000_0000;
-
-  // Flag bits
-  localparam logic [4:0] FL_NV = 5'(1) << FP_FFLAG_NV;
-  localparam logic [4:0] FL_DZ = 5'(1) << FP_FFLAG_DZ;
-
-  // Specials helper signals
-  logic        sp_result_sign;
-  logic [63:0] sp_qnan, sp_pinf, sp_ninf, sp_pzero, sp_nzero;
-  logic [63:0] sp_signed_inf, sp_signed_zero;
-  logic        sp_a_nan, sp_b_nan, sp_any_snan, sp_any_nan;
-
   always_comb begin : proc_specials
     is_special     = 1'b0;
-    special_result = 64'h0;
+    special_result = {FLEN{1'b0}};
     special_fflags = 5'h0;
+    sp_result_sign = 1'b0;
+    sp_qnan        = {FLEN{1'b0}};
+    sp_pinf        = {FLEN{1'b0}};
+    sp_ninf        = {FLEN{1'b0}};
+    sp_pzero       = {FLEN{1'b0}};
+    sp_nzero       = {FLEN{1'b0}};
+    sp_signed_inf  = {FLEN{1'b0}};
+    sp_signed_zero = {FLEN{1'b0}};
+    sp_a_nan       = 1'b0;
+    sp_b_nan       = 1'b0;
+    sp_any_snan    = 1'b0;
+    sp_any_nan     = 1'b0;
 
     // Result sign for FDIV: sign_a XOR sign_b; for FSQRT: sign_a
     sp_result_sign = (op_q == FP_FDIV) ? (a_class.sign ^ b_class.sign)
@@ -392,35 +517,30 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   // Normalization logic (combinational, used in UNPACK1)
   // -----------------------------------------------------------------------
-  logic [52:0]       a_norm, b_norm;      // fdiv normalized significands
-  logic [53:0]       a_sqrt;              // fsqrt normalized significand
-  logic signed [12:0] a_true_exp, b_true_exp;
-  logic signed [12:0] bias;
-
   always_comb begin : proc_normalize
     a_norm     = 53'h0;
     b_norm     = 53'h0;
     a_sqrt     = 54'h0;
-    a_true_exp = 13'h0;
-    b_true_exp = 13'h0;
+    a_true_exp = {FP_EXP_EXT_W{1'b0}};
+    b_true_exp = {FP_EXP_EXT_W{1'b0}};
 
-    bias = fmt_d_q ? 13'sd1023 : 13'sd127;
+    bias = fmt_d_q ? FP_EXP_EXT_W'(FP_D_BIAS) : FP_EXP_EXT_W'(FP_S_BIAS);
 
     // --- Operand A normalization ---
     if (a_class.is_subnorm) begin
-      a_true_exp = 13'sd1 - bias - 13'(a_class.clz);
+      a_true_exp = $signed(FP_EXP_EXT_W'(1)) - bias - $signed(FP_EXP_EXT_W'(a_class.clz));
       a_norm     = {1'b0, a_class.sig} << a_class.clz;
     end else begin
-      a_true_exp = 13'(a_class.exp) - bias;
+      a_true_exp = $signed(FP_EXP_EXT_W'(a_class.exp)) - bias;
       a_norm     = {1'b1, a_class.sig};
     end
 
     // --- Operand B normalization (FDIV only; harmless for FSQRT) ---
     if (b_class.is_subnorm) begin
-      b_true_exp = 13'sd1 - bias - 13'(b_class.clz);
+      b_true_exp = $signed(FP_EXP_EXT_W'(1)) - bias - $signed(FP_EXP_EXT_W'(b_class.clz));
       b_norm     = {1'b0, b_class.sig} << b_class.clz;
     end else begin
-      b_true_exp = 13'(b_class.exp) - bias;
+      b_true_exp = $signed(FP_EXP_EXT_W'(b_class.exp)) - bias;
       b_norm     = {1'b1, b_class.sig};
     end
 
@@ -439,11 +559,8 @@ module kronos_fpu_iter
   // REGISTERED a_true_exp_q / b_true_exp_q in UNPACK2. Breaking the combined
   // classify+normalize+exp-compute cone into two cycles is the C4 fix.
   // -----------------------------------------------------------------------
-  logic signed [12:0] result_exp_comb;    // biased result exponent (UNPACK2)
-  logic               result_sign_comb;   // result sign (UNPACK2)
-
   always_comb begin : proc_result_exp
-    result_exp_comb  = 13'h0;
+    result_exp_comb  = {FP_EXP_EXT_W{1'b0}};
     result_sign_comb = 1'b0;
 
     // Result sign: FDIV = sign_a ^ sign_b, FSQRT = 0 (negative caught as special).
@@ -454,100 +571,62 @@ module kronos_fpu_iter
     if (op_q == FP_FDIV) begin
       // FDIV: result_exp (biased) = (a_true - b_true) + bias
       result_exp_comb = a_true_exp_q - b_true_exp_q
-                        + (fmt_d_q ? 13'sd1023 : 13'sd127);
+                        + (fmt_d_q ? FP_EXP_EXT_W'(FP_D_BIAS)
+                                   : FP_EXP_EXT_W'(FP_S_BIAS));
     end else begin
       // FSQRT: result_exp (biased) = floor(a_true / 2) + bias
       // arithmetic right shift by 1 gives floor(x/2) for signed x
       result_exp_comb = (a_true_exp_q >>> 1)
-                        + (fmt_d_q ? 13'sd1023 : 13'sd127);
+                        + (fmt_d_q ? FP_EXP_EXT_W'(FP_D_BIAS)
+                                   : FP_EXP_EXT_W'(FP_S_BIAS));
     end
   end
 
   // -----------------------------------------------------------------------
-  // ROUND state — rounding logic (combinational)
+  // ROUND state - rounding logic stage 1 (combinational)
   // -----------------------------------------------------------------------
-  logic [63:0] round_result;
-  logic [4:0]  round_fflags;
-
-  // Post-normalization shift signals
-  logic [55:0]        rnd_shifted;
-  logic signed [12:0] rnd_adj_exp;
-  logic               rnd_sticky_shift;
-
-  // Mantissa extraction
-  logic [51:0] rnd_mantissa;
-  logic        rnd_lsb, rnd_g, rnd_r, rnd_s;
-
-  // Tininess and subnormal shift
-  logic               rnd_tiny;
-  logic [51:0]        rnd_mant_shifted;
-  logic               rnd_new_lsb, rnd_new_g, rnd_new_r, rnd_new_s;
-  logic signed [12:0] rnd_final_exp;
-  logic [6:0]         rnd_shift_amt;
-  logic [55:0]        rnd_combined_d, rnd_shifted_out_d, rnd_combined_shifted_d;
-  logic [26:0]        rnd_combined_s, rnd_shifted_out_s, rnd_combined_shifted_s;
-
-  // Rounding decision
-  logic        rnd_round_up;
-  logic        rnd_inexact;
-
-  // Rounded mantissa
-  logic [52:0] rnd_rounded_mant;
-  logic        rnd_carry;
-
-  // Overflow
-  logic        rnd_overflow;
-  logic        rnd_overflow_to_inf;
-  logic        rnd_to_max;
-
-  // Flags
-  logic        rnd_uf, rnd_of, rnd_nx;
-
-  // FDIV normalization helper
-  logic        rnd_need_shift;
-
   always_comb begin : proc_round1
     // Defaults
-    rnd_shifted    = 56'h0;
-    rnd_adj_exp    = 13'h0;
-    rnd_sticky_shift = 1'b0;
-    rnd_mantissa   = 52'h0;
-    rnd_lsb        = 1'b0;
-    rnd_g          = 1'b0;
-    rnd_r          = 1'b0;
-    rnd_s          = 1'b0;
-    rnd_tiny       = 1'b0;
-    rnd_mant_shifted = 52'h0;
-    rnd_new_lsb    = 1'b0;
-    rnd_new_g      = 1'b0;
-    rnd_new_r      = 1'b0;
-    rnd_new_s      = 1'b0;
-    rnd_final_exp  = 13'h0;
-    rnd_shift_amt  = 7'h0;
-    rnd_combined_d = 56'h0;
-    rnd_shifted_out_d = 56'h0;
+    rnd_shifted            = 56'h0;
+    rnd_adj_exp            = {FP_EXP_EXT_W{1'b0}};
+    rnd_sticky_shift       = 1'b0;
+    rnd_mantissa           = {FP_D_MANT_W{1'b0}};
+    rnd_lsb                = 1'b0;
+    rnd_g                  = 1'b0;
+    rnd_r                  = 1'b0;
+    rnd_s                  = 1'b0;
+    rnd_tiny               = 1'b0;
+    rnd_mant_shifted       = {FP_D_MANT_W{1'b0}};
+    rnd_new_lsb            = 1'b0;
+    rnd_new_g              = 1'b0;
+    rnd_new_r              = 1'b0;
+    rnd_new_s              = 1'b0;
+    rnd_final_exp          = {FP_EXP_EXT_W{1'b0}};
+    rnd_shift_amt          = 7'h0;
+    rnd_combined_d         = 56'h0;
+    rnd_shifted_out_d      = 56'h0;
     rnd_combined_shifted_d = 56'h0;
-    rnd_combined_s = 27'h0;
-    rnd_shifted_out_s = 27'h0;
+    rnd_combined_s         = 27'h0;
+    rnd_shifted_out_s      = 27'h0;
     rnd_combined_shifted_s = 27'h0;
+    rnd_need_shift         = 1'b0;
 
     // ------------------------------------------------------------------
     // 1. Post-normalization shift (FDIV only: if integer bit is 0)
     // ------------------------------------------------------------------
-    rnd_need_shift = 1'b0;
     if (op_q == FP_FDIV) begin
-      rnd_need_shift = fmt_d_q ? !raw_q_q[55] : !raw_q_q[26];
+      rnd_need_shift = fmt_d_q ? !raw_q[55] : !raw_q[26];
       if (rnd_need_shift) begin
-        rnd_shifted = {raw_q_q[54:0], raw_sticky_q};
-        rnd_adj_exp = result_exp_q - 13'sd1;
+        rnd_shifted = {raw_q[54:0], raw_sticky_q};
+        rnd_adj_exp = result_exp_q - $signed(FP_EXP_EXT_W'(1));
         rnd_sticky_shift = 1'b0;
       end else begin
-        rnd_shifted = raw_q_q;
+        rnd_shifted = raw_q;
         rnd_adj_exp = result_exp_q;
         rnd_sticky_shift = raw_sticky_q;
       end
     end else begin
-      rnd_shifted = raw_q_q;
+      rnd_shifted = raw_q;
       rnd_adj_exp = result_exp_q;
       rnd_sticky_shift = raw_sticky_q;
     end
@@ -562,7 +641,7 @@ module kronos_fpu_iter
       rnd_r        = rnd_shifted[1];
       rnd_s        = rnd_sticky_shift | rnd_shifted[0];
     end else begin
-      rnd_mantissa = {29'b0, rnd_shifted[25:3]};
+      rnd_mantissa = {{(FP_D_MANT_W-FP_S_MANT_W){1'b0}}, rnd_shifted[25:3]};
       rnd_lsb      = rnd_shifted[3];
       rnd_g        = rnd_shifted[2];
       rnd_r        = rnd_shifted[1];
@@ -572,15 +651,15 @@ module kronos_fpu_iter
     // ------------------------------------------------------------------
     // 3. Tininess detection and subnormal shift (before rounding)
     // ------------------------------------------------------------------
-    rnd_tiny = (rnd_adj_exp <= 13'sd0);
+    rnd_tiny = (rnd_adj_exp <= $signed({FP_EXP_EXT_W{1'b0}}));
 
     if (rnd_tiny) begin
       if (fmt_d_q) begin
-        rnd_shift_amt = ((13'sd1 - rnd_adj_exp) > 13'sd56)
-                        ? 7'd56 : 7'(13'sd1 - rnd_adj_exp);
+        rnd_shift_amt = (($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp) > 13'sd56)
+                        ? 7'd56 : 7'($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp);
       end else begin
-        rnd_shift_amt = ((13'sd1 - rnd_adj_exp) > 13'sd27)
-                        ? 7'd27 : 7'(13'sd1 - rnd_adj_exp);
+        rnd_shift_amt = (($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp) > 13'sd27)
+                        ? 7'd27 : 7'($signed(FP_EXP_EXT_W'(1)) - rnd_adj_exp);
       end
 
       if (fmt_d_q) begin
@@ -596,14 +675,14 @@ module kronos_fpu_iter
         rnd_combined_s = rnd_shifted[26:0];
         rnd_shifted_out_s = rnd_combined_s & ((27'd1 << rnd_shift_amt) - 27'd1);
         rnd_combined_shifted_s = rnd_combined_s >> rnd_shift_amt;
-        rnd_mant_shifted = {29'b0, rnd_combined_shifted_s[25:3]};
+        rnd_mant_shifted = {{(FP_D_MANT_W-FP_S_MANT_W){1'b0}}, rnd_combined_shifted_s[25:3]};
         rnd_new_lsb = rnd_combined_shifted_s[3];
         rnd_new_g   = rnd_combined_shifted_s[2];
         rnd_new_r   = rnd_combined_shifted_s[1];
         rnd_new_s   = rnd_s | rnd_combined_shifted_s[0] | (|rnd_shifted_out_s);
       end
 
-      rnd_final_exp = 13'sd0;
+      rnd_final_exp = $signed({FP_EXP_EXT_W{1'b0}});
     end else begin
       rnd_mant_shifted = rnd_mantissa;
       rnd_new_lsb = rnd_lsb;
@@ -619,12 +698,12 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_round1_latch
     if (!rst_ni) begin
-      rnd_mant_shifted_q <= 52'h0;
+      rnd_mant_shifted_q <= {FP_D_MANT_W{1'b0}};
       rnd_new_lsb_q      <= 1'b0;
       rnd_new_g_q        <= 1'b0;
       rnd_new_r_q        <= 1'b0;
       rnd_new_s_q        <= 1'b0;
-      rnd_final_exp_q    <= 13'h0;
+      rnd_final_exp_q    <= {FP_EXP_EXT_W{1'b0}};
       rnd_tiny_q         <= 1'b0;
     end else if (state_q == ROUND1) begin
       rnd_mant_shifted_q <= rnd_mant_shifted;
@@ -642,12 +721,14 @@ module kronos_fpu_iter
   // Reads ROUND1 latches; writes round_result / round_fflags
   // -----------------------------------------------------------------------
   always_comb begin : proc_round2
-    round_result        = 64'h0;
+    round_result        = {FLEN{1'b0}};
     round_fflags        = 5'h0;
     rnd_round_up        = 1'b0;
     rnd_inexact         = 1'b0;
     rnd_rounded_mant    = 53'h0;
     rnd_carry           = 1'b0;
+    rnd_exp_pack        = {FP_EXP_EXT_W{1'b0}};
+    rnd_mant_pack       = 53'h0;
     rnd_overflow        = 1'b0;
     rnd_overflow_to_inf = 1'b0;
     rnd_to_max          = 1'b0;
@@ -672,87 +753,76 @@ module kronos_fpu_iter
     // ------------------------------------------------------------------
     // 5. Add rounding increment
     // ------------------------------------------------------------------
-    if (fmt_d_q)
-      rnd_rounded_mant = {1'b0, rnd_mant_shifted_q} + {52'b0, rnd_round_up};
-    else
-      rnd_rounded_mant = {30'b0, rnd_mant_shifted_q[22:0]} + {52'b0, rnd_round_up};
+    if (fmt_d_q) begin
+      rnd_rounded_mant = {1'b0, rnd_mant_shifted_q} + {{FP_D_MANT_W{1'b0}}, rnd_round_up};
+    end else begin
+      rnd_rounded_mant = {{(FP_D_MANT_W+1-FP_S_MANT_W){1'b0}}, rnd_mant_shifted_q[22:0]}
+                       + {{FP_D_MANT_W{1'b0}}, rnd_round_up};
+    end
 
     rnd_carry = fmt_d_q ? rnd_rounded_mant[52] : rnd_rounded_mant[23];
 
     // Local exponent value - rnd_final_exp_q possibly +1 on carry
-    begin : proc_r2_pack
-      logic signed [12:0] exp_pack;
-      logic [52:0]        mant_pack;
-      exp_pack  = rnd_final_exp_q;
-      mant_pack = rnd_rounded_mant;
-      if (rnd_carry) begin
-        exp_pack  = rnd_final_exp_q + 13'sd1;
-        mant_pack = 53'h0;
-      end
+    rnd_exp_pack  = rnd_final_exp_q;
+    rnd_mant_pack = rnd_rounded_mant;
+    if (rnd_carry) begin
+      rnd_exp_pack  = rnd_final_exp_q + $signed(FP_EXP_EXT_W'(1));
+      rnd_mant_pack = 53'h0;
+    end
 
-      // ----------------------------------------------------------------
-      // 6. Overflow detection
-      // ----------------------------------------------------------------
-      rnd_overflow = fmt_d_q ? (exp_pack >= 13'sd2047)
-                             : (exp_pack >= 13'sd255);
+    // ----------------------------------------------------------------
+    // 6. Overflow detection
+    // ----------------------------------------------------------------
+    rnd_overflow = fmt_d_q ? (rnd_exp_pack >= FP_EXP_EXT_W'(FP_D_EXP_MAX))
+                           : (rnd_exp_pack >= FP_EXP_EXT_W'(FP_S_EXP_MAX));
 
-      rnd_to_max = 1'b0;
-      if (rnd_overflow) begin
-        unique case (rm_q)
-          3'b001:  rnd_to_max = 1'b1;
-          3'b010:  rnd_to_max = ~result_sign_q;
-          3'b011:  rnd_to_max = result_sign_q;
-          default: rnd_to_max = 1'b0;
-        endcase
-      end
-      rnd_overflow_to_inf = rnd_overflow & ~rnd_to_max;
+    if (rnd_overflow) begin
+      unique case (rm_q)
+        3'b001:  rnd_to_max = 1'b1;
+        3'b010:  rnd_to_max = ~result_sign_q;
+        3'b011:  rnd_to_max = result_sign_q;
+        default: rnd_to_max = 1'b0;
+      endcase
+    end
+    rnd_overflow_to_inf = rnd_overflow & ~rnd_to_max;
 
-      // ----------------------------------------------------------------
-      // 7. Flag generation
-      // ----------------------------------------------------------------
-      rnd_nx = rnd_inexact | rnd_overflow;
-      rnd_uf = rnd_tiny_q & rnd_inexact;
-      rnd_of = rnd_overflow;
-      round_fflags = {1'b0, 1'b0, rnd_of, rnd_uf, rnd_nx};
+    // ----------------------------------------------------------------
+    // 7. Flag generation
+    // ----------------------------------------------------------------
+    rnd_nx = rnd_inexact | rnd_overflow;
+    rnd_uf = rnd_tiny_q & rnd_inexact;
+    rnd_of = rnd_overflow;
+    round_fflags = {1'b0, 1'b0, rnd_of, rnd_uf, rnd_nx};
 
-      // ----------------------------------------------------------------
-      // 8. Pack result
-      // ----------------------------------------------------------------
-      if (rnd_overflow) begin
-        if (rnd_overflow_to_inf) begin
-          if (fmt_d_q)
-            round_result = {result_sign_q, 11'h7FF, 52'b0};
-          else
-            round_result = {32'hFFFF_FFFF, result_sign_q, 8'hFF, 23'b0};
+    // ----------------------------------------------------------------
+    // 8. Pack result
+    // ----------------------------------------------------------------
+    if (rnd_overflow) begin
+      if (rnd_overflow_to_inf) begin
+        if (fmt_d_q) begin
+          round_result = {result_sign_q, FP_D_EXP_MAX, {FP_D_MANT_W{1'b0}}};
         end else begin
-          if (fmt_d_q)
-            round_result = {result_sign_q, 11'h7FE, {52{1'b1}}};
-          else
-            round_result = {32'hFFFF_FFFF, result_sign_q, 8'hFE, {23{1'b1}}};
+          round_result = {FP_NANBOX_UPPER, result_sign_q, FP_S_EXP_MAX, {FP_S_MANT_W{1'b0}}};
         end
       end else begin
-        if (fmt_d_q)
-          round_result = {result_sign_q, exp_pack[10:0], mant_pack[51:0]};
-        else
-          round_result = {32'hFFFF_FFFF, result_sign_q, exp_pack[7:0], mant_pack[22:0]};
+        if (fmt_d_q) begin
+          round_result = {result_sign_q, FP_D_EXP_PENULT, {FP_D_MANT_W{1'b1}}};
+        end else begin
+          round_result = {FP_NANBOX_UPPER, result_sign_q, FP_S_EXP_PENULT, {FP_S_MANT_W{1'b1}}};
+        end
+      end
+    end else begin
+      if (fmt_d_q) begin
+        round_result = {result_sign_q, rnd_exp_pack[FP_D_EXP_W-1:0], rnd_mant_pack[FP_D_MANT_W-1:0]};
+      end else begin
+        round_result = {FP_NANBOX_UPPER, result_sign_q, rnd_exp_pack[FP_S_EXP_W-1:0], rnd_mant_pack[FP_S_MANT_W-1:0]};
       end
     end
   end
 
   // -----------------------------------------------------------------------
-  // Result / fflags registers
-  // -----------------------------------------------------------------------
-  logic [63:0] result_q;
-  logic [4:0]  fflags_q;
-
-  // -----------------------------------------------------------------------
   // Core instantiation
   // -----------------------------------------------------------------------
-  logic        core_start;
-  logic        core_done_div, core_done_sqrt;
-  logic [55:0] q_div, q_sqrt;
-  logic        rem_nz_div, rem_nz_sqrt;
-
   kronos_fpu_fdiv_core u_fdiv (
     .clk_i    (clk_i),
     .rst_ni   (rst_ni),
@@ -779,18 +849,10 @@ module kronos_fpu_iter
   );
 
   // Mux core outputs based on operation
-  logic [55:0] raw_q;
-  logic        raw_sticky;
-  logic        core_done;
-
-  assign raw_q      = (op_q == FP_FDIV) ? q_div      : q_sqrt;
+  assign raw      = (op_q == FP_FDIV) ? q_div      : q_sqrt;
   assign raw_sticky = (op_q == FP_FDIV) ? rem_nz_div : rem_nz_sqrt;
   assign core_done  = (op_q == FP_FDIV) ? core_done_div : core_done_sqrt;
 
-  // core_start: delayed by one cycle from UNPACK2 -> ITER so that
-  // a_norm_q / b_norm_q / a_sqrt_q are already latched when the core
-  // samples start_i.  High for exactly one clock in the first ITER cycle.
-  logic core_start_q;
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_core_start
     if (!rst_ni)        core_start_q <= 1'b0;
     else if (flush_i)   core_start_q <= 1'b0;
@@ -801,7 +863,7 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   // FSM next-state logic
   // -----------------------------------------------------------------------
-  always_comb begin : proc_fsm_next
+  always_comb begin : proc_fsm_d
     state_d = state_q;
     unique case (state_q)
       IDLE:    if (in_valid_i) state_d = UNPACK1;
@@ -843,12 +905,12 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_input_latch
     if (!rst_ni) begin
-      op_q    <= fp_op_e'('0);
+      op_q    <= fp_op_e'(5'b0);
       fmt_d_q <= 1'b0;
       rm_q    <= 3'b0;
-      tag_q   <= '0;
-      a_raw_q <= 64'h0;
-      b_raw_q <= 64'h0;
+      tag_q   <= '{default: '0};
+      a_raw_q <= {FLEN{1'b0}};
+      b_raw_q <= {FLEN{1'b0}};
     end else if (state_q == IDLE && in_valid_i) begin
       op_q    <= op_i;
       fmt_d_q <= fmt_d_i;
@@ -864,8 +926,8 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_class_latch
     if (!rst_ni) begin
-      a_class_q <= '0;
-      b_class_q <= '0;
+      a_class_q <= '{default: '0};
+      b_class_q <= '{default: '0};
     end else if (state_q == UNPACK1) begin
       a_class_q <= a_class;
       b_class_q <= b_class;
@@ -880,10 +942,10 @@ module kronos_fpu_iter
       a_norm_q         <= 53'h0;
       b_norm_q         <= 53'h0;
       a_sqrt_q         <= 54'h0;
-      a_true_exp_q     <= 13'h0;
-      b_true_exp_q     <= 13'h0;
+      a_true_exp_q     <= {FP_EXP_EXT_W{1'b0}};
+      b_true_exp_q     <= {FP_EXP_EXT_W{1'b0}};
       is_special_q     <= 1'b0;
-      special_result_q <= 64'h0;
+      special_result_q <= {FLEN{1'b0}};
       special_fflags_q <= 5'h0;
     end else if (state_q == UNPACK1) begin
       a_norm_q         <= a_norm;
@@ -903,7 +965,7 @@ module kronos_fpu_iter
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_unpack2_latch
     if (!rst_ni) begin
       result_sign_q <= 1'b0;
-      result_exp_q  <= 13'h0;
+      result_exp_q  <= {FP_EXP_EXT_W{1'b0}};
     end else if (state_q == UNPACK2 && !is_special_q) begin
       result_sign_q <= result_sign_comb;
       result_exp_q  <= result_exp_comb;
@@ -915,10 +977,10 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_raw_latch
     if (!rst_ni) begin
-      raw_q_q      <= 56'h0;
+      raw_q      <= 56'h0;
       raw_sticky_q <= 1'b0;
     end else if (core_done) begin
-      raw_q_q      <= raw_q;
+      raw_q      <= raw;
       raw_sticky_q <= raw_sticky;
     end
   end
@@ -928,7 +990,7 @@ module kronos_fpu_iter
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_result_latch
     if (!rst_ni) begin
-      result_q <= 64'h0;
+      result_q <= {FLEN{1'b0}};
       fflags_q <= 5'h0;
     end else if (state_q == UNPACK2 && is_special_q) begin
       result_q <= special_result_q;

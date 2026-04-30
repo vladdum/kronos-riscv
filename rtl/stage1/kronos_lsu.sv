@@ -29,18 +29,36 @@ module kronos_lsu (
 );
 
   // -------------------------------------------------------------------------
-  // OBI FSM
+  // FSM encoding
   // -------------------------------------------------------------------------
   typedef enum logic { IDLE = 1'b0, WAIT_RVALID = 1'b1 } lsu_state_e;
+
+  // -------------------------------------------------------------------------
+  // State registers
+  // -------------------------------------------------------------------------
   lsu_state_e state_q;
 
+  // -------------------------------------------------------------------------
+  // Combinational signals
+  // -------------------------------------------------------------------------
+  logic [1:0]  byte_off;
+  logic [31:0] rdata_shifted;
+  logic [7:0]  raw_byte;
+  logic [15:0] raw_half;
+
+  // -------------------------------------------------------------------------
+  // OBI FSM
+  // -------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) state_q <= IDLE;
-    else unique case (state_q)
-      IDLE:        if (req_i && data_gnt_i && !data_rvalid_i) state_q <= WAIT_RVALID;
-      WAIT_RVALID: if (data_rvalid_i)                         state_q <= IDLE;
-      default:     state_q <= IDLE;
-    endcase
+    if (!rst_ni) begin
+      state_q <= IDLE;
+    end else begin
+      unique case (state_q)
+        IDLE:        if (req_i && data_gnt_i && !data_rvalid_i) state_q <= WAIT_RVALID;
+        WAIT_RVALID: if (data_rvalid_i)                         state_q <= IDLE;
+        default:     state_q <= IDLE;
+      endcase
+    end
   end
 
   assign valid_o     = (state_q == IDLE       && req_i && data_gnt_i && data_rvalid_i) ||
@@ -50,11 +68,6 @@ module kronos_lsu (
   // -------------------------------------------------------------------------
   // Byte offset and read-data extraction (identical to stage0)
   // -------------------------------------------------------------------------
-  logic [1:0]  byte_off;
-  logic [31:0] rdata_shifted;
-  logic [7:0]  raw_byte;
-  logic [15:0] raw_half;
-
   assign byte_off      = addr_i[1:0];
   assign rdata_shifted = data_rdata_i >> ({3'b0, byte_off} * 4'd8);
   assign raw_byte      = rdata_shifted[7:0];

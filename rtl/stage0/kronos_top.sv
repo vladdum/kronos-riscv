@@ -40,26 +40,45 @@ module kronos_top
 );
 
   // -------------------------------------------------------------------------
-  // Decoded instruction
+  // Imported types
   // -------------------------------------------------------------------------
   decoded_instr_t dec;
 
   // -------------------------------------------------------------------------
+  // State registers (driven by always_ff)
+  // -------------------------------------------------------------------------
+  logic [31:0] pc_q;
+
+  // -------------------------------------------------------------------------
+  // Combinational signals
+  // -------------------------------------------------------------------------
+  logic [31:0] pc_d;
+  logic [31:0] alu_a, alu_b, alu_result;
+  logic [63:0] rs1_data, rs2_data;
+  logic [4:0]  rd_addr;
+  logic        rd_wen;
+  logic [63:0] rd_wdata;
+  logic [31:0] lsu_rdata;
+  logic        lsu_valid;
+  logic [31:0] csr_rdata, trap_vector, mepc;
+  logic        csr_valid, irq_pending;
+  logic        trap;
+  logic [31:0] trap_cause;
+  logic        branch_taken;
+
+  // -------------------------------------------------------------------------
   // PC
   // -------------------------------------------------------------------------
-  logic [31:0] pc;
-  logic [31:0] pc_next;
-
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) pc <= boot_addr_i;
-    else if (instr_rvalid_i) pc <= pc_next;
+    if (!rst_ni) pc_q <= boot_addr_i;
+    else if (instr_rvalid_i) pc_q <= pc_d;
   end
 
   // -------------------------------------------------------------------------
   // Instruction fetch (OBI)
   // -------------------------------------------------------------------------
   assign instr_req_o  = rst_ni;
-  assign instr_addr_o = pc;
+  assign instr_addr_o = pc_q;
 
   // -------------------------------------------------------------------------
   // Decode
@@ -72,11 +91,6 @@ module kronos_top
   // -------------------------------------------------------------------------
   // Register file
   // -------------------------------------------------------------------------
-  logic [63:0] rs1_data, rs2_data;
-  logic [4:0]  rd_addr;
-  logic        rd_wen;
-  logic [63:0] rd_wdata;
-
   kronos_regfile u_regfile (
     .clk_i       (clk_i),
     .rs1_addr_i  (dec.rs1),
@@ -91,9 +105,7 @@ module kronos_top
   // -------------------------------------------------------------------------
   // ALU
   // -------------------------------------------------------------------------
-  logic [31:0] alu_a, alu_b, alu_result;
-
-  assign alu_a = dec.use_pc  ? pc           : rs1_data[31:0];
+  assign alu_a = dec.use_pc  ? pc_q         : rs1_data[31:0];
   assign alu_b = dec.use_imm ? dec.imm      : rs2_data[31:0];
 
   kronos_alu u_alu (
@@ -106,9 +118,6 @@ module kronos_top
   // -------------------------------------------------------------------------
   // LSU
   // -------------------------------------------------------------------------
-  logic [31:0] lsu_rdata;
-  logic        lsu_valid;
-
   kronos_lsu u_lsu (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
@@ -133,9 +142,6 @@ module kronos_top
   // -------------------------------------------------------------------------
   // CSR
   // -------------------------------------------------------------------------
-  logic [31:0] csr_rdata, trap_vector, mepc;
-  logic        csr_valid, irq_pending;
-
   kronos_csr u_csr (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
@@ -148,7 +154,7 @@ module kronos_top
     .rdata_o       (csr_rdata),
     .valid_o       (csr_valid),
     .trap_i        (trap),
-    .trap_pc_i     (pc),
+    .trap_pc_i     (pc_q),
     .trap_cause_i  (trap_cause),
     .mret_i        (dec.is_mret),
     .trap_vector_o (trap_vector),
@@ -162,10 +168,11 @@ module kronos_top
   // Writeback
   // -------------------------------------------------------------------------
   always_comb begin
+    rd_wdata = {64{1'b0}};
     unique case (dec.wb_sel)
       WB_ALU:  rd_wdata = {{32{alu_result[31]}}, alu_result};
       WB_MEM:  rd_wdata = {{32{lsu_rdata[31]}},  lsu_rdata};
-      WB_PC4:  rd_wdata = {32'b0, pc + 32'd4};
+      WB_PC4:  rd_wdata = {32'b0, pc_q + 32'd4};
       WB_CSR:  rd_wdata = {32'b0, csr_rdata};
       default: rd_wdata = {64{1'b0}};
     endcase
@@ -177,12 +184,10 @@ module kronos_top
   // -------------------------------------------------------------------------
   // Trap detection
   // -------------------------------------------------------------------------
-  logic        trap;
-  logic [31:0] trap_cause;
-
   assign trap = instr_rvalid_i & (dec.is_ecall | dec.is_ebreak | dec.illegal);
 
   always_comb begin
+    trap_cause = 32'd3; // default: ebreak
     if      (dec.illegal)   trap_cause = 32'd2;  // illegal instruction
     else if (dec.is_ecall)  trap_cause = 32'd11; // ecall from M-mode
     else                    trap_cause = 32'd3;  // ebreak
@@ -191,8 +196,6 @@ module kronos_top
   // -------------------------------------------------------------------------
   // Next PC
   // -------------------------------------------------------------------------
-  logic        branch_taken;
-
   always_comb begin
     branch_taken = 1'b0;
     unique case (dec.branch_funct3)
@@ -207,12 +210,13 @@ module kronos_top
   end
 
   always_comb begin
-    if      (trap)          pc_next = trap_vector;
-    else if (dec.is_mret)   pc_next = mepc;
-    else if (dec.is_jal)    pc_next = pc + dec.imm;
-    else if (dec.is_jalr)   pc_next = (rs1_data[31:0] + dec.imm) & ~32'd1;
-    else if (dec.is_branch) pc_next = branch_taken ? (pc + dec.imm) : (pc + 32'd4);
-    else                    pc_next = pc + 32'd4;
+    pc_d = pc_q + 32'd4;
+    if      (trap)          pc_d = trap_vector;
+    else if (dec.is_mret)   pc_d = mepc;
+    else if (dec.is_jal)    pc_d = pc_q + dec.imm;
+    else if (dec.is_jalr)   pc_d = (rs1_data[31:0] + dec.imm) & ~32'd1;
+    else if (dec.is_branch) pc_d = branch_taken ? (pc_q + dec.imm) : (pc_q + 32'd4);
+    else                    pc_d = pc_q + 32'd4;
   end
 
 endmodule

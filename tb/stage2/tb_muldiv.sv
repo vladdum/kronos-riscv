@@ -62,7 +62,7 @@ module tb_muldiv;
   logic [31:0] res;
 
   initial begin
-    rst_n = 0; req = 0; op = MULDIV_MUL; a = '0; b = '0;
+    rst_n = 0; req = 0; op = MULDIV_MUL; a = 32'h0; b = 32'h0;
     @(posedge clk); #1; rst_n = 1;
 
     // ------- MUL -------

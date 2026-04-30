@@ -10,9 +10,31 @@ module kronos_decompress (
   output logic [31:0] instr32_o,
   output logic        illegal_o
 );
+
+  // 1. Constants — opcode encodings
+  localparam logic [6:0] OP_IMM    = 7'b001_0011;
+  localparam logic [6:0] OP_LUI    = 7'b011_0111;
+  localparam logic [6:0] OP_JAL    = 7'b110_1111;
+  localparam logic [6:0] OP_JALR   = 7'b110_0111;
+  localparam logic [6:0] OP_LOAD   = 7'b000_0011;
+  localparam logic [6:0] OP_STORE  = 7'b010_0011;
+  localparam logic [6:0] OP_BRNCH  = 7'b110_0011;
+  localparam logic [6:0] OP_REG    = 7'b011_0011;
+  localparam logic [6:0] OP_IMM_32 = 7'b001_1011;  // RV64 OP-IMM-32 (ADDIW/SLLIW/etc.)
+
+  // 4. Combinational signals — instruction fields
   logic [2:0]  funct3;
   logic [4:0]  rd,  rs1,  rs2;
   logic [2:0]  rd_p, rs1_p, rs2_p;
+  logic [4:0]  rd_full, rs1_full, rs2_full;
+
+  // Temporary signals for immediate assembly (shared across case arms — only
+  // one active at a time)
+  logic [11:0] uimm;
+  logic [31:0] nzimm;
+  logic [31:0] imm;
+  logic [31:0] off;
+  logic [5:0]  shamt;
 
   assign funct3 = instr16_i[15:13];
   assign rd     = instr16_i[11:7];
@@ -22,31 +44,18 @@ module kronos_decompress (
   assign rs1_p  = instr16_i[9:7];
   assign rs2_p  = instr16_i[4:2];
 
-  logic [4:0] rd_full, rs1_full, rs2_full;
   assign rd_full  = {2'b01, rd_p};
   assign rs1_full = {2'b01, rs1_p};
   assign rs2_full = {2'b01, rs2_p};
 
-  localparam logic [6:0] OP_IMM   = 7'b001_0011;
-  localparam logic [6:0] OP_LUI   = 7'b011_0111;
-  localparam logic [6:0] OP_JAL   = 7'b110_1111;
-  localparam logic [6:0] OP_JALR  = 7'b110_0111;
-  localparam logic [6:0] OP_LOAD  = 7'b000_0011;
-  localparam logic [6:0] OP_STORE = 7'b010_0011;
-  localparam logic [6:0] OP_BRNCH = 7'b110_0011;
-  localparam logic [6:0] OP_REG     = 7'b011_0011;
-  localparam logic [6:0] OP_IMM_32 = 7'b001_1011;  // RV64 OP-IMM-32 (ADDIW/SLLIW/etc.)
-
-  // Temporary signals for immediate assembly (shared across case arms — only one active at a time)
-  logic [11:0] uimm;
-  logic [31:0] nzimm;
-  logic [31:0] imm;
-  logic [31:0] off;
-  logic [5:0]  shamt;
-
   always_comb begin
     instr32_o = {32{1'b0}};
     illegal_o = 1'b0;
+    uimm      = {12{1'b0}};
+    nzimm     = {32{1'b0}};
+    imm       = {32{1'b0}};
+    off       = {32{1'b0}};
+    shamt     = {6{1'b0}};
 
     unique case (instr16_i[1:0])
 

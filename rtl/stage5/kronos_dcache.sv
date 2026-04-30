@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_dcache.sv — Stage 5f data cache.
+// kronos_dcache.sv — data cache.
 //
 // 16 KB, 4-way set-associative, 64-byte lines, Tree-PLRU replacement,
 // write-back / write-allocate, critical-word-first refill via AXI WRAP
@@ -109,7 +109,7 @@ module kronos_dcache
     unique case (plru_q[set_idx][2])
       1'b0: victim_pick = plru_q[set_idx][1] ? 2'd1 : 2'd0;
       1'b1: victim_pick = plru_q[set_idx][0] ? 2'd3 : 2'd2;
-      default: victim_pick = '0;
+      default: victim_pick = {$clog2(NUM_WAYS){1'b0}};
     endcase
   end
 
@@ -245,7 +245,7 @@ module kronos_dcache
   // hit_way_idx: binary encoding of hit way for AMO/SC use
   logic [$clog2(NUM_WAYS)-1:0] hit_way_idx;
   always_comb begin
-    hit_way_idx = '0;
+    hit_way_idx = {$clog2(NUM_WAYS){1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
       if (hit_way_oh[w]) hit_way_idx = w[$clog2(NUM_WAYS)-1:0];
     end
@@ -256,7 +256,7 @@ module kronos_dcache
   // sees it before its first use (Synth 8-6901).
   logic [63:0] hit_beat;
   always_comb begin
-    hit_beat = '0;
+    hit_beat = 64'h0;
     for (int w = 0; w < NUM_WAYS; w++) begin
       if (hit_way_oh[w]) hit_beat = data_q[w][set_idx][beat_idx];
     end
@@ -266,39 +266,39 @@ module kronos_dcache
     if (!rst_ni) begin
       state_q        <= DC_IDLE;
       miss_pulse_q   <= 1'b0;
-      miss_set_q     <= '0;
-      miss_tag_q     <= '0;
-      miss_beat_q    <= '0;
-      victim_q       <= '0;
+      miss_set_q     <= {SET_IDX_W{1'b0}};
+      miss_tag_q     <= {TAG_W{1'b0}};
+      miss_beat_q    <= {BEAT_IDX_W{1'b0}};
+      victim_q       <= {$clog2(NUM_WAYS){1'b0}};
       beat_cnt_q     <= 4'd0;
       bypass_valid_q       <= 1'b0;
-      bypass_data_q        <= 64'b0;
+      bypass_data_q        <= 64'h0;
       miss_was_store_q     <= 1'b0;
-      miss_store_data_q    <= 64'b0;
-      miss_store_strobes_q <= 8'b0;
-      miss_store_off_q     <= 3'b0;
+      miss_store_data_q    <= 64'h0;
+      miss_store_strobes_q <= 8'h0;
+      miss_store_off_q     <= 3'h0;
       store_done_q         <= 1'b0;
       wb_beat_cnt_q        <= 4'd0;
-      evict_tag_q          <= '0;
+      evict_tag_q          <= {TAG_W{1'b0}};
       amo_pending_q        <= 1'b0;
-      amo_op_q             <= 5'b0;
-      amo_src_q            <= 64'b0;
-      amo_old_val_q        <= 64'b0;
+      amo_op_q             <= 5'h0;
+      amo_src_q            <= 64'h0;
+      amo_old_val_q        <= 64'h0;
       amo_done_q           <= 1'b0;
       amo_is_word_q        <= 1'b0;
-      amo_addr_off_q       <= 3'b0;
-      rsrv_addr_q          <= '0;
+      amo_addr_off_q       <= 3'h0;
+      rsrv_addr_q          <= {PHYS_ADDR_W{1'b0}};
       rsrv_valid_q         <= 1'b0;
       sc_success_q         <= 1'b0;
-      flush_set_q          <= '0;
-      flush_way_q          <= '0;
+      flush_set_q          <= {SET_IDX_W{1'b0}};
+      flush_way_q          <= {$clog2(NUM_WAYS){1'b0}};
       flush_done_q         <= 1'b0;
       for (int s = 0; s < NUM_SETS; s++) begin
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
           valid_q[s][w] <= 1'b0;
           dirty_q[s][w] <= 1'b0;
-          tag_q[s][w]   <= '0;
+          tag_q[s][w]   <= {TAG_W{1'b0}};
         end
       end
       // Explicit reset of data_q. Without this, Vivado inferred FFs with
@@ -309,7 +309,7 @@ module kronos_dcache
       for (int w = 0; w < NUM_WAYS; w++) begin
         for (int s = 0; s < NUM_SETS; s++) begin
           for (int b = 0; b < BEATS; b++) begin
-            data_q[w][s][b] <= '0;
+            data_q[w][s][b] <= 64'h0;
           end
         end
       end
@@ -346,8 +346,8 @@ module kronos_dcache
           // request so we don't restart a second flush walk.
           if (flush_i & ~flush_done_q) begin
             // FENCE.I full writeback + invalidate walk.
-            flush_set_q <= '0;
-            flush_way_q <= '0;
+            flush_set_q <= {SET_IDX_W{1'b0}};
+            flush_way_q <= {$clog2(NUM_WAYS){1'b0}};
             state_q     <= DC_FLUSH_SCAN;
           end else if (req_i & amo_req_i & ~amo_pending_q & ~amo_done_q) begin
             if (amo_op_i == 5'b00011) begin
@@ -357,9 +357,10 @@ module kronos_dcache
                 for (int w = 0; w < NUM_WAYS; w++) begin
                   if (hit_way_oh[w]) begin
                     for (int b = 0; b < 8; b++) begin
-                      if (store_strobes_in[b])
+                      if (store_strobes_in[b]) begin
                         data_q[w][set_idx][beat_idx][b*8 +: 8]
                           <= store_data_aligned_in[b*8 +: 8];
+                      end
                     end
                     dirty_q[set_idx][w] <= 1'b1;
                   end
@@ -454,9 +455,10 @@ module kronos_dcache
               for (int w = 0; w < NUM_WAYS; w++) begin
                 if (hit_way_oh[w]) begin
                   for (int b = 0; b < 8; b++) begin
-                    if (store_strobes_in[b])
+                    if (store_strobes_in[b]) begin
                       data_q[w][set_idx][beat_idx][b*8 +: 8]
                         <= store_data_aligned_in[b*8 +: 8];
+                    end
                   end
                   dirty_q[set_idx][w] <= 1'b1;
                 end
@@ -571,7 +573,7 @@ module kronos_dcache
             // Clean or invalid line: just invalidate and advance.
             valid_q[flush_set_q][flush_way_q] <= 1'b0;
             if (flush_way_q == ($clog2(NUM_WAYS))'(NUM_WAYS - 1)) begin
-              flush_way_q <= '0;
+              flush_way_q <= {$clog2(NUM_WAYS){1'b0}};
               if (flush_set_q == SET_IDX_W'(NUM_SETS - 1)) begin
                 flush_done_q <= 1'b1;
                 state_q      <= DC_IDLE;
@@ -595,7 +597,7 @@ module kronos_dcache
               dirty_q[flush_set_q][flush_way_q] <= 1'b0;
               valid_q[flush_set_q][flush_way_q] <= 1'b0;
               if (flush_way_q == ($clog2(NUM_WAYS))'(NUM_WAYS - 1)) begin
-                flush_way_q <= '0;
+                flush_way_q <= {$clog2(NUM_WAYS){1'b0}};
                 if (flush_set_q == SET_IDX_W'(NUM_SETS - 1)) begin
                   flush_done_q <= 1'b1;
                   state_q      <= DC_IDLE;
@@ -617,13 +619,13 @@ module kronos_dcache
 
   // ---- AXI request driver (combinational) -----------------------------------
   always_comb begin
-    axi_req_o = '0;
+    axi_req_o = kronos_axi_req_t'({$bits(kronos_axi_req_t){1'b0}});
     // Read channel: refill AR/R
     axi_req_o.ar.addr  = {miss_tag_q, miss_set_q, miss_beat_q, 3'b000};
     axi_req_o.ar.size  = 3'b011;
     axi_req_o.ar.len   = 8'd7;
     axi_req_o.ar.burst = axi_pkg::BURST_WRAP;
-    axi_req_o.ar.id    = '0;
+    axi_req_o.ar.id    = {$bits(axi_req_o.ar.id){1'b0}};
     axi_req_o.ar_valid = (state_q == DC_REFILL_AR);
     axi_req_o.r_ready  = (state_q == DC_REFILL_R);
 
@@ -634,7 +636,7 @@ module kronos_dcache
     axi_req_o.aw.size  = 3'b011;
     axi_req_o.aw.len   = 8'd7;
     axi_req_o.aw.burst = axi_pkg::BURST_INCR;
-    axi_req_o.aw.id    = '0;
+    axi_req_o.aw.id    = {$bits(axi_req_o.aw.id){1'b0}};
     axi_req_o.aw_valid = (state_q == DC_WB_AW) | (state_q == DC_FLUSH_AW);
 
     axi_req_o.w.data   = data_q[victim_q][miss_set_q][wb_beat_cnt_q[BEAT_IDX_W-1:0]];

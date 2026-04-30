@@ -329,7 +329,7 @@ module kronos_fpu_fadd
     b_sign_pre = b_sign_sel ^ (op_i == FP_FSUB);
 
     // --- Compose S1 payload ---
-    s1_d = '0;
+    s1_d  = '{default: '0};
     s1_d.valid      = in_valid_i;
     s1_d.fmt_d      = fmt_d_i;
     s1_d.rm         = rm_i;
@@ -370,8 +370,9 @@ module kronos_fpu_fadd
         s1_d.is_special  = 1'b1;
         s1_d.special_res = fmt_d_i ? FP_CANON_QNAN_D
                                    : {FP_NANBOX_UPPER, FP_CANON_QNAN_S};
-        if (a_snan_sel || b_snan_sel)
+        if (a_snan_sel || b_snan_sel) begin
           s1_d.special_flg[FP_FFLAG_NV] = 1'b1;
+        end
       end else if (both_inf_opposite) begin
         s1_d.is_special  = 1'b1;
         s1_d.special_res = fmt_d_i ? FP_CANON_QNAN_D
@@ -413,7 +414,7 @@ module kronos_fpu_fadd
   s2_t s2_d;
 
   always_comb begin
-    s2_d = '0;
+    s2_d  = '{default: '0};
     s2_d.valid       = s1_q.valid;
     s2_d.fmt_d       = s1_q.fmt_d;
     s2_d.rm          = s1_q.rm;
@@ -491,7 +492,7 @@ module kronos_fpu_fadd
   s2b_t s2b_d;
 
   always_comb begin
-    s2b_d = '0;
+    s2b_d = '{default: '0};
     s2b_d.valid       = s2_q.valid;
     s2b_d.fmt_d       = s2_q.fmt_d;
     s2b_d.rm          = s2_q.rm;
@@ -537,7 +538,7 @@ module kronos_fpu_fadd
   s3_t s3_d;
 
   always_comb begin
-    s3_d = '0;
+    s3_d  = '{default: '0};
     s3_d.valid       = s2b_q.valid;
     s3_d.fmt_d       = s2b_q.fmt_d;
     s3_d.rm          = s2b_q.rm;
@@ -617,7 +618,7 @@ module kronos_fpu_fadd
     logic [2:0]              grs_vec;
     int unsigned             sh;
 
-    s3b_d             = '0;
+    s3b_d = '{default: '0};
     mant_w            = 0;
     emin              = {EXP_W{1'b0}};
     cur_exp           = {EXP_W{1'b0}};
@@ -704,7 +705,7 @@ module kronos_fpu_fadd
     logic [SIG_W:0]          incremented;
     logic [SIG_W-1:0]        mask_one;
 
-    s4_d             = '0;
+    s4_d  = '{default: '0};
     mant_w           = 0;
     emax             = {EXP_W{1'b0}};
     cur_exp          = {EXP_W{1'b0}};
@@ -749,10 +750,11 @@ module kronos_fpu_fadd
 
       mask_one = {SIG_W{1'b0}};
       mask_one[SIG_W - 1 - mant_w] = 1'b1;
-      if (round_up)
+      if (round_up) begin
         incremented = {1'b0, cur_sig} + {1'b0, mask_one};
-      else
+      end else begin
         incremented = {1'b0, cur_sig};
+      end
       carry_up    = incremented[SIG_W];
       rounded_sig = incremented[SIG_W-1:0];
 
@@ -851,12 +853,12 @@ module kronos_fpu_fadd
   // ===========================================================================
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      s1_q  <= '0;
-      s2_q  <= '0;
-      s2b_q <= '0;
-      s3_q  <= '0;
-      s3b_q <= '0;
-      s4_q  <= '0;
+      s1_q  <= '{default: '0};
+      s2_q  <= '{default: '0};
+      s2b_q <= '{default: '0};
+      s3_q  <= '{default: '0};
+      s3b_q <= '{default: '0};
+      s4_q  <= '{default: '0};
     end else begin
       s1_q  <= s1_d;
       s2_q  <= s2_d;
@@ -880,7 +882,7 @@ module kronos_fpu_fadd
       out_valid_o <= 1'b0;
       result_o    <= {64{1'b0}};
       fflags_o    <= {5{1'b0}};
-      tag_o       <= '0;
+      tag_o <= '{default: '0};
     end else begin
       out_valid_o <= flush_i ? 1'b0 : s4_q.valid;
       result_o    <= s5_result;

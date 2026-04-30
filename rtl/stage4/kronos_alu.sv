@@ -14,6 +14,7 @@ module kronos_alu
   output logic [63:0] result_o
 );
 
+  // 4. Combinational signals
   logic [63:0] result_64;
   logic [31:0] result_32;
 

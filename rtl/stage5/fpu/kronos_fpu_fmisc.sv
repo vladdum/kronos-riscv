@@ -406,7 +406,7 @@ module kronos_fpu_fmisc
       out_valid_o <= 1'b0;
       result_o    <= {64{1'b0}};
       fflags_o    <= {5{1'b0}};
-      tag_o       <= '0;
+      tag_o <= '{default: '0};
     end else begin
       out_valid_o <= flush_i ? 1'b0 : in_valid_i;
       result_o    <= result_comb;

@@ -275,7 +275,7 @@ module kronos_fpu_fma
       s2_c_sig          <= 53'h0;
       s2_prod_zero      <= 1'b0;
       s2_c_zero         <= 1'b0;
-      s2_tag            <= '0;
+      s2_tag <= '{default: '0};
     end else begin
       s2_valid          <= flush_i ? 1'b0 : in_valid_i;
       s2_special        <= s1_special;
@@ -335,7 +335,7 @@ module kronos_fpu_fma
       s2b_c_sig          <= 53'h0;
       s2b_prod_zero      <= 1'b0;
       s2b_c_zero         <= 1'b0;
-      s2b_tag            <= '0;
+      s2b_tag <= '{default: '0};
     end else begin
       s2b_valid          <= flush_i ? 1'b0 : s2_valid;
       s2b_special        <= s2_special;
@@ -398,7 +398,7 @@ module kronos_fpu_fma
       s3_c_sig          <= 53'h0;
       s3_prod_zero      <= 1'b0;
       s3_c_zero         <= 1'b0;
-      s3_tag            <= '0;
+      s3_tag <= '{default: '0};
     end else begin
       s3_valid          <= flush_i ? 1'b0 : s2b_valid;
       s3_special        <= s2b_special;
@@ -558,7 +558,7 @@ module kronos_fpu_fma
       s3b_zero_shift     <= 1'b0;
       s3b_prod_zero_flag <= 1'b0;
       s3b_c_zero_flag    <= 1'b0;
-      s3b_tag            <= '0;
+      s3b_tag <= '{default: '0};
     end else begin
       s3b_valid          <= flush_i ? 1'b0 : s3_valid;
       s3b_special        <= s3_special;
@@ -680,7 +680,7 @@ module kronos_fpu_fma
       s4_prod_lane      <= {SUM_W{1'b0}};
       s4_c_lane         <= {SUM_W{1'b0}};
       s4_eff_sub        <= 1'b0;
-      s4_tag            <= '0;
+      s4_tag <= '{default: '0};
     end else begin
       s4_valid          <= flush_i ? 1'b0 : s3b_valid;
       s4_special        <= s3b_special;
@@ -749,7 +749,7 @@ module kronos_fpu_fma
       s4b_mag            <= {SUM_W{1'b0}};
       s4b_eff_sub        <= 1'b0;
       s4b_prod_sign      <= 1'b0;
-      s4b_tag            <= '0;
+      s4b_tag <= '{default: '0};
     end else begin
       s4b_valid          <= flush_i ? 1'b0 : s4_valid;
       s4b_special        <= s4_special;
@@ -853,7 +853,7 @@ module kronos_fpu_fma
       s5_eff_sub        <= 1'b0;
       s5_prod_sign      <= 1'b0;
       s5_msb_pos        <= 9'h0;
-      s5_tag            <= '0;
+      s5_tag <= '{default: '0};
     end else begin
       s5_valid          <= flush_i ? 1'b0 : s4b_valid;
       s5_special        <= s4b_special;
@@ -1009,7 +1009,7 @@ module kronos_fpu_fma
       s5b_tiny           <= 1'b0;
       s5b_mag            <= {SUM_W{1'b0}};
       s5b_normal_shift   <= 32'h0;
-      s5b_tag            <= '0;
+      s5b_tag <= '{default: '0};
     end else begin
       s5b_valid          <= flush_i ? 1'b0 : s5_valid;
       s5b_special        <= s5_special;
@@ -1196,10 +1196,11 @@ module kronos_fpu_fma
           default:   round_up_n = 1'b0;
         endcase
 
-        if (s5b_fmt_d)
+        if (s5b_fmt_d) begin
           carry_n = round_up_n & (&raw_sig_n[52:0]);
-        else
+        end else begin
           carry_n = round_up_n & (&raw_sig_n[23:0]);
+        end
 
         if (!(carry_n && (s5b_exp_pre_tiny + 13'sd1 == emin))) begin
           s5b_flags_comb[FP_FFLAG_UF] = 1'b1;
@@ -1262,7 +1263,7 @@ module kronos_fpu_fma
       out_valid_o <= 1'b0;
       result_o    <= 64'h0;
       fflags_o    <= 5'h0;
-      tag_o       <= '0;
+      tag_o <= '{default: '0};
     end else begin
       out_valid_o <= flush_i ? 1'b0 : s5b_valid;
       result_o    <= s5b_result_comb;

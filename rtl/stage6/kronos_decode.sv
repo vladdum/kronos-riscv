@@ -15,28 +15,13 @@
 module kronos_decode
   import kronos_pkg::*;
 (
-  input  logic [31:0]    instr_i,
-  input  logic [2:0]     frm_i,        // current FRM from FCSR (for dynamic rm)
-  output decoded_instr_t decoded_o,
-  output logic           illegal_insn_o
+  input  logic [INST_W-1:0] instr_i,
+  input  logic [2:0]        frm_i,        // current FRM from FCSR (for dynamic rm)
+  output decoded_instr_t    decoded_o,
+  output logic              illegal_insn_o
 );
 
-  // Instruction fields
-  logic [6:0] opcode;
-  logic [4:0] rd;
-  logic [2:0] funct3;
-  logic [4:0] rs1;
-  logic [4:0] rs2;
-  logic [6:0] funct7;
-
-  assign opcode = instr_i[6:0];
-  assign rd     = instr_i[11:7];
-  assign funct3 = instr_i[14:12];
-  assign rs1    = instr_i[19:15];
-  assign rs2    = instr_i[24:20];
-  assign funct7 = instr_i[31:25];
-
-  // Opcode constants
+  // 1. Constants — opcode encodings
   localparam logic [6:0] OP         = 7'b011_0011; // R-type
   localparam logic [6:0] OP_IMM     = 7'b001_0011; // I-type ALU
   localparam logic [6:0] OP_IMM_32  = 7'b001_1011; // RV64 I-type ALU-W
@@ -58,8 +43,14 @@ module kronos_decode
   localparam logic [6:0] SYSTEM     = 7'b111_0011;
   localparam logic [6:0] AMO        = 7'b010_1111;
 
-  // Internal signal for illegal
-  logic illegal;
+  // 4. Combinational signals — instruction fields
+  logic [6:0] opcode;
+  logic [4:0] rd;
+  logic [2:0] funct3;
+  logic [4:0] rs1;
+  logic [4:0] rs2;
+  logic [6:0] funct7;
+  logic       illegal;
 
   // Resolves the FP rounding mode field, substituting frm when rm_in=DYN (111).
   function automatic logic [2:0] resolve_rm(input logic [2:0] rm_in, input logic [2:0] frm);
@@ -69,8 +60,15 @@ module kronos_decode
     return (rm == 3'b101) || (rm == 3'b110);
   endfunction
 
+  assign opcode = instr_i[6:0];
+  assign rd     = instr_i[11:7];
+  assign funct3 = instr_i[14:12];
+  assign rs1    = instr_i[19:15];
+  assign rs2    = instr_i[24:20];
+  assign funct7 = instr_i[31:25];
+
   always_comb begin
-    decoded_o          = '0;
+    decoded_o          = DECODED_INSTR_ZERO;
     decoded_o.rs1      = rs1;
     decoded_o.rs2      = rs2;
     decoded_o.rd       = rd;
@@ -318,7 +316,7 @@ module kronos_decode
       end
 
       // -----------------------------------------------------------------------
-      // Stage 5a: Floating-point instructions
+      // Floating-point instructions
       // -----------------------------------------------------------------------
 
       LOAD_FP: begin  // FLW (funct3=010) / FLD (funct3=011)

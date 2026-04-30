@@ -222,7 +222,7 @@ module kronos_fpu_fmul
       s1_valid_q          <= 1'b0;
       s1_fmt_d_q          <= 1'b0;
       s1_rm_q             <= 3'd0;
-      s1_tag_q            <= '0;
+      s1_tag_q <= '{default: '0};
       s1_sign_q           <= 1'b0;
       s1_exp_sum_q        <= 13'h0;
       s1_siga_q           <= {SIG_W{1'b0}};
@@ -268,7 +268,7 @@ module kronos_fpu_fmul
       s1b_valid_q          <= 1'b0;
       s1b_fmt_d_q          <= 1'b0;
       s1b_rm_q             <= 3'd0;
-      s1b_tag_q            <= '0;
+      s1b_tag_q <= '{default: '0};
       s1b_sign_q           <= 1'b0;
       s1b_exp_sum_q        <= 13'h0;
       s1b_siga_q           <= {SIG_W{1'b0}};
@@ -316,7 +316,7 @@ module kronos_fpu_fmul
       s1c_valid_q          <= 1'b0;
       s1c_fmt_d_q          <= 1'b0;
       s1c_rm_q             <= 3'd0;
-      s1c_tag_q            <= '0;
+      s1c_tag_q <= '{default: '0};
       s1c_sign_q           <= 1'b0;
       s1c_exp_sum_q        <= 13'h0;
       s1c_siga_q           <= {SIG_W{1'b0}};
@@ -376,7 +376,7 @@ module kronos_fpu_fmul
       s2a_valid_q          <= 1'b0;
       s2a_fmt_d_q          <= 1'b0;
       s2a_rm_q             <= 3'd0;
-      s2a_tag_q            <= '0;
+      s2a_tag_q <= '{default: '0};
       s2a_sign_q           <= 1'b0;
       s2a_exp_sum_q        <= 13'h0;
       s2a_pp_lo_q          <= {PP_LO_W{1'b0}};
@@ -433,7 +433,7 @@ module kronos_fpu_fmul
       s2_valid_q          <= 1'b0;
       s2_fmt_d_q          <= 1'b0;
       s2_rm_q             <= 3'd0;
-      s2_tag_q            <= '0;
+      s2_tag_q <= '{default: '0};
       s2_sign_q           <= 1'b0;
       s2_exp_sum_q        <= 13'h0;
       s2_prod_q           <= {PROD_W{1'b0}};
@@ -483,10 +483,11 @@ module kronos_fpu_fmul
     lz = 7'h0;
     lz = lzc106(s2_prod_q);
     s3_lz_comb = lz;
-    if (lz == 7'd0)
+    if (lz == 7'd0) begin
       s3_exp_norm_comb = s2_exp_sum_q + 13'sd1;
-    else
+    end else begin
       s3_exp_norm_comb = s2_exp_sum_q + 13'sd1 - {6'b0, lz};
+    end
   end
 
   // -------------------------------------------------------------------------
@@ -508,7 +509,7 @@ module kronos_fpu_fmul
       s3_valid_q          <= 1'b0;
       s3_fmt_d_q          <= 1'b0;
       s3_rm_q             <= 3'd0;
-      s3_tag_q            <= '0;
+      s3_tag_q <= '{default: '0};
       s3_sign_q           <= 1'b0;
       s3_lz_q             <= 7'h0;
       s3_exp_norm_q       <= 13'h0;
@@ -595,7 +596,7 @@ module kronos_fpu_fmul
       s3b_valid_q          <= 1'b0;
       s3b_fmt_d_q          <= 1'b0;
       s3b_rm_q             <= 3'd0;
-      s3b_tag_q            <= '0;
+      s3b_tag_q <= '{default: '0};
       s3b_sign_q           <= 1'b0;
       s3b_exp_q            <= 13'h0;
       s3b_mant_q           <= {SIG_W{1'b0}};
@@ -701,7 +702,7 @@ module kronos_fpu_fmul
       s4_valid_q          <= 1'b0;
       s4_fmt_d_q          <= 1'b0;
       s4_rm_q             <= 3'd0;
-      s4_tag_q            <= '0;
+      s4_tag_q <= '{default: '0};
       s4_sign_q           <= 1'b0;
       s4_exp_q            <= 13'h0;
       s4_mant_q           <= {SIG_W{1'b0}};
@@ -955,7 +956,7 @@ module kronos_fpu_fmul
       out_valid_o <= 1'b0;
       result_o    <= 64'h0;
       fflags_o    <= 5'h0;
-      tag_o       <= '0;
+      tag_o <= '{default: '0};
     end else begin
       out_valid_o <= flush_i ? 1'b0 : s4_valid_q;
       result_o    <= s5_result_c;

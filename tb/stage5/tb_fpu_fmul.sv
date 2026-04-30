@@ -48,9 +48,9 @@ module tb_fpu_fmul;
       int fd; string line; fp_vec_t v;
       fd = $fopen("../tb/stage5/testfloat_vectors/f32_mul_rne.txt", "r");
       while (!$feof(fd)) begin
-        automatic int unsigned sf_r;
-        automatic byte unsigned sf_f;
-        automatic longint unsigned expected;
+        int unsigned sf_r;
+        byte unsigned sf_f;
+        longint unsigned expected;
         void'($fgets(line, fd));
         if (!parse_vec_line(line, v)) continue;
         apply4(FP_FMUL, 1'b0, v.rm[2:0],
@@ -72,8 +72,8 @@ module tb_fpu_fmul;
       int fd; string line; fp_vec_t v;
       fd = $fopen("../tb/stage5/testfloat_vectors/f64_mul_rne.txt", "r");
       while (!$feof(fd)) begin
-        automatic longint unsigned sf_r;
-        automatic byte unsigned sf_f;
+        longint unsigned sf_r;
+        byte unsigned sf_f;
         void'($fgets(line, fd));
         if (!parse_vec_line(line, v)) continue;
         apply4(FP_FMUL, 1'b1, v.rm[2:0], v.a, v.b);

@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_lsu.sv (stage5f) — thin adapter between the EX-stage pipeline
+// kronos_lsu.sv — thin adapter between the EX-stage pipeline
 // interface and kronos_dcache.  All AXI master logic, AMO RMW arithmetic,
 // and LR/SC reservation tracking have moved into kronos_dcache.
 //
@@ -35,7 +35,7 @@ module kronos_lsu
   output logic             valid_o,
   output logic             mem_stall_o,
 
-  // FP load/store extensions (Stage 5)
+  // FP load/store extensions
   input  logic             fp_dest_req_i,    // this is a FP load/store
   input  logic [63:0]      fp_store_data_i,  // FP register data for FSW/FSD
   output logic             fp_dest_rsp_o,    // load response targets FP regfile
@@ -62,6 +62,12 @@ module kronos_lsu
   input  logic             dcache_sc_success_i,
   input  logic             dcache_stall_i
 );
+
+  // -------------------------------------------------------------------------
+  // 4. Combinational signals
+  // -------------------------------------------------------------------------
+  // Suppress unused-input warning for ports consumed by dcache directly.
+  logic _unused;
 
   // -------------------------------------------------------------------------
   // funct3 → dcache size encoding: 0=byte, 1=halfword, 2=word, 3=double.
@@ -168,7 +174,6 @@ module kronos_lsu
   assign sc_success_o = dcache_sc_success_i;
 
   // Suppress unused-input warnings for ports consumed by dcache directly.
-  logic _unused;
   assign _unused = ^{clk_i, rst_ni, amo_src_i};
 
 endmodule

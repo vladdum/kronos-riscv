@@ -16,39 +16,48 @@
 // align_stall_o / align_need_upper_o: registered, avoid comb loop with hazard.
 // align_needs_fetch_o: combinational — deasserted only in BUFFERED state.
 //   Used to gate ar_valid in kronos_top so we don't re-fetch words already buffered.
-module kronos_align (
-  input  logic        clk_i,
-  input  logic        rst_ni,
-  input  logic [31:0] pc_i,           // current fetch PC (used for cross-page detection)
-  input  logic [31:0] rdata_i,
-  input  logic        rvalid_i,
-  input  logic        stall_i,        // hold state when pipeline can't accept output
-  input  logic        flush_i,
-  input  logic        pc_offset_i,    // ex_pc_next[1]: skip lower half of next fetch
-  input  logic        pmp_fault_i,    // suppress instr_valid_o while PMP fault is held
-  // Stage 6b: when translation is OFF (Bare or M-mode without MPRV-data), a
+module kronos_align
+  import kronos_pkg::*;
+(
+  input  logic              clk_i,
+  input  logic              rst_ni,
+  input  logic [31:0]       pc_i,           // current fetch PC (used for cross-page detection)
+  input  logic [INST_W-1:0] rdata_i,
+  input  logic              rvalid_i,
+  input  logic              stall_i,        // hold state when pipeline can't accept output
+  input  logic              flush_i,
+  input  logic              pc_offset_i,    // ex_pc_d[1]: skip lower half of next fetch
+  input  logic              pmp_fault_i,    // suppress instr_valid_o while PMP fault is held
+  // when translation is OFF (Bare or M-mode without MPRV-data), a
   // 32-bit instruction whose halves straddle a 4 KB boundary is perfectly
   // legal (no per-page permissions exist).  align must NOT raise a cross-page
   // fault in that case — otherwise M-mode RV64C tests that happen to land a
   // 32-bit instruction at pc[11:0]==0xFFE would spuriously trap on every such
   // fetch.  When translate_fetch_i=1 the cross-page fetch is conservatively
   // converted to an instruction-page fault.
-  input  logic        translate_fetch_i,
-  output logic [31:0] instr_o,
-  output logic        instr_valid_o,
-  output logic        is_16b_o,
-  output logic        align_stall_o,
-  output logic        align_need_upper_o,
-  output logic        align_needs_fetch_o,
-  // Stage 6b: cross-page 32-bit fetch fault.  Asserted only when translation
+  input  logic              translate_fetch_i,
+  output logic [INST_W-1:0] instr_o,
+  output logic              instr_valid_o,
+  output logic              is_16b_o,
+  output logic              align_stall_o,
+  output logic              align_need_upper_o,
+  output logic              align_needs_fetch_o,
+  // cross-page 32-bit fetch fault.  Asserted only when translation
   // is active and the alignment unit is about to emit (or buffer the lo half
   // of) a 32-bit instruction whose PC straddles a 4 KB page boundary
   // (pc[11:1]==11'h7FF, so lo half at offset 0xFFE and hi half at offset
   // 0x1000 of the next page).  Conservative first cut: any such fetch under
   // translation is treated as an instruction-page fault.  A future refinement
   // can issue an independent translation for the hi half instead of faulting.
-  output logic        cross_page_fault_o
+  output logic              cross_page_fault_o
 );
+  // -------------------------------------------------------------------------
+  // Constants
+  // -------------------------------------------------------------------------
+  // RV opcode marker: instr[1:0]==2'b11 indicates a 32-bit instruction; any
+  // other encoding indicates a 16-bit (RV-C) compressed instruction.
+  localparam logic [1:0] OP_32B = 2'b11;
+
   // -------------------------------------------------------------------------
   // State registers
   // -------------------------------------------------------------------------
@@ -60,14 +69,14 @@ module kronos_align (
   // NEED_UPPER state update fires while the pipeline is stalled (stall_i=1).
   // Prevents a permanent deadlock where need_upper_q gets stuck at 1 when a
   // muldiv (or other multi-cycle) stall coincides with the r_valid pulse.
-  logic        span_valid_q;
-  logic [31:0] span_instr_q;
+  logic              span_valid_q;
+  logic [INST_W-1:0] span_instr_q;
 
   // Combinational from decompress instances
-  logic [31:0] decomp_lower, decomp_upper, decomp_buf;
-  logic        decomp_lower_ill, decomp_upper_ill, decomp_buf_ill;
+  logic [INST_W-1:0] decomp_lower, decomp_upper, decomp_buf;
+  logic              decomp_lower_ill, decomp_upper_ill, decomp_buf_ill;
 
-  // Stage 6b: cross-page 32-bit fetch detection
+  // cross-page 32-bit fetch detection
   logic [15:0] lo_half;
   logic        cross_page_32b;
 
@@ -91,7 +100,7 @@ module kronos_align (
   // Output logic (combinational)
   // -------------------------------------------------------------------------
   always_comb begin
-    instr_o            = {32{1'b0}};
+    instr_o            = {INST_W{1'b0}};
     instr_valid_o      = 1'b0;
     is_16b_o           = 1'b0;
     align_stall_o      = need_upper_q;
@@ -115,7 +124,7 @@ module kronos_align (
       end
     end else if (buf_valid_q) begin
       // BUFFERED: emit instruction from buffer
-      if (buf_data_q[1:0] != 2'b11) begin
+      if (buf_data_q[1:0] != OP_32B) begin
         instr_o       = decomp_buf;
         instr_valid_o = 1'b1;
         is_16b_o      = 1'b1;
@@ -126,7 +135,7 @@ module kronos_align (
       // NORMAL: use rdata directly
       if (rvalid_i) begin
         instr_valid_o = 1'b1;
-        if (rdata_i[1:0] != 2'b11) begin
+        if (rdata_i[1:0] != OP_32B) begin
           instr_o  = decomp_lower;
           is_16b_o = 1'b1;
         end else begin
@@ -143,7 +152,7 @@ module kronos_align (
       instr_valid_o = 1'b0;
     end
 
-    // Stage 6b: cross-page 32-bit fetch.  Suppress instr_valid_o so we never
+    // cross-page 32-bit fetch.  Suppress instr_valid_o so we never
     // emit a half-translated instruction; T13 will route cross_page_fault_o
     // into the trap chain alongside pmp_fetch_fault.
     if (cross_page_fault_o) begin
@@ -155,7 +164,7 @@ module kronos_align (
   assign align_needs_fetch_o = ~buf_valid_q | need_upper_q;
 
   // -------------------------------------------------------------------------
-  // Stage 6b: cross-page 32-bit fetch detection
+  // cross-page 32-bit fetch detection
   // -------------------------------------------------------------------------
   // pc[11:1]==11'h7FF marks the last halfword of a 4 KB page (pc[11:0]==0xFFE,
   // so pc[1]==1).  In that case, the halfword at pc lives in the upper 16 bits
@@ -164,7 +173,7 @@ module kronos_align (
   // compressed instructions have lo[1:0]!=2'b11, so they can never cross a
   // page in this sense).
   assign lo_half            = buf_valid_q ? buf_data_q : rdata_i[31:16];
-  assign cross_page_32b     = (pc_i[11:1] == 11'h7FF) & (lo_half[1:0] == 2'b11);
+  assign cross_page_32b     = (pc_i[11:1] == 11'h7FF) & (lo_half[1:0] == OP_32B);
   assign cross_page_fault_o = translate_fetch_i & cross_page_32b;
 
   // -------------------------------------------------------------------------
@@ -177,7 +186,7 @@ module kronos_align (
       need_upper_q <= 1'b0;
       skip_lower_q <= 1'b0;
       span_valid_q <= 1'b0;
-      span_instr_q <= {32{1'b0}};
+      span_instr_q <= {INST_W{1'b0}};
     end else if (flush_i) begin
       buf_valid_q  <= 1'b0;
       buf_data_q   <= {16{1'b0}};
@@ -217,7 +226,7 @@ module kronos_align (
         end else if (!align_stall_o) begin
           // ---- NORMAL / BUFFERED: advance state ----
           if (buf_valid_q) begin
-            if (buf_data_q[1:0] != 2'b11) begin
+            if (buf_data_q[1:0] != OP_32B) begin
               // Consumed 16-bit from buffer; back to NORMAL
               buf_valid_q <= 1'b0;
             end else begin
@@ -226,7 +235,7 @@ module kronos_align (
             end
           end else if (rvalid_i) begin
             // NORMAL: process incoming word
-            if (rdata_i[1:0] != 2'b11) begin
+            if (rdata_i[1:0] != OP_32B) begin
               // 16-bit at lower half; buffer upper half
               buf_valid_q <= 1'b1;
               buf_data_q  <= rdata_i[31:16];

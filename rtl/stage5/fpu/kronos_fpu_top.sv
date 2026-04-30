@@ -47,6 +47,11 @@ module kronos_fpu_top
   logic [3:0] dispatch_latency;
   logic       sel_fmisc, sel_fcvt, sel_fadd, sel_fmul, sel_fma, sel_iter;
 
+`ifndef SYNTHESIS
+  // Scoreboard invariant counter (promoted from `automatic` block-local; see R2).
+  logic [2:0] valid_count;
+`endif
+
   always_comb begin
     sel_fmisc        = 1'b0;
     sel_fcvt         = 1'b0;
@@ -260,7 +265,7 @@ module kronos_fpu_top
                 | fmul_out_valid  | fma_out_valid  | iter_out_valid;
     result_o = 64'h0;
     fflags_o = 5'h0;
-    tag_o    = '0;
+    tag_o    = fpu_tag_t'(0);
     if (fmisc_out_valid) begin
       result_o = fmisc_result;
       fflags_o = fmisc_fflags;
@@ -292,12 +297,14 @@ module kronos_fpu_top
   // Scoreboard invariant: at most one FPU unit may assert out_valid per cycle.
   // If this fires, the silent-drop bug from C-3 (kronos_fpu_iter late-grant
   // interlock) has reappeared.
+  always_comb begin
+    valid_count = 3'(fmisc_out_valid) + 3'(fcvt_out_valid)
+                + 3'(fadd_out_valid)  + 3'(fmul_out_valid)
+                + 3'(fma_out_valid)   + 3'(iter_out_valid);
+  end
+
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (rst_ni) begin
-      automatic logic [2:0] valid_count;
-      valid_count = 3'(fmisc_out_valid) + 3'(fcvt_out_valid)
-                  + 3'(fadd_out_valid)  + 3'(fmul_out_valid)
-                  + 3'(fma_out_valid)   + 3'(iter_out_valid);
       assert (valid_count <= 3'd1)
         else $error("kronos_fpu_top: %0d units asserted out_valid simultaneously",
                     valid_count);

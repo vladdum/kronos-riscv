@@ -79,7 +79,7 @@ module kronos_fpu_scoreboard #(
 
     // Shift: consume slot[0], free slot[DEPTH-1].
     for (int i = 0; i < DEPTH-1; i++) slots_n[i] = slots_q[i+1];
-    slots_n[DEPTH-1] = '0;
+    slots_n[DEPTH-1] = '{default: '0};
 
     // On grant, reserve slot L-1 in the next state (overrides the shift result
     // for that index, preserving it one more cycle and allowing time to elapse).
@@ -147,7 +147,7 @@ module kronos_fpu_scoreboard #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni || flush_i) begin
       grant_q <= 1'b0;
-      for (int i = 0; i < DEPTH; i++) slots_q[i] <= '0;
+      for (int i = 0; i < DEPTH; i++) slots_q[i] <= '{default: '0};
     end else begin
       grant_q <= grant_comb;
       for (int i = 0; i < DEPTH; i++) slots_q[i] <= slots_n[i];

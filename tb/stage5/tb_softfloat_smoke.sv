@@ -6,8 +6,8 @@
 
 module tb_softfloat_smoke;
   import softfloat_dpi_pkg::*;
+  int unsigned r;
   initial begin
-    automatic int unsigned r;
     sf_reset();
     // 1.0f + 1.0f = 2.0f
     r = sf_f32_add(32'h3F80_0000, 32'h3F80_0000, 8'd0);
