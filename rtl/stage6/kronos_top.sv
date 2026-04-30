@@ -112,6 +112,9 @@ module kronos_top
   // -------------------------------------------------------------------------
   logic [kronos_pkg::XLEN-1:0] fwd_rs1_data, fwd_rs2_data;
   logic [kronos_pkg::XLEN-1:0] alu_a, alu_b, alu_result;
+  logic [kronos_pkg::XLEN-1:0] alu_adder_out;
+  logic                        alu_cmp_lt;
+  logic                        alu_eq;
   logic [kronos_pkg::XLEN-1:0] ex_result;
   logic [31:0]     ex_pc_d                        /* verilator public_flat_rd */;
   logic            ex_redirect                        /* verilator public_flat_rd */;
@@ -574,11 +577,14 @@ module kronos_top
   );
 
   kronos_alu u_alu (
-    .op_i      (id_ex_q.dec.alu_op),
-    .a_i       (alu_a),
-    .b_i       (alu_b),
-    .word_op_i (id_ex_q.dec.is_word_op),
-    .result_o  (alu_result)
+    .op_i        (id_ex_q.dec.alu_op),
+    .a_i         (alu_a),
+    .b_i         (alu_b),
+    .word_op_i   (id_ex_q.dec.is_word_op),
+    .result_o    (alu_result),
+    .adder_out_o (alu_adder_out),
+    .cmp_lt_o    (alu_cmp_lt),
+    .eq_o        (alu_eq)
   );
 
   kronos_muldiv u_muldiv (
@@ -1502,17 +1508,19 @@ module kronos_top
   assign fpu_a_i = id_ex_q.dec.rs1_fp ? id_ex_q.rs1_data : fwd_rs1_data;
   assign fpu_b_i = id_ex_q.dec.rs2_fp ? id_ex_q.rs2_data : fwd_rs2_data;
 
-  // 64-bit branch comparison
+  // Branch condition — consumes the ALU's comparator outputs. Decode sets
+  // alu_op = ALU_SLT / ALU_SLTU for branches so cmp_lt_o runs on the right
+  // signedness; eq_o is valid for any subtract-style alu_op.
   always_comb begin
     branch_taken = 1'b0;
     if (id_ex_q.valid & id_ex_q.dec.is_branch) begin
       unique case (id_ex_q.dec.branch_funct3)
-        3'b000:  branch_taken = (fwd_rs1_data == fwd_rs2_data);
-        3'b001:  branch_taken = (fwd_rs1_data != fwd_rs2_data);
-        3'b100:  branch_taken = ($signed(fwd_rs1_data) <  $signed(fwd_rs2_data));
-        3'b101:  branch_taken = ($signed(fwd_rs1_data) >= $signed(fwd_rs2_data));
-        3'b110:  branch_taken = (fwd_rs1_data <  fwd_rs2_data);
-        3'b111:  branch_taken = (fwd_rs1_data >= fwd_rs2_data);
+        3'b000:  branch_taken =  alu_eq;        // BEQ
+        3'b001:  branch_taken = ~alu_eq;        // BNE
+        3'b100:  branch_taken =  alu_cmp_lt;    // BLT  (signed)
+        3'b101:  branch_taken = ~alu_cmp_lt;    // BGE  (signed)
+        3'b110:  branch_taken =  alu_cmp_lt;    // BLTU (unsigned)
+        3'b111:  branch_taken = ~alu_cmp_lt;    // BGEU (unsigned)
         default: branch_taken = 1'b0;
       endcase
     end

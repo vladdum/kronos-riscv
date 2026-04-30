@@ -145,7 +145,13 @@ A WB→ID bypass mux sits between the integer register file read ports and the I
 
 `FWD_EXMEM` is suppressed when the producing instruction is a load — load data is not available until the MEM stage completes, which generates a load-use hazard instead. All forwarding is suppressed when `rd = x0`.
 
-**ALU.** Single-cycle, fully combinational. All operations are 64-bit wide. W-suffix instructions (ADDW, SUBW, SLLW, SRLW, SRAW, and their immediate variants) operate on the lower 32 bits and sign-extend the result to 64 bits per spec. Operations: ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND, PASSB (used by LUI to pass the immediate through unchanged). The A-operand mux selects between the forwarded RS1 value and the instruction PC (for AUIPC and branch offset computation). The B-operand mux selects between the forwarded RS2 value and the sign-extended immediate.
+**ALU.** Single-cycle, fully combinational. BOOM/Rocket-style structural decomposition: one shared 64-bit adder (drives ADD, SUB, SLT, SLTU and the comparator), one right-only barrel shifter (SLL is implemented as input bit-reverse → right-shift → output bit-reverse, sharing the same shifter as SRL/SRA), one logic block (AND, OR, XOR, PASSB), and a comparator derived from the adder's sign bit (LT) and zero detect (EQ) rather than a second subtractor. A 5:1 op-class final mux selects which functional unit drives the result; ADD/SUB get an explicit arm and the default arm produces zero so an invalid `alu_op` cannot leak adder output into the writeback path. Operations: ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND, PASSB (used by LUI to pass the immediate through unchanged).
+
+W-suffix instructions (ADDW, SUBW, SLLW, SRLW, SRAW, and their immediate variants) run on the same single 64-bit datapath via input pre-mask (zero-extend, except sign-extend for SRA so the shifter sees the right MSB) and output sign-extension of the low 32 bits — no parallel 32-bit datapath. The A-operand mux selects between the forwarded RS1 value and the instruction PC (for AUIPC and branch offset computation). The B-operand mux selects between the forwarded RS2 value and the sign-extended immediate.
+
+In addition to `result_o`, the ALU exposes `adder_out_o` (raw adder output, before word-op extend), `cmp_lt_o` (signed-or-unsigned LT per `op_i`), and `eq_o` (`adder_out == 0`, valid whenever the adder is in subtract mode). The branch unit consumes `cmp_lt_o` and `eq_o` directly instead of duplicating the comparator on the same operands.
+
+![ALU structural decomposition](diagrams/svg/alu-structural.svg)
 
 **Muldiv.** `kronos_muldiv` implements all eight M-extension operations for both 32-bit and 64-bit operands. MUL operations require **2 cycles**. DIV and REM operations require **34 cycles** (32-bit) or **66 cycles** (64-bit) in the normal case. Division by zero and `INT_MIN / -1` are detected early and produce a result in **2 cycles**. While `muldiv_stall` is asserted the entire pipeline freezes.
 
@@ -153,7 +159,7 @@ A WB→ID bypass mux sits between the integer register file read ports and the I
 
 ![DIV stall waveform](diagrams/svg/wf-div-stall.svg)
 
-**Branch resolution.** EX evaluates every branch condition using the forwarded operands. JAL, JALR, and taken branches write `pc_next` into EX/MEM and assert `redirect`. JALR adds RS1 to the sign-extended 12-bit immediate and clears bit 0. The branch predictor update signals (resolved direction and target) are also driven from EX.
+**Branch resolution.** EX evaluates every branch condition by consuming the ALU's `cmp_lt_o` and `eq_o` outputs — `kronos_decode` drives `alu_op` to `ALU_SLT` (BLT/BGE), `ALU_SLTU` (BLTU/BGEU), or `ALU_SLTU` for BEQ/BNE (any subtract-style op makes `eq_o` valid). The branch unit then maps `funct3` to `alu_eq` / `~alu_eq` / `alu_cmp_lt` / `~alu_cmp_lt`. This removes the historical 4-way inline comparator that ran in parallel on the same operands. JAL, JALR, and taken branches write `pc_next` into EX/MEM and assert `redirect`. JALR adds RS1 to the sign-extended 12-bit immediate and clears bit 0. The branch predictor update signals (resolved direction and target) are also driven from EX.
 
 **Trap cause priority.** When multiple exception sources are simultaneously active, EX selects the cause in this order (highest first): external interrupt (`irq_pending`) > illegal instruction > ECALL > EBREAK. All traps and MRET assert `redirect` and set `pc_next` to the trap vector or `mepc` respectively.
 

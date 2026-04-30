@@ -1245,8 +1245,19 @@ sim-arch-test-s6-priv: gen-arch-tests-s6-priv
 	    work/kronos-rv64imafdc-priv/elfs/
 
 # ── Stage 6 unit-TB stubs (T16 fills these in with real TBs) ───────────────
-sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6:
+sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6:
 	@echo "(stub) $@"
+
+# ── Stage 6 ALU unit TB ───────────────────────────────────────────────────
+TB_ALU_S6_FILES := $(AXI_PKG_SV) \
+                   $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/stage6/kronos_alu.sv \
+                   $(TB_DIR)/stage6/tb_alu_s6.sv
+sim-alu-s6:
+	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
+	  --top-module tb_alu_s6 $(TB_ALU_S6_FILES) \
+	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/tb_alu_s6
+	$(OBJ_DIR)/tb_alu_s6/Vtb_alu_s6
 
 TB_TLB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                  $(RTL_DIR)/stage6/kronos_tlb.sv \
