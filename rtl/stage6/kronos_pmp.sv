@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_pmp.sv — Stage 6a Physical Memory Protection unit.
+// kronos_pmp.sv — Physical Memory Protection unit.
 // N regions (parameterisable, default 8), NA4 + NAPOT. Combinational fault
 // check for one access per cycle.
 // Spec: RISC-V Privileged v1.12 § 3.7.
@@ -30,14 +30,46 @@ module kronos_pmp
 );
 
   // -----------------------------------------------------------------------
-  // Decode per-region cfg fields.
+  // Signal declarations.
   // -----------------------------------------------------------------------
+  // Decoded per-region cfg fields.
   logic [N-1:0]       reg_l;
   logic [N-1:0][1:0]  reg_a;     // 00=OFF, 10=NA4, 11=NAPOT (01=TOR not impl)
   logic [N-1:0]       reg_x;
   logic [N-1:0]       reg_w;
   logic [N-1:0]       reg_r;
+
+  // Per-region match + NAPOT mask + helper computations (promoted from
+  // loop-local automatics).
+  logic [N-1:0]        match;
+  logic [N-1:0][53:0]  napot_mask;
+  logic [N-1:0][54:0]  pmp_inc;
+  logic [N-1:0][54:0]  pmp_xor;
+  logic [N-1:0][53:0]  pmp_mask;
+  logic [55:0]         pmp_addr_plus;  // not loop-dependent — single value
+
+  // Active = matched AND not OFF.
+  logic [N-1:0] active;
+
+  // Priority encode (lowest index wins).
+  logic [$clog2(N)-1:0] matched_idx;
+  logic                 any_match;
+
+  // Permission resolution.
+  logic matched_l, matched_x, matched_w, matched_r;
+  logic m_bypass;        // M-mode unconstrained when matched region is unlocked
+  logic op_allowed;      // matched-region permission for this access
+  logic no_match_pass;   // M passes by default; S/U fault by default
+
+  // -----------------------------------------------------------------------
+  // Decode per-region cfg fields.
+  // -----------------------------------------------------------------------
   always_comb begin
+    reg_l = {N{1'b0}};
+    reg_a = {N{2'b00}};
+    reg_x = {N{1'b0}};
+    reg_w = {N{1'b0}};
+    reg_r = {N{1'b0}};
     for (int i = 0; i < N; i++) begin
       reg_l[i] = pmpcfg_i[i][7];
       reg_a[i] = pmpcfg_i[i][4:3];
@@ -54,27 +86,31 @@ module kronos_pmp
   // The match mask is derived as ~(((pmpaddr+1) ^ pmpaddr) << 1).
   // For NA4: exact 4-byte match on PA[55:2].
   // Multi-byte access (size > region) is rejected as a fault.
-  logic [N-1:0]        match;
-  logic [N-1:0][53:0]  napot_mask;
   always_comb begin
-    for (int i = 0; i < N; i++) begin
-      automatic logic [54:0] inc       = {1'b0, pmpaddr_i[i]} + 55'd1;
-      automatic logic [54:0] xor_v     = inc ^ {1'b0, pmpaddr_i[i]};
-      automatic logic [53:0] mask      = ~xor_v[53:0];
-      automatic logic [55:0] addr_plus = addr_i + ((56'd1 << size_i) - 56'd1);
+    match         = {N{1'b0}};
+    napot_mask    = {N{54'd0}};
+    pmp_inc       = {N{55'd0}};
+    pmp_xor       = {N{55'd0}};
+    pmp_mask      = {N{54'd0}};
+    pmp_addr_plus = addr_i + ((56'd1 << size_i) - 56'd1);
 
-      napot_mask[i] = mask;
+    for (int i = 0; i < N; i++) begin
+      pmp_inc[i]    = {1'b0, pmpaddr_i[i]} + 55'd1;
+      pmp_xor[i]    = pmp_inc[i] ^ {1'b0, pmpaddr_i[i]};
+      pmp_mask[i]   = ~pmp_xor[i][53:0];
+
+      napot_mask[i] = pmp_mask[i];
 
       unique case (reg_a[i])
         2'b10: begin  // NA4 — exact 4-byte boundary
           match[i] = valid_i &
-                     (addr_i[55:2]      == pmpaddr_i[i]) &
-                     (addr_plus[55:2]   == pmpaddr_i[i]);
+                     (addr_i[55:2]          == pmpaddr_i[i]) &
+                     (pmp_addr_plus[55:2]   == pmpaddr_i[i]);
         end
         2'b11: begin  // NAPOT
           match[i] = valid_i &
-                     ((addr_i[55:2]    & napot_mask[i]) == (pmpaddr_i[i] & napot_mask[i])) &
-                     ((addr_plus[55:2] & napot_mask[i]) == (pmpaddr_i[i] & napot_mask[i]));
+                     ((addr_i[55:2]        & napot_mask[i]) == (pmpaddr_i[i] & napot_mask[i])) &
+                     ((pmp_addr_plus[55:2] & napot_mask[i]) == (pmpaddr_i[i] & napot_mask[i]));
         end
         default: match[i] = 1'b0;  // OFF or TOR (TOR not implemented)
       endcase
@@ -82,8 +118,8 @@ module kronos_pmp
   end
 
   // Active = matched AND not OFF.
-  logic [N-1:0] active;
   always_comb begin
+    active = {N{1'b0}};
     for (int i = 0; i < N; i++) begin
       active[i] = match[i] & (reg_a[i] != 2'b00);
     end
@@ -92,10 +128,8 @@ module kronos_pmp
   // -----------------------------------------------------------------------
   // Priority encode (lowest index wins).
   // -----------------------------------------------------------------------
-  logic [$clog2(N)-1:0] matched_idx;
-  logic                 any_match;
   always_comb begin
-    matched_idx = '0;
+    matched_idx = {$clog2(N){1'b0}};
     any_match   = 1'b0;
     for (int i = 0; i < N; i++) begin
       if (active[i] & ~any_match) begin
@@ -108,7 +142,6 @@ module kronos_pmp
   // -----------------------------------------------------------------------
   // Permission resolution.
   // -----------------------------------------------------------------------
-  logic matched_l, matched_x, matched_w, matched_r;
   always_comb begin
     matched_l = reg_l[matched_idx];
     matched_x = reg_x[matched_idx];
@@ -116,9 +149,6 @@ module kronos_pmp
     matched_r = reg_r[matched_idx];
   end
 
-  logic m_bypass;        // M-mode unconstrained when matched region is unlocked
-  logic op_allowed;      // matched-region permission for this access
-  logic no_match_pass;   // M passes by default; S/U fault by default
   always_comb begin
     m_bypass      = (priv_i == PRIV_M) & ~matched_l;
     op_allowed    = (is_fetch_i & matched_x)

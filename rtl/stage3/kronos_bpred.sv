@@ -37,40 +37,48 @@ module kronos_bpred
   input  logic [31:0] upd_target_i,
   input  logic        upd_is_jal_i    // JAL always taken — skip counter update
 );
+
+  // -------------------------------------------------------------------------
+  // 1. Constants
+  // -------------------------------------------------------------------------
   localparam int unsigned BPRED_ENTRIES = 1 << BPRED_BITS;
   localparam int unsigned BTB_ENTRIES   = 1 << BTB_BITS;
   localparam int unsigned BTB_TAG_BITS  = 32 - BTB_BITS - 2;
 
+  // -------------------------------------------------------------------------
+  // 2. State registers
+  // -------------------------------------------------------------------------
   // 2-bit saturating counters (one per bimodal table entry)
   logic [1:0] counters [BPRED_ENTRIES];
 
   // BTB (direct-mapped)
   btb_entry_t btb [BTB_ENTRIES];
 
-  // Lookup index signals
-  logic [BPRED_BITS-1:0]     lookup_idx;
-  logic [BTB_BITS-1:0]       lookup_btb_idx;
-  logic [BTB_TAG_BITS-1:0]   lookup_tag;
-
-  // Update index signals
-  logic [BPRED_BITS-1:0]     update_idx;
-  logic [BTB_BITS-1:0]       update_btb_idx;
-  logic [BTB_TAG_BITS-1:0]   update_tag;
-
-  // BTB lookup result
-  logic btb_hit;
-
-  // -----------------------------------------------------------------------
   // Update-port pipeline register (timing fix: breaks the
-  // mem_wb_q -> WB->EX forwarding -> ex_pc_next -> btb write cone).
-  // Updates now fire 2 cycles after EX instead of 1 -- no correctness
-  // impact (predictor only).
-  // -----------------------------------------------------------------------
+  // mem_wb_q -> WB->EX forwarding -> ex_pc_d -> btb write cone).
+  // Updates fire 2 cycles after EX instead of 1 -- no correctness impact
+  // (predictor only).
   logic        upd_valid_q;
   logic [31:0] upd_pc_q;
   logic        upd_taken_q;
   logic [31:0] upd_target_q;
   logic        upd_is_jal_q;
+
+  // -------------------------------------------------------------------------
+  // 3. Combinational signals
+  // -------------------------------------------------------------------------
+  // Lookup index signals
+  logic [BPRED_BITS-1:0]   lookup_idx;
+  logic [BTB_BITS-1:0]     lookup_btb_idx;
+  logic [BTB_TAG_BITS-1:0] lookup_tag;
+
+  // Update index signals
+  logic [BPRED_BITS-1:0]   update_idx;
+  logic [BTB_BITS-1:0]     update_btb_idx;
+  logic [BTB_TAG_BITS-1:0] update_tag;
+
+  // BTB lookup result
+  logic btb_hit;
 
   assign lookup_idx     = pc_i[BPRED_BITS+1:2];
   assign lookup_btb_idx = pc_i[BTB_BITS+1:2];
@@ -85,7 +93,7 @@ module kronos_bpred
   assign pred_taken_o  = btb_hit && counters[lookup_idx][1];
   assign pred_target_o = btb[lookup_btb_idx].target;
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_upd_pipe
+  always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       upd_valid_q  <= 1'b0;
       upd_pc_q     <= {32{1'b0}};
@@ -101,19 +109,21 @@ module kronos_bpred
     end
   end
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin : proc_update
+  always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       for (int i = 0; i < BPRED_ENTRIES; i++) counters[i] <= 2'b01; // weak NT
-      for (int i = 0; i < BTB_ENTRIES;   i++) btb[i]      <= '0;
+      for (int i = 0; i < BTB_ENTRIES;   i++) btb[i]      <= '{default: '0};
     end else if (upd_valid_q) begin
       // Update 2-bit saturating counter — only for conditional branches, not JAL
       if (!upd_is_jal_q) begin
         if (upd_taken_q) begin
-          if (counters[update_idx] != 2'b11)
+          if (counters[update_idx] != 2'b11) begin
             counters[update_idx] <= counters[update_idx] + 2'd1;
+          end
         end else begin
-          if (counters[update_idx] != 2'b00)
+          if (counters[update_idx] != 2'b00) begin
             counters[update_idx] <= counters[update_idx] - 2'd1;
+          end
         end
       end
 
@@ -126,8 +136,9 @@ module kronos_bpred
         // Not-taken conditional branch: counter will decrement to 00 — invalidate BTB entry
         if (counters[update_idx] == 2'b01) begin
           if (btb[update_btb_idx].valid &&
-              btb[update_btb_idx].tag == BTB_TAG_BITS'(update_tag))
+              btb[update_btb_idx].tag == BTB_TAG_BITS'(update_tag)) begin
             btb[update_btb_idx].valid <= 1'b0;
+          end
         end
       end
     end

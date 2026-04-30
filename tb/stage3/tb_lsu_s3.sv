@@ -51,7 +51,7 @@ module tb_lsu_s3;
     input logic ar_ready, r_valid, logic [63:0] r_data,
     input logic aw_ready, w_ready, b_valid
   );
-    axi_rsp          = '0;
+    axi_rsp          = '{default: '0};
     axi_rsp.ar_ready = ar_ready;
     axi_rsp.r_valid  = r_valid;
     axi_rsp.r.data   = r_data;
@@ -67,8 +67,8 @@ module tb_lsu_s3;
   initial begin
     // ---- Reset ----
     rst_n  = 0; req = 0; we = 0;
-    addr   = '0; wdata = '0; funct3 = 3'b010;
-    axi_rsp = '0;
+    addr   = 32'b0; wdata = 32'b0; funct3 = 3'b010;
+    axi_rsp = '{default: '0};
     @(posedge clk); @(posedge clk);
     rst_n = 1;
     @(posedge clk);

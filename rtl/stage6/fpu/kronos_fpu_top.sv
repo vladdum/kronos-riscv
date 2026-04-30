@@ -30,23 +30,72 @@ module kronos_fpu_top
   input  fp_op_e      op_i,
   input  logic        fmt_d_i,
   input  logic [2:0]  rm_i,
-  input  logic [63:0] a_i,
-  input  logic [63:0] b_i,
-  input  logic [63:0] c_i,
+  input  logic [FLEN-1:0] a_i,
+  input  logic [FLEN-1:0] b_i,
+  input  logic [FLEN-1:0] c_i,
   input  fpu_tag_t    tag_i,
   output logic        busy_o,
   output logic        out_valid_o,
-  output logic [63:0] result_o,
+  output logic [FLEN-1:0] result_o,
   output logic [4:0]  fflags_o,
   output fpu_tag_t    tag_o
 );
 
   // ---------------------------------------------------------------------------
+  // Combinational signals
+  // ---------------------------------------------------------------------------
+  // Dispatch routing
+  logic [3:0] dispatch_latency;
+  logic       sel_fmisc;
+  logic       sel_fcvt;
+  logic       sel_fadd;
+  logic       sel_fmul;
+  logic       sel_fma;
+  logic       sel_iter;
+  logic       dispatch_ok;
+
+  // Scoreboard
+  logic       grant_comb;
+  logic       grant;
+  logic       iter_late_req;
+  logic       iter_late_fp_dest;
+  logic       iter_late_grant;
+  logic       iter_busy;
+
+  // Per-unit output buses
+  logic        fmisc_out_valid;
+  logic        fcvt_out_valid;
+  logic        fadd_out_valid;
+  logic        fmul_out_valid;
+  logic        fma_out_valid;
+  logic        iter_out_valid;
+  logic [FLEN-1:0] fmisc_result;
+  logic [FLEN-1:0] fcvt_result;
+  logic [FLEN-1:0] fadd_result;
+  logic [FLEN-1:0] fmul_result;
+  logic [FLEN-1:0] fma_result;
+  logic [FLEN-1:0] iter_result;
+  logic [4:0]  fmisc_fflags;
+  logic [4:0]  fcvt_fflags;
+  logic [4:0]  fadd_fflags;
+  logic [4:0]  fmul_fflags;
+  logic [4:0]  fma_fflags;
+  logic [4:0]  iter_fflags;
+  fpu_tag_t    fmisc_tag;
+  fpu_tag_t    fcvt_tag;
+  fpu_tag_t    fadd_tag;
+  fpu_tag_t    fmul_tag;
+  fpu_tag_t    fma_tag;
+  fpu_tag_t    iter_tag;
+
+`ifndef SYNTHESIS
+  // Assertion helper: count of units asserting out_valid this cycle.
+  logic [2:0] valid_count;
+`endif
+
+  // ---------------------------------------------------------------------------
   // Dispatch routing: determine unit and latency from op_i
   // ---------------------------------------------------------------------------
-  logic [3:0] dispatch_latency;
-  logic       sel_fmisc, sel_fcvt, sel_fadd, sel_fmul, sel_fma, sel_iter;
-
   always_comb begin
     sel_fmisc        = 1'b0;
     sel_fcvt         = 1'b0;
@@ -98,12 +147,6 @@ module kronos_fpu_top
   // ---------------------------------------------------------------------------
   // Scoreboard: hazard detection
   // ---------------------------------------------------------------------------
-  logic grant_comb, grant;
-
-  // Late-probe signals from iterative unit to scoreboard
-  logic iter_late_req, iter_late_fp_dest, iter_late_grant;
-  logic iter_busy;
-
   kronos_fpu_scoreboard #(.DEPTH(9)) u_scoreboard (
     .clk_i             (clk_i),
     .rst_ni            (rst_ni),
@@ -125,19 +168,12 @@ module kronos_fpu_top
 
   // Gate in_valid to each unit: only the selected unit receives it, and only
   // when the scoreboard grants the dispatch.
-  logic dispatch_ok;
   assign dispatch_ok = in_valid_i & grant_comb;
 
   // ---------------------------------------------------------------------------
   // Execution unit instantiations
   // ---------------------------------------------------------------------------
-
   // Shared input bundle (all units see the same inputs; only one fires per cycle)
-  logic        fmisc_out_valid, fcvt_out_valid, fadd_out_valid;
-  logic        fmul_out_valid,  fma_out_valid;
-  logic [63:0] fmisc_result, fcvt_result, fadd_result, fmul_result, fma_result;
-  logic [4:0]  fmisc_fflags, fcvt_fflags, fadd_fflags, fmul_fflags, fma_fflags;
-  fpu_tag_t    fmisc_tag,   fcvt_tag,   fadd_tag,   fmul_tag,   fma_tag;
 
   kronos_fpu_fmisc u_fmisc (
     .clk_i      (clk_i),
@@ -225,11 +261,6 @@ module kronos_fpu_top
   );
 
   // Iterative unit (FDIV, FSQRT) — variable latency, late-reservation
-  logic        iter_out_valid;
-  logic [63:0] iter_result;
-  logic [4:0]  iter_fflags;
-  fpu_tag_t    iter_tag;
-
   kronos_fpu_iter u_iter (
     .clk_i           (clk_i),
     .rst_ni          (rst_ni),
@@ -258,9 +289,9 @@ module kronos_fpu_top
   always_comb begin
     out_valid_o = fmisc_out_valid | fcvt_out_valid | fadd_out_valid
                 | fmul_out_valid  | fma_out_valid  | iter_out_valid;
-    result_o = 64'h0;
+    result_o = {FLEN{1'b0}};
     fflags_o = 5'h0;
-    tag_o    = '0;
+    tag_o    = fpu_tag_t'(0);
     if (fmisc_out_valid) begin
       result_o = fmisc_result;
       fflags_o = fmisc_fflags;
@@ -292,12 +323,14 @@ module kronos_fpu_top
   // Scoreboard invariant: at most one FPU unit may assert out_valid per cycle.
   // If this fires, the silent-drop bug from C-3 (kronos_fpu_iter late-grant
   // interlock) has reappeared.
+  always_comb begin
+    valid_count = 3'(fmisc_out_valid) + 3'(fcvt_out_valid)
+                + 3'(fadd_out_valid)  + 3'(fmul_out_valid)
+                + 3'(fma_out_valid)   + 3'(iter_out_valid);
+  end
+
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (rst_ni) begin
-      automatic logic [2:0] valid_count;
-      valid_count = 3'(fmisc_out_valid) + 3'(fcvt_out_valid)
-                  + 3'(fadd_out_valid)  + 3'(fmul_out_valid)
-                  + 3'(fma_out_valid)   + 3'(iter_out_valid);
       assert (valid_count <= 3'd1)
         else $error("kronos_fpu_top: %0d units asserted out_valid simultaneously",
                     valid_count);

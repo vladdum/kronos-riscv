@@ -23,7 +23,7 @@ module kronos_align (
   input  logic        rvalid_i,
   input  logic        stall_i,        // hold state when pipeline can't accept output
   input  logic        flush_i,
-  input  logic        pc_offset_i,    // ex_pc_next[1]: skip lower half of next fetch
+  input  logic        pc_offset_i,    // ex_pc_d[1]: skip lower half of next fetch
   output logic [31:0] instr_o,
   output logic        instr_valid_o,
   output logic        is_16b_o,
@@ -31,8 +31,9 @@ module kronos_align (
   output logic        align_need_upper_o,
   output logic        align_needs_fetch_o
 );
+
   // -------------------------------------------------------------------------
-  // State registers
+  // 1. State registers
   // -------------------------------------------------------------------------
   logic        buf_valid_q;
   logic [15:0] buf_data_q;
@@ -45,7 +46,9 @@ module kronos_align (
   logic        span_valid_q;
   logic [31:0] span_instr_q;
 
-  // Combinational from decompress instances
+  // -------------------------------------------------------------------------
+  // 2. Submodule interface signals (kronos_decompress instances)
+  // -------------------------------------------------------------------------
   logic [31:0] decomp_lower, decomp_upper, decomp_buf;
   logic        decomp_lower_ill, decomp_upper_ill, decomp_buf_ill;
 

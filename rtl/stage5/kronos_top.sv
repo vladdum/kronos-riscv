@@ -85,13 +85,13 @@ module kronos_top
   logic [63:0]    rs1_data_id, rs2_data_id, rs3_data_id;
   logic           wb_writing;
 
-  // Stage 5a: FP regfile read ports
+  // FP regfile read ports
   logic [63:0]    fp_rd1, fp_rd2, fp_rd3;
 
-  // Stage 5a: CSR frm output
+  // CSR frm output
   logic [2:0]     frm;
 
-  // Fix #2: ID-stage forwarding helper signals.
+  // ID-stage forwarding helper signals.
   // FP paths: 2-bit one-hot selector + data mux (4-way, replaces 4-level chain).
   // Integer path: plain WB-bypass-or-regfile (EX/MEM forwarding via fwd_rs1_sel).
   logic [1:0]     fp_rs1_sel, fp_rs2_sel, fp_rs3_sel;
@@ -104,7 +104,7 @@ module kronos_top
   logic [63:0] fwd_rs1_data, fwd_rs2_data;
   logic [63:0] alu_a, alu_b, alu_result;
   logic [63:0] ex_result;
-  logic [31:0] ex_pc_next                        /* verilator public_flat_rd */;
+  logic [31:0] ex_pc_d                        /* verilator public_flat_rd */;
   logic        ex_redirect                        /* verilator public_flat_rd */;
   logic        branch_taken;
   logic        irq_pending;
@@ -118,7 +118,7 @@ module kronos_top
   logic        muldiv_valid, muldiv_idle;
   logic        muldiv_stall;
 
-  // Fix #3: pre-registered CSR-select flag for EX forwarding mux.
+  // pre-registered CSR-select flag for EX forwarding mux.
   // Registered at the EX→MEM boundary; eliminates the 3-bit wb_sel compare
   // from the FWD_EXMEM combinational path.
   logic        ex_mem_csr_q;
@@ -190,7 +190,7 @@ module kronos_top
   logic        dcache_stall                      /* verilator public_flat_rd */;
   logic        dcache_miss_pulse                 /* verilator public_flat_rd */;
 
-  // Stage 5a: LSU FP response
+  // LSU FP response
   logic             lsu_fp_dest;
   logic [63:0]      lsu_fp_rdata;
 
@@ -200,7 +200,7 @@ module kronos_top
   logic [63:0] wb_result_64;
 
   // -------------------------------------------------------------------------
-  // Stage 5a: FPU wires
+  // FPU wires
   // -------------------------------------------------------------------------
   // Dispatch control: one-shot dispatch guard
   logic       fp_inflight_q;       // FPU is computing
@@ -225,7 +225,7 @@ module kronos_top
   logic fp_load_use_event;
   logic jalr_fwd_event;
 
-  // Stage 5h: Sdtrig (trigger module) interface
+  // Sdtrig (trigger module) interface
   logic        trig_hit;
   logic [31:0] trig_hit_pc;
   logic [63:0] trig_csr_rdata;
@@ -233,7 +233,7 @@ module kronos_top
   logic        trig_csr_we;
   logic [63:0] trig_csr_wdata;
 
-  // Stage 6c: post-write CSR value piped from u_csr → mem_wb pipeline → retire
+  // post-write CSR value piped from u_csr → mem_wb pipeline → retire
   // trace.  csr_new_val_post is the combinational output of u_csr in the EX
   // stage; ex_mem_csr_new_val_q snapshots it at the EX→MEM boundary (same
   // cycle the CSR commits its write), and mem_wb_csr_new_val_q propagates it
@@ -274,7 +274,7 @@ module kronos_top
   // -------------------------------------------------------------------------
   // PC next (combinational)
   // -------------------------------------------------------------------------
-  logic [31:0] pc_next                           /* verilator public_flat_rd */;
+  logic [31:0] pc_d                              /* verilator public_flat_rd */;
 
   // =========================================================================
   // Submodule instantiations
@@ -298,7 +298,7 @@ module kronos_top
     .rd_wdata_i  (wb_result_64)
   );
 
-  // Stage 5a: FP register file
+  // FP register file
   kronos_regfile_fp u_regfile_fp (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
@@ -500,7 +500,7 @@ module kronos_top
     .irq_timer_i   (irq_timer_i),
     .irq_fast_i    (irq_fast_i),
     .irq_pending_o (irq_pending),
-    // Stage 5a: FP CSR interface
+    // FP CSR interface
     .fflags_delta_i (fpu_out_valid ? fpu_fflags : 5'b0),
     .fflags_we_i    (fpu_out_valid),
     .fp_rd_we_i     (fp_we),                // drives mstatus.FS=11 on FP writeback
@@ -549,7 +549,7 @@ module kronos_top
     .rdata_o            (lsu_rdata),
     .valid_o            (lsu_valid),
     .mem_stall_o        (lsu_mem_stall),
-    // Stage 5a: FP load/store ports
+    // FP load/store ports
     .fp_dest_req_i      (ex_mem_q.valid &
                          (ex_mem_q.dec.fp_load | ex_mem_q.dec.fp_store) & ~mem_done_q),
     .fp_store_data_i    (ex_mem_q.rs2_data),
@@ -609,7 +609,7 @@ module kronos_top
     .miss_pulse_o    (dcache_miss_pulse)
   );
 
-  // Stage 5a: FPU top
+  // FPU top
   assign fpu_tag_in = '{rd: id_ex_q.dec.rd, fp_dest: id_ex_q.dec.rd_fp};
 
   kronos_fpu_top u_fpu (
@@ -666,7 +666,7 @@ module kronos_top
     if (!rst_ni) begin
       fp_result_valid_q <= 1'b0;
       fp_result_q       <= {64{1'b0}};
-      fp_tag_q          <= '0;
+      fp_tag_q          <= '{default: '0};
     end else begin
       if (fpu_out_valid & combined_stall) begin
         // Latch only when pipeline is stalled: result would otherwise be lost.
@@ -735,7 +735,7 @@ module kronos_top
     .stall_i             (align_instr_valid & ~if_id_en),
     .flush_i             (fetch_flush),
     .pc_offset_i         (mem_redirect ? ex_mem_q.pc_next[1]
-                        : ex_redirect  ? ex_pc_next[1]
+                        : ex_redirect  ? ex_pc_d[1]
                         : pred_taken   ? pred_target[1]
                         :                pc_q[1]),
     .instr_o             (align_instr),
@@ -755,7 +755,7 @@ module kronos_top
     .upd_valid_i     (bpred_update_en),
     .upd_pc_i        (id_ex_q.pc),
     .upd_taken_i     (actual_taken),
-    .upd_target_i    (ex_pc_next),
+    .upd_target_i    (ex_pc_d),
     .upd_is_jal_i    (id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr)
   );
 
@@ -765,8 +765,8 @@ module kronos_top
   // Priority: mem_redirect before ex_redirect so that when both fire simultaneously
   // (MEM-stage target mismatch + speculative instr in EX also generates a redirect),
   // the pipeline returns to the architecturally correct target from the MEM branch.
-  assign pc_next = mem_redirect  ? ex_mem_q.pc_next
-                 : ex_redirect   ? ex_pc_next
+  assign pc_d = mem_redirect  ? ex_mem_q.pc_next
+                 : ex_redirect   ? ex_pc_d
                  : pred_taken    ? pred_target
                  : align_is_16b  ? pc_q + 32'd2
                  :                 pc_q + 32'd4;
@@ -789,7 +789,7 @@ module kronos_top
       pc_q          <= boot_addr_i;
       boot_loaded_q <= 1'b1;
     end else if (pc_en) begin
-      pc_q          <= pc_next;
+      pc_q          <= pc_d;
     end
   end
 
@@ -798,9 +798,9 @@ module kronos_top
   // =========================================================================
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_flush) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_en) begin
       if_id_q.pc          <= pc_q;
       if_id_q.instr       <= align_instr;
@@ -815,7 +815,7 @@ module kronos_top
   // ID stage
   // =========================================================================
 
-  // Fix #2: two-level ID forwarding structure.
+  // two-level ID forwarding structure.
   //
   // FP path: compute a 2-bit one-hot selector independently of data, then use
   // a balanced 4-way unique-case mux.  Separating condition evaluation from
@@ -906,9 +906,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_flush) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
@@ -929,7 +929,7 @@ module kronos_top
   // EX stage — 64-bit forwarding mux
   // =========================================================================
 
-  // Fix #3: use pre-registered ex_mem_csr_q instead of the 3-bit wb_sel
+  // use pre-registered ex_mem_csr_q instead of the 3-bit wb_sel
   // comparison inline.  Removes one combinational level from the FWD_EXMEM
   // data path (critical for every instruction that uses a forwarded operand).
   always_comb begin
@@ -994,17 +994,17 @@ module kronos_top
   always_comb begin
     if      ((id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
                                id_ex_q.dec.illegal  | irq_pending)) | trig_hit)
-      ex_pc_next = trap_vector[31:0];
+      ex_pc_d = trap_vector[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_mret)
-      ex_pc_next = mepc[31:0];
+      ex_pc_d = mepc[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
-      ex_pc_next = jalr_target_64[31:0];
+      ex_pc_d = jalr_target_64[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jal)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
     else if (branch_taken)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
     else
-      ex_pc_next = id_ex_q.is_16b ? id_ex_q.pc + 32'd2 : id_ex_q.pc + 32'd4;
+      ex_pc_d = id_ex_q.is_16b ? id_ex_q.pc + 32'd2 : id_ex_q.pc + 32'd4;
   end
 
   // STAGE3: branch predictor — misprediction detection and update
@@ -1047,7 +1047,7 @@ module kronos_top
     else if (ex_mem_en) ex_mem_csr_q <= (id_ex_q.dec.wb_sel == WB_CSR);
   end
 
-  // Stage 6c: capture u_csr.csr_new_val_o at the EX→MEM boundary.  The CSR's
+  // capture u_csr.csr_new_val_o at the EX→MEM boundary.  The CSR's
   // own write commits on the same posedge (req_i is gated by ~combined_stall),
   // so this snapshot is the post-write value for the EX-stage instruction.
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -1055,7 +1055,7 @@ module kronos_top
     else if (ex_mem_en) ex_mem_csr_new_val_q <= csr_new_val_post;
   end
 
-  // Stage 6c: propagate the post-write CSR value MEM→WB, mirroring the
+  // propagate the post-write CSR value MEM→WB, mirroring the
   // mem_wb_q.csr_wdata pipe.  Drives retire_csr_wdata_o.
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)        mem_wb_csr_new_val_q <= 64'b0;
@@ -1064,7 +1064,7 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      ex_mem_q <= '0;
+      ex_mem_q <= '{default: '0};
     end else if (ex_mem_en) begin
       ex_mem_q.pc         <= id_ex_q.pc;
       ex_mem_q.dec        <= id_ex_q.dec;
@@ -1076,7 +1076,7 @@ module kronos_top
                               ~id_ex_q.dec.fp_load & ~id_ex_q.dec.fp_store)
                              ? fp_result_cur : ex_result;
       ex_mem_q.rs2_data   <= fwd_rs2_data;
-      ex_mem_q.pc_next    <= ex_pc_next;
+      ex_mem_q.pc_next    <= ex_pc_d;
       ex_mem_q.csr_rdata  <= csr_rdata;
       ex_mem_q.redirect    <= ex_redirect;
       // When mem_redirect fires, the instruction currently in EX (id_ex_q) was
@@ -1131,7 +1131,7 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      mem_wb_q <= '0;
+      mem_wb_q <= '{default: '0};
     end else if (mem_wb_en) begin
       mem_wb_q.dec        <= ex_mem_q.dec;
       // fpu_result was already captured into ex_mem_q.alu_result at the
@@ -1229,7 +1229,7 @@ module kronos_top
   assign event_bus[ 6]    = muldiv_stall;
   assign event_bus[ 7]    = fpu_busy_any;
   assign event_bus[ 8]    = trap_taken_pulse;
-  assign event_bus[15:9]  = '0;
+  assign event_bus[15:9]  = 7'h0;
   assign event_bus[16]    = icache_miss_pulse;  // event ID 0x10 = I$ miss
   assign event_bus[17]    = dcache_miss_pulse;  // event ID 0x11 = D$ miss
   // Stage 5h taxonomy — fine-grained stall causes (IDs 0x14..0x1F).

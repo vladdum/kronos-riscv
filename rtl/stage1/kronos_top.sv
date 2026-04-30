@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // kronos_top.sv (stage1) — 5-stage in-order pipeline
-// Stages: IF → ID → EX → MEM → WB
+// Stages: IF -> ID -> EX -> MEM -> WB
 // Reuses stage0: kronos_decode, kronos_regfile, kronos_alu, kronos_csr
 // New in stage1:  kronos_lsu (updated), kronos_forward, kronos_hazard
 module kronos_top
@@ -38,6 +38,15 @@ module kronos_top
 );
 
   // -------------------------------------------------------------------------
+  // Local constants
+  // -------------------------------------------------------------------------
+  // RV32I trap causes (mcause encoding for the events stage 1 can take).
+  localparam logic [31:0] TRAP_CAUSE_MTI     = 32'h8000_0007; // M-mode timer IRQ
+  localparam logic [31:0] TRAP_CAUSE_ILLEGAL = 32'd2;
+  localparam logic [31:0] TRAP_CAUSE_ECALL_M = 32'd11;
+  localparam logic [31:0] TRAP_CAUSE_BREAK   = 32'd3;
+
+  // -------------------------------------------------------------------------
   // Pipeline registers (owned by kronos_top)
   // -------------------------------------------------------------------------
   if_id_reg_t  if_id_q;
@@ -59,7 +68,7 @@ module kronos_top
   // -------------------------------------------------------------------------
   decoded_instr_t id_dec;
   logic [63:0]    rs1_rdata_64, rs2_rdata_64;
-  // WB→ID bypass: when WB writes the same register that ID is reading in the
+  // WB->ID bypass: when WB writes the same register that ID is reading in the
   // same cycle, forward the write data so the consumer sees the up-to-date
   // value.  wb_result comes from the registered mem_wb_q so there is no
   // combinatorial loop.
@@ -71,7 +80,7 @@ module kronos_top
   // -------------------------------------------------------------------------
   logic [31:0] fwd_rs1_data, fwd_rs2_data;
   logic [31:0] alu_a, alu_b, alu_result;
-  logic [31:0] ex_pc_next;
+  logic [31:0] ex_pc_d;
   logic        ex_redirect;
   logic        branch_taken;
   logic        irq_pending;
@@ -91,6 +100,11 @@ module kronos_top
   // -------------------------------------------------------------------------
   logic [31:0] wb_result;     // 32-bit: used as forwarding source
   logic [63:0] wb_result_64;  // 64-bit: written to regfile
+
+  // -------------------------------------------------------------------------
+  // PC next-state (combinational)
+  // -------------------------------------------------------------------------
+  logic [31:0] pc_d;
 
   // =========================================================================
   // Submodule instantiations
@@ -215,12 +229,11 @@ module kronos_top
   // =========================================================================
   // PC register
   // =========================================================================
-  logic [31:0] pc_next;
-  assign pc_next = ex_redirect ? ex_pc_next : pc_q + 32'd4;
+  assign pc_d = ex_redirect ? ex_pc_d : pc_q + 32'd4;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) pc_q <= boot_addr_i;
-    else if (pc_en) pc_q <= pc_next;
+    if (!rst_ni)        pc_q <= boot_addr_i;
+    else if (pc_en)     pc_q <= pc_d;
   end
 
   // =========================================================================
@@ -231,9 +244,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_flush) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_en) begin
       if_id_q.pc    <= pc_q;
       if_id_q.instr <= instr_rdata_i;
@@ -248,9 +261,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_flush) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
@@ -268,6 +281,8 @@ module kronos_top
 
   // Forwarding muxes
   always_comb begin
+    fwd_rs1_data = id_ex_q.rs1_data[31:0];
+    fwd_rs2_data = id_ex_q.rs2_data[31:0];
     unique case (id_ex_q.fwd_rs1_sel)
       FWD_NONE:  fwd_rs1_data = id_ex_q.rs1_data[31:0];
       FWD_EXMEM: fwd_rs1_data = ex_mem_q.alu_result[31:0];
@@ -304,27 +319,30 @@ module kronos_top
 
   // Trap cause encoding
   always_comb begin
-    if      (irq_pending)               trap_cause = 32'h80000007; // M-mode timer IRQ
-    else if (id_ex_q.dec.illegal)       trap_cause = 32'd2;
-    else if (id_ex_q.dec.is_ecall)      trap_cause = 32'd11;
-    else                                trap_cause = 32'd3;        // ebreak
+    trap_cause = TRAP_CAUSE_BREAK;
+    if      (irq_pending)               trap_cause = TRAP_CAUSE_MTI;
+    else if (id_ex_q.dec.illegal)       trap_cause = TRAP_CAUSE_ILLEGAL;
+    else if (id_ex_q.dec.is_ecall)      trap_cause = TRAP_CAUSE_ECALL_M;
+    else                                trap_cause = TRAP_CAUSE_BREAK;
   end
 
   // PC redirect target
   always_comb begin
-    if      (id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
-                               id_ex_q.dec.illegal  | irq_pending))
-      ex_pc_next = trap_vector;
-    else if (id_ex_q.valid & id_ex_q.dec.is_mret)
-      ex_pc_next = mepc;
-    else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
-      ex_pc_next = (fwd_rs1_data + id_ex_q.dec.imm) & ~32'd1;
-    else if (id_ex_q.valid & id_ex_q.dec.is_jal)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
-    else if (branch_taken)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
-    else
-      ex_pc_next = id_ex_q.pc + 32'd4;
+    ex_pc_d = id_ex_q.pc + 32'd4;
+    if (id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
+                         id_ex_q.dec.illegal  | irq_pending)) begin
+      ex_pc_d = trap_vector;
+    end else if (id_ex_q.valid & id_ex_q.dec.is_mret) begin
+      ex_pc_d = mepc;
+    end else if (id_ex_q.valid & id_ex_q.dec.is_jalr) begin
+      ex_pc_d = (fwd_rs1_data + id_ex_q.dec.imm) & ~32'd1;
+    end else if (id_ex_q.valid & id_ex_q.dec.is_jal) begin
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
+    end else if (branch_taken) begin
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
+    end else begin
+      ex_pc_d = id_ex_q.pc + 32'd4;
+    end
   end
 
   assign ex_redirect = id_ex_q.valid &
@@ -334,13 +352,13 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      ex_mem_q <= '0;
+      ex_mem_q <= '{default: '0};
     end else if (ex_mem_en) begin
       ex_mem_q.pc         <= id_ex_q.pc;
       ex_mem_q.dec        <= id_ex_q.dec;
       ex_mem_q.alu_result <= {{32{alu_result[31]}}, alu_result};
       ex_mem_q.rs2_data   <= {{32{fwd_rs2_data[31]}}, fwd_rs2_data};
-      ex_mem_q.pc_next    <= ex_pc_next;
+      ex_mem_q.pc_next    <= ex_pc_d;
       ex_mem_q.csr_rdata  <= {32'b0, csr_rdata};
       ex_mem_q.redirect   <= ex_redirect;
       // Squash valid on IRQ: instruction is re-fetched after MRET
@@ -354,7 +372,7 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      mem_wb_q <= '0;
+      mem_wb_q <= '{default: '0};
     end else if (mem_wb_en) begin
       mem_wb_q.dec        <= ex_mem_q.dec;
       mem_wb_q.alu_result <= ex_mem_q.alu_result;
@@ -366,7 +384,7 @@ module kronos_top
   end
 
   // =========================================================================
-  // WB→ID bypass (3-cycle RAW)
+  // WB->ID bypass (3-cycle RAW)
   // =========================================================================
   assign wb_writing  = mem_wb_q.valid & mem_wb_q.dec.rd_wen & (mem_wb_q.dec.rd != 5'd0);
   assign rs1_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs1) ? wb_result
@@ -378,6 +396,7 @@ module kronos_top
   // WB stage
   // =========================================================================
   always_comb begin
+    wb_result_64 = mem_wb_q.alu_result;
     unique case (mem_wb_q.dec.wb_sel)
       WB_ALU:  wb_result_64 = mem_wb_q.alu_result;
       WB_MEM:  wb_result_64 = mem_wb_q.lsu_rdata;

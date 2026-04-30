@@ -2,10 +2,10 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_csr.sv — machine-mode CSR file for Stage 5 (RV64IMAFD)
+// kronos_csr.sv — machine-mode CSR file (RV64IMAFD).
 // Implements mstatus, misa, mie, mtvec, mscratch, mepc, mcause, mip.
 // Handles trap entry (ECALL/EBREAK/illegal), MRET, and CSR read/write.
-// Stage 5a adds FFLAGS/FRM/FCSR floating-point CSRs and mstatus.FS storage.
+// FFLAGS/FRM/FCSR floating-point CSRs and mstatus.FS storage are included.
 // All CSR data paths are 64 bits wide (MXL=10, XLEN=64).
 module kronos_csr #(
   // MISA extension bits [25:0]. Default = I+M+A+C+F+D (bits 8,12,0,2,5,3).
@@ -32,7 +32,7 @@ module kronos_csr #(
   input  logic        irq_timer_i,
   input  logic [14:0] irq_fast_i,
   output logic        irq_pending_o,
-  // Stage 5a: FP CSR interface
+  // FP CSR interface
   input  logic [4:0]  fflags_delta_i,
   input  logic        fflags_we_i,
   input  logic        fp_rd_we_i,        // any FP destination write this cycle
@@ -43,14 +43,14 @@ module kronos_csr #(
   // Zihpm event bus.  Bit i high if event ID i fires this cycle.
   // Indexed by mhpmeventX[7:0] (event IDs >= 32 increment no counter).
   input  logic [31:0] event_bus_i,
-  // Stage 5h: hand-off for Sdtrig CSRs (0x7A0..0x7A4).  When trig_csr_match_i
+  // Hand-off for Sdtrig CSRs (0x7A0..0x7A4).  When trig_csr_match_i
   // is high, the trigger module owns this CSR read; csr_rdata is sourced from
   // trig_csr_rdata_i instead of the local mux.  Writes are forwarded to the
   // trigger module via trig_csr_we_o below.
   input  logic [63:0] trig_csr_rdata_i,
   input  logic        trig_csr_match_i,
   output logic        trig_csr_we_o,    // 1 = current cycle is a trigger CSR write
-  // Stage 6c: post-write CSR value (combinational, valid for any csrrs/csrrc/csrrw).
+  // Post-write CSR value (combinational, valid for any csrrs/csrrc/csrrw).
   // Routed to retire_csr_wdata_o at top so the Sail-vs-Kronos trace diff sees
   // the new CSR value rather than the RS1 operand.
   output logic [63:0] csr_new_val_o,
@@ -77,7 +77,7 @@ module kronos_csr #(
   logic [63:0] minstret;  // 0xB02 / 0xC02 (U-mode alias)
 
   // -------------------------------------------------------------------------
-  // Zihpm counter-control + event counters (Stage 5c)
+  // Zihpm counter-control + event counters
   // -------------------------------------------------------------------------
   // mcountinhibit (0x320) — bit X gates increment of counter X:
   //   bit 0  = mcycle, bit 1 = reserved (RAZ/WI), bit 2 = minstret,
@@ -180,7 +180,7 @@ module kronos_csr #(
                           | addr_i == 12'h003);
   assign trig_csr_we_o    = req_i & trig_csr_match_i & (funct3_i[1:0] != 2'b00);
   assign trig_csr_wdata_o = csr_new_val;
-  // Stage 6c: re-derive mstatus/sstatus SD bit (bit 63) from the *new* FS so
+  // Re-derive mstatus/sstatus SD bit (bit 63) from the *new* FS so
   // the retire trace matches Sail's post-write CSR read view. csr_new_val uses
   // rdata_o (SD computed from old FS) OR'd with the operand — correct for the
   // architectural write (mstatus_q discards bit 63 anyway), but the trace needs
@@ -203,10 +203,10 @@ module kronos_csr #(
       fcsr_q   <= 8'h00;
       mcycle   <= {64{1'b0}};
       minstret <= {64{1'b0}};
-      mcountinhibit <= '0;
+      mcountinhibit <= 11'h0;
       for (int i = 3; i <= 10; i++) begin
-        mhpmcounter[i] <= '0;
-        mhpmevent[i]   <= '0;
+        mhpmcounter[i] <= 64'h0;
+        mhpmevent[i]   <= 8'h0;
       end
     end else begin
       // ---- Default: counters tick (gated by mcountinhibit) ----
@@ -222,8 +222,9 @@ module kronos_csr #(
       for (int i = 3; i <= 10; i++) begin
         if (~mcountinhibit[i] & (mhpmevent[i] < 8'd32)
                               & event_bus_i[mhpmevent[i][4:0]]
-                              & ~(req_i & (addr_i == 12'(12'hB00 + i))))
+                              & ~(req_i & (addr_i == 12'(12'hB00 + i)))) begin
           mhpmcounter[i] <= mhpmcounter[i] + 64'd1;
+        end
       end
 
       // Trap entry (highest priority for non-counter state)

@@ -56,36 +56,55 @@ module kronos_top
 );
 
   // -------------------------------------------------------------------------
-  // Pipeline registers
+  // 2. Types — fetch FSM
   // -------------------------------------------------------------------------
-  if_id_reg_t  if_id_q;
-  id_ex_reg_t  id_ex_q;
-  ex_mem_reg_t ex_mem_q;
-  mem_wb_reg_t mem_wb_q;
-  logic [31:0] pc_q;
+  typedef enum logic [1:0] {
+    FETCH_IDLE        = 2'b00,
+    FETCH_WAIT_R      = 2'b01,
+    FETCH_SERVE_UPPER = 2'b10    // serve buffered upper 32-bit half, no new AXI fetch
+  } fetch_state_e;
 
   // -------------------------------------------------------------------------
-  // Hazard / forwarding control
+  // 3. State registers — pipeline registers and fetch buffers
   // -------------------------------------------------------------------------
+  if_id_reg_t   if_id_q;
+  id_ex_reg_t   id_ex_q;
+  ex_mem_reg_t  ex_mem_q;
+  mem_wb_reg_t  mem_wb_q;
+  logic [31:0]  pc_q;
+  fetch_state_e fetch_state_q;
+  // mem_done_q: set when LSU signals valid_o; cleared when MEM/WB register
+  // advances.  Gates req_i so LSU does not re-issue while the pipeline is
+  // frozen by instr_fetch_stall.
+  logic         mem_done_q;
+  logic [63:0]  lsu_rdata_latch;     // holds rdata across the stall gap
+  // Fetch-side buffers: fetch_pc2_q tracks pc[2] of the in-flight fetch to
+  // select the correct 32-bit lane.  beat_upper_q/beat_upper_valid_q buffer
+  // the upper 32-bit half of the last 64-bit beat so that a spanning
+  // C-extension instruction can be served without a new AXI transaction.
+  logic         fetch_pc2_q;
+  logic [31:0]  beat_upper_q;
+  logic         beat_upper_valid_q;
+
+  // -------------------------------------------------------------------------
+  // 4. Combinational signals
+  // -------------------------------------------------------------------------
+  // Hazard / forwarding control
   logic      pc_en, if_id_en, id_ex_en, ex_mem_en, mem_wb_en;
   logic      if_id_flush, id_ex_flush;
   fwd_sel_e  fwd_rs1_sel, fwd_rs2_sel;
 
-  // -------------------------------------------------------------------------
   // ID-stage wires
-  // -------------------------------------------------------------------------
   decoded_instr_t id_dec;
   logic [63:0]    rs1_rdata_64, rs2_rdata_64;
   logic [63:0]    rs1_data_id, rs2_data_id;
   logic           wb_writing;
 
-  // -------------------------------------------------------------------------
   // EX-stage wires (64-bit datapath)
-  // -------------------------------------------------------------------------
   logic [63:0] fwd_rs1_data, fwd_rs2_data;
   logic [63:0] alu_a, alu_b, alu_result;
   logic [63:0] ex_result;
-  logic [31:0] ex_pc_next;
+  logic [31:0] ex_pc_d;
   logic        ex_redirect;
   logic        branch_taken;
   logic        irq_pending;
@@ -99,15 +118,11 @@ module kronos_top
   logic        muldiv_valid, muldiv_idle;
   logic        muldiv_stall;
 
-  // STAGE3: fetch FSM
-  typedef enum logic [1:0] {
-    FETCH_IDLE        = 2'b00,
-    FETCH_WAIT_R      = 2'b01,
-    FETCH_SERVE_UPPER = 2'b10    // serve buffered upper 32-bit half, no new AXI fetch
-  } fetch_state_e;
-  fetch_state_e fetch_state_q;
+  // STAGE3: fetch FSM control
   logic         instr_fetch_stall;
   logic         combined_stall;
+  logic         fetch_flush;
+  logic [31:0]  align_rdata;
 
   // STAGE3: C extension — alignment unit signals
   logic [31:0] align_instr;
@@ -125,29 +140,18 @@ module kronos_top
   logic        bpred_mispredict;
   logic        is_branch_or_jump;
 
-  // -------------------------------------------------------------------------
   // MEM-stage wires (64-bit lsu data)
-  // -------------------------------------------------------------------------
   logic [63:0]      lsu_rdata;
   logic             lsu_valid;
   logic             mem_stall;
-  // mem_done_q: set when LSU signals valid_o; cleared when MEM/WB register
-  // advances.  Gates req_i so LSU does not re-issue while the pipeline is
-  // frozen by instr_fetch_stall.
-  logic             mem_done_q;
-  logic [63:0]      lsu_rdata_latch;  // holds rdata across the stall gap
   kronos_axi_req_t  data_req;
   kronos_axi_resp_t data_rsp;
 
-  // -------------------------------------------------------------------------
-  // WB-stage wires (64-bit)
-  // -------------------------------------------------------------------------
+  // WB-stage wire (64-bit)
   logic [63:0] wb_result_64;
 
-  // -------------------------------------------------------------------------
-  // PC next (combinational)
-  // -------------------------------------------------------------------------
-  logic [31:0] pc_next;
+  // PC next-state
+  logic [31:0] pc_d;
 
   // =========================================================================
   // Submodule instantiations
@@ -308,10 +312,6 @@ module kronos_top
   // beat_upper_q: upper 32-bit half of the last 64-bit beat, buffered so that
   // a spanning C-extension instruction can obtain the next word without an
   // additional AXI transaction (FETCH_SERVE_UPPER state).
-  logic        fetch_pc2_q;
-  logic [31:0] beat_upper_q;
-  logic        beat_upper_valid_q;
-  logic        fetch_flush;
   assign fetch_flush = if_id_flush | (pred_taken & pc_en & ~ex_redirect);
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -321,16 +321,18 @@ module kronos_top
       beat_upper_valid_q <= 1'b0;
     end else begin
       if (fetch_state_q == FETCH_IDLE && instr_axi_req_o.ar_valid &&
-          instr_axi_rsp_i.ar_ready)
+          instr_axi_rsp_i.ar_ready) begin
         fetch_pc2_q <= align_need_upper ? 1'b0 : pc_q[2];
+      end
       if (fetch_state_q == FETCH_WAIT_R && instr_axi_rsp_i.r_valid && !fetch_pc2_q) begin
         beat_upper_q       <= instr_axi_rsp_i.r.data[63:32];
         beat_upper_valid_q <= 1'b1;
       end
       // Invalidate the buffer when a new AXI fetch is accepted.
       if (fetch_state_q == FETCH_IDLE && instr_axi_req_o.ar_valid &&
-          instr_axi_rsp_i.ar_ready)
+          instr_axi_rsp_i.ar_ready) begin
         beat_upper_valid_q <= 1'b0;
+      end
       // Clear the buffer once it has been consumed by FETCH_SERVE_UPPER.
       if (fetch_state_q == FETCH_SERVE_UPPER) beat_upper_valid_q <= 1'b0;
       if (fetch_flush) beat_upper_valid_q <= 1'b0;
@@ -339,7 +341,6 @@ module kronos_top
 
   // Mux: when in FETCH_SERVE_UPPER, deliver buffered upper half; otherwise
   // pick the lane selected by fetch_pc2_q from the arriving AXI beat.
-  logic [31:0] align_rdata;
   assign align_rdata = (fetch_state_q == FETCH_SERVE_UPPER)
                        ? beat_upper_q
                        : (fetch_pc2_q ? instr_axi_rsp_i.r.data[63:32]
@@ -353,7 +354,7 @@ module kronos_top
                          | (fetch_state_q == FETCH_SERVE_UPPER)),
     .stall_i             (align_instr_valid & ~if_id_en),
     .flush_i             (fetch_flush),
-    .pc_offset_i         (ex_redirect ? ex_pc_next[1]
+    .pc_offset_i         (ex_redirect ? ex_pc_d[1]
                         : pred_taken  ? pred_target[1]
                         :               pc_q[1]),
     .instr_o             (align_instr),
@@ -373,21 +374,21 @@ module kronos_top
     .upd_valid_i     (bpred_update_en),
     .upd_pc_i        (id_ex_q.pc),
     .upd_taken_i     (actual_taken),
-    .upd_target_i    (ex_pc_next),
+    .upd_target_i    (ex_pc_d),
     .upd_is_jal_i    (id_ex_q.dec.is_jal | id_ex_q.dec.is_jalr)
   );
 
   // =========================================================================
   // PC register
   // =========================================================================
-  assign pc_next = ex_redirect   ? ex_pc_next
-                 : pred_taken    ? pred_target
-                 : align_is_16b  ? pc_q + 32'd2
-                 :                 pc_q + 32'd4;
+  assign pc_d = ex_redirect   ? ex_pc_d
+              : pred_taken    ? pred_target
+              : align_is_16b  ? pc_q + 32'd2
+              :                 pc_q + 32'd4;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) pc_q <= boot_addr_i;
-    else if (pc_en) pc_q <= pc_next;
+    else if (pc_en) pc_q <= pc_d;
   end
 
   // =========================================================================
@@ -417,7 +418,7 @@ module kronos_top
   end
 
   always_comb begin
-    instr_axi_req_o            = '0;
+    instr_axi_req_o = kronos_axi_req_t'({$bits(kronos_axi_req_t){1'b0}});
     unique case (fetch_state_q)
       FETCH_IDLE: begin
         // Suppress AR if the buffered upper half can satisfy the need_upper request.
@@ -439,9 +440,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_flush) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_en) begin
       if_id_q.pc          <= pc_q;
       if_id_q.instr       <= align_instr;
@@ -457,9 +458,9 @@ module kronos_top
   // =========================================================================
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_flush) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
@@ -531,17 +532,17 @@ module kronos_top
   always_comb begin
     if      (id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
                                id_ex_q.dec.illegal  | irq_pending))
-      ex_pc_next = trap_vector[31:0];
+      ex_pc_d = trap_vector[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_mret)
-      ex_pc_next = mepc[31:0];
+      ex_pc_d = mepc[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
-      ex_pc_next = jalr_target_64[31:0];
+      ex_pc_d = jalr_target_64[31:0];
     else if (id_ex_q.valid & id_ex_q.dec.is_jal)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
     else if (branch_taken)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
     else
-      ex_pc_next = id_ex_q.is_16b ? id_ex_q.pc + 32'd2 : id_ex_q.pc + 32'd4;
+      ex_pc_d = id_ex_q.is_16b ? id_ex_q.pc + 32'd2 : id_ex_q.pc + 32'd4;
   end
 
   // STAGE3: branch predictor — misprediction detection and update
@@ -551,7 +552,7 @@ module kronos_top
   assign bpred_mispredict = id_ex_q.valid & (
     (id_ex_q.pred_taken & ~actual_taken) |
     (~id_ex_q.pred_taken & actual_taken) |
-    (id_ex_q.pred_taken & actual_taken & (id_ex_q.pred_target != ex_pc_next))
+    (id_ex_q.pred_taken & actual_taken & (id_ex_q.pred_target != ex_pc_d))
   );
 
   assign bpred_update_en = id_ex_q.valid & ex_mem_en & is_branch_or_jump;
@@ -563,13 +564,13 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      ex_mem_q <= '0;
+      ex_mem_q <= '{default: '0};
     end else if (ex_mem_en) begin
       ex_mem_q.pc         <= id_ex_q.pc;
       ex_mem_q.dec        <= id_ex_q.dec;
       ex_mem_q.alu_result <= ex_result;
       ex_mem_q.rs2_data   <= fwd_rs2_data;
-      ex_mem_q.pc_next    <= ex_pc_next;
+      ex_mem_q.pc_next    <= ex_pc_d;
       ex_mem_q.csr_rdata  <= csr_rdata;
       ex_mem_q.redirect   <= ex_redirect;
       ex_mem_q.valid      <= id_ex_q.valid & ~irq_pending;
@@ -597,7 +598,7 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      mem_wb_q <= '0;
+      mem_wb_q <= '{default: '0};
     end else if (mem_wb_en) begin
       mem_wb_q.dec        <= ex_mem_q.dec;
       mem_wb_q.alu_result <= ex_mem_q.alu_result;

@@ -26,31 +26,31 @@ module kronos_lsu
   input  logic             rst_ni,
 
   // Pipeline interface (64-bit data)
-  // Stage 6b: addr_i is the *translated physical address* coming from the
+  // addr_i is the *translated physical address* coming from the
   // dTLB (muxed into the pipeline at kronos_top).  The LSU treats it
   // identically to the previous untranslated address; on a dTLB miss the
   // request is suppressed via tlb_miss_i below until the refill completes.
   input  logic             req_i,
   input  logic             we_i,
   input  logic [31:0]      addr_i,
-  input  logic [63:0]      wdata_i,
+  input  logic [XLEN-1:0]  wdata_i,
   input  logic [2:0]       funct3_i,
-  output logic [63:0]      rdata_o,
+  output logic [XLEN-1:0]  rdata_o,
   output logic             valid_o,
   output logic             mem_stall_o,
 
   // FP load/store extensions (Stage 5)
   input  logic             fp_dest_req_i,    // this is a FP load/store
-  input  logic [63:0]      fp_store_data_i,  // FP register data for FSW/FSD
+  input  logic [FLEN-1:0]  fp_store_data_i,  // FP register data for FSW/FSD
   output logic             fp_dest_rsp_o,    // load response targets FP regfile
-  output logic [63:0]      fp_rdata_o,       // NaN-boxed FP load data
+  output logic [FLEN-1:0]  fp_rdata_o,       // NaN-boxed FP load data
 
   // A-extension
   input  logic             is_lr_i,
   input  logic             is_sc_i,
   input  logic             is_amo_i,
   input  logic [4:0]       amo_funct5_i,
-  input  logic [63:0]      amo_src_i,
+  input  logic [XLEN-1:0]  amo_src_i,
   output logic             sc_success_o,
 
   // PMP fault input (asserted by u_pmp_data in kronos_top on a permission
@@ -65,7 +65,7 @@ module kronos_lsu
   input  logic             amo_nc_fault_i,
   input  logic             bus_err_fault_i,
 
-  // Stage 6b: dTLB miss input (asserted by u_dtlb in kronos_top while a
+  // dTLB miss input (asserted by u_dtlb in kronos_top while a
   // page-table walk is in progress).  When high, the LSU must not issue a
   // dcache request and must hold the pipeline stalled until the dTLB refills
   // and tlb_miss_i deasserts.  Page-fault is signalled separately and taken
@@ -74,17 +74,32 @@ module kronos_lsu
 
   // D-cache interface (replaces direct AXI master)
   output logic             dcache_req_o,
-  output logic [63:0]      dcache_addr_o,
+  output logic [XLEN-1:0]  dcache_addr_o,
   output logic [2:0]       dcache_size_o,
   output logic             dcache_we_o,
-  output logic [63:0]      dcache_wdata_o,
+  output logic [XLEN-1:0]  dcache_wdata_o,
   output logic             dcache_amo_req_o,
   output logic [4:0]       dcache_amo_op_o,
   input  logic             dcache_data_valid_i,
-  input  logic [63:0]      dcache_rdata_i,
+  input  logic [XLEN-1:0]  dcache_rdata_i,
   input  logic             dcache_sc_success_i,
   input  logic             dcache_stall_i
 );
+
+  // -------------------------------------------------------------------------
+  // Constants
+  // -------------------------------------------------------------------------
+  // dcache size encoding (matches AXI AxSIZE log2(bytes)).
+  localparam logic [2:0] DC_SIZE_B = 3'd0;  // byte
+  localparam logic [2:0] DC_SIZE_H = 3'd1;  // halfword
+  localparam logic [2:0] DC_SIZE_W = 3'd2;  // word
+  localparam logic [2:0] DC_SIZE_D = 3'd3;  // doubleword
+
+  // -------------------------------------------------------------------------
+  // Internal signals
+  // -------------------------------------------------------------------------
+  // Tie-off for ports consumed by dcache directly.
+  logic _unused;
 
   // -------------------------------------------------------------------------
   // funct3 → dcache size encoding: 0=byte, 1=halfword, 2=word, 3=double.
@@ -92,15 +107,16 @@ module kronos_lsu
   // counterparts; the difference is applied in the sign-extension mux below.
   // -------------------------------------------------------------------------
   always_comb begin
+    dcache_size_o = DC_SIZE_D;
     unique case (funct3_i)
-      3'b000: dcache_size_o = 3'd0;     // LB  / SB
-      3'b001: dcache_size_o = 3'd1;     // LH  / SH
-      3'b010: dcache_size_o = 3'd2;     // LW  / SW
-      3'b011: dcache_size_o = 3'd3;     // LD  / SD
-      3'b100: dcache_size_o = 3'd0;     // LBU
-      3'b101: dcache_size_o = 3'd1;     // LHU
-      3'b110: dcache_size_o = 3'd2;     // LWU
-      default: dcache_size_o = 3'd3;
+      3'b000: dcache_size_o = DC_SIZE_B;  // LB  / SB
+      3'b001: dcache_size_o = DC_SIZE_H;  // LH  / SH
+      3'b010: dcache_size_o = DC_SIZE_W;  // LW  / SW
+      3'b011: dcache_size_o = DC_SIZE_D;  // LD  / SD
+      3'b100: dcache_size_o = DC_SIZE_B;  // LBU
+      3'b101: dcache_size_o = DC_SIZE_H;  // LHU
+      3'b110: dcache_size_o = DC_SIZE_W;  // LWU
+      default: dcache_size_o = DC_SIZE_D;
     endcase
   end
 
@@ -125,11 +141,11 @@ module kronos_lsu
   // loop concern, but bus errors occur mid-transaction rather than at IDLE,
   // so suppressing the req at that point is unnecessary and confusing.
   //
-  // Stage 6b: a dTLB miss likewise suppresses the dcache request (and AMO
+  // a dTLB miss likewise suppresses the dcache request (and AMO
   // request) so no cache lookup happens until the page-table walker has
   // refilled the dTLB and produced a translated PA.
   assign dcache_req_o     = req_i & ~pmp_fault_i & ~tlb_miss_i;
-  assign dcache_addr_o    = {32'b0, addr_i};
+  assign dcache_addr_o    = {{(XLEN-32){1'b0}}, addr_i};
   assign dcache_we_o      = we_i;
   assign dcache_wdata_o   = fp_dest_req_i ? fp_store_data_i : wdata_i;
   assign dcache_amo_req_o = (is_lr_i | is_sc_i | is_amo_i) & ~pmp_fault_i & ~tlb_miss_i;
@@ -145,18 +161,19 @@ module kronos_lsu
   // meaningful load data for SC.
   // -------------------------------------------------------------------------
   always_comb begin
+    rdata_o = dcache_rdata_i;
     if (is_sc_i) begin
       // SC result: 0 = success, 1 = failure
-      rdata_o = {63'b0, ~dcache_sc_success_i};
+      rdata_o = {{(XLEN-1){1'b0}}, ~dcache_sc_success_i};
     end else begin
       unique case (funct3_i)
-        3'b000: rdata_o = {{56{dcache_rdata_i[7]}},  dcache_rdata_i[7:0]};   // LB
-        3'b001: rdata_o = {{48{dcache_rdata_i[15]}}, dcache_rdata_i[15:0]};  // LH
-        3'b010: rdata_o = {{32{dcache_rdata_i[31]}}, dcache_rdata_i[31:0]};  // LW
-        3'b011: rdata_o = dcache_rdata_i;                                    // LD
-        3'b100: rdata_o = {56'b0, dcache_rdata_i[7:0]};                      // LBU
-        3'b101: rdata_o = {48'b0, dcache_rdata_i[15:0]};                     // LHU
-        3'b110: rdata_o = {32'b0, dcache_rdata_i[31:0]};                     // LWU
+        3'b000: rdata_o = {{(XLEN-8){dcache_rdata_i[7]}},   dcache_rdata_i[7:0]};   // LB
+        3'b001: rdata_o = {{(XLEN-16){dcache_rdata_i[15]}}, dcache_rdata_i[15:0]};  // LH
+        3'b010: rdata_o = {{(XLEN-32){dcache_rdata_i[31]}}, dcache_rdata_i[31:0]};  // LW
+        3'b011: rdata_o = dcache_rdata_i;                                           // LD
+        3'b100: rdata_o = {{(XLEN-8){1'b0}},   dcache_rdata_i[7:0]};                // LBU
+        3'b101: rdata_o = {{(XLEN-16){1'b0}},  dcache_rdata_i[15:0]};               // LHU
+        3'b110: rdata_o = {{(XLEN-32){1'b0}},  dcache_rdata_i[31:0]};               // LWU
         default: rdata_o = dcache_rdata_i;
       endcase
     end
@@ -170,10 +187,11 @@ module kronos_lsu
   // pipeline routes the result to the FP register file.
   // -------------------------------------------------------------------------
   always_comb begin
+    fp_rdata_o = {FLEN{1'b0}};
     unique case (funct3_i)
-      3'b010: fp_rdata_o = {FP_NANBOX_UPPER, dcache_rdata_i[31:0]};  // FLW: NaN-box
-      3'b011: fp_rdata_o = dcache_rdata_i;                           // FLD: full 64-bit
-      default: fp_rdata_o = {64{1'b0}};
+      3'b010: fp_rdata_o = {FP_NANBOX_UPPER, dcache_rdata_i[FP_S_TOTAL_W-1:0]};  // FLW: NaN-box
+      3'b011: fp_rdata_o = dcache_rdata_i;                                       // FLD: full 64-bit
+      default: fp_rdata_o = {FLEN{1'b0}};
     endcase
   end
 
@@ -212,7 +230,7 @@ module kronos_lsu
   // raises them combinationally at IDLE without starting any AXI transaction,
   // so the pipeline must also not stall when either is asserted.
   //
-  // Stage 6b: while tlb_miss_i is asserted, no dcache transaction has been
+  // while tlb_miss_i is asserted, no dcache transaction has been
   // issued yet, but the pipeline must remain stalled until the dTLB refills.
   // tlb_miss_i is therefore an explicit stall source alongside the dcache
   // not-yet-valid / stall conditions.
@@ -222,7 +240,6 @@ module kronos_lsu
   assign sc_success_o = dcache_sc_success_i;
 
   // Suppress unused-input warnings for ports consumed by dcache directly.
-  logic _unused;
   assign _unused = ^{clk_i, rst_ni, amo_src_i};
 
 endmodule

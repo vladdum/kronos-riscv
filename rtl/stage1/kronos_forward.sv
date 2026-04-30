@@ -35,14 +35,15 @@ module kronos_forward
   output fwd_sel_e   fwd_rs2_sel_o
 );
 
+  // Combinational signals
   // Integer-forward predicates. rd_fp suppresses bypass so a shared rd index
   // (e.g. FLW to ft11 = f31 and ADDI to t6 = x31) does not poison the
   // integer consumer with the FP producer's value.
   logic ex_can_fwd;
-  assign ex_can_fwd = id_ex_rd_wen_i && !id_ex_rd_fp_i && !id_ex_is_load_i
-                      && (id_ex_rd_i != 5'd0);
-
   logic mem_can_fwd;
+
+  assign ex_can_fwd  = id_ex_rd_wen_i && !id_ex_rd_fp_i && !id_ex_is_load_i
+                       && (id_ex_rd_i != 5'd0);
   assign mem_can_fwd = ex_mem_rd_wen_i && !ex_mem_rd_fp_i && (ex_mem_rd_i != 5'd0);
 
   always_comb begin
@@ -57,10 +58,12 @@ module kronos_forward
 
     // MEM path — only if EX path did not already forward that operand
     if (mem_can_fwd) begin
-      if (if_id_rs1_used_i && if_id_rs1_i == ex_mem_rd_i && fwd_rs1_sel_o == FWD_NONE)
+      if (if_id_rs1_used_i && if_id_rs1_i == ex_mem_rd_i && fwd_rs1_sel_o == FWD_NONE) begin
         fwd_rs1_sel_o = FWD_MEMWB;
-      if (if_id_rs2_used_i && if_id_rs2_i == ex_mem_rd_i && fwd_rs2_sel_o == FWD_NONE)
+      end
+      if (if_id_rs2_used_i && if_id_rs2_i == ex_mem_rd_i && fwd_rs2_sel_o == FWD_NONE) begin
         fwd_rs2_sel_o = FWD_MEMWB;
+      end
     end
   end
 

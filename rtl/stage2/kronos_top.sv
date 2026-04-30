@@ -73,13 +73,14 @@ module kronos_top
   logic [31:0] fwd_rs1_data, fwd_rs2_data;
   logic [31:0] alu_a, alu_b, alu_result;
   logic [31:0] ex_result;      // STAGE2: mux of alu_result vs muldiv_result
-  logic [31:0] ex_pc_next;
+  logic [31:0] ex_pc_d;
   logic        ex_redirect;
   logic        branch_taken;
   logic        irq_pending;
   logic [31:0] csr_rdata, trap_vector, mepc;
   logic [31:0] trap_cause;
   logic        csr_valid;
+  logic [31:0] pc_d;            // PC next-state combinational driver
 
   // STAGE2: muldiv signals
   logic [31:0] muldiv_result;
@@ -271,12 +272,11 @@ module kronos_top
   // =========================================================================
   // PC register
   // =========================================================================
-  logic [31:0] pc_next;
-  assign pc_next = ex_redirect ? ex_pc_next : pc_q + 32'd4;
+  assign pc_d = ex_redirect ? ex_pc_d : pc_q + 32'd4;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) pc_q <= boot_addr_i;
-    else if (pc_en) pc_q <= pc_next;
+    if (!rst_ni)    pc_q <= boot_addr_i;
+    else if (pc_en) pc_q <= pc_d;
   end
 
   // =========================================================================
@@ -287,9 +287,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_flush) begin
-      if_id_q <= '0;
+      if_id_q <= '{default: '0};
     end else if (if_id_en) begin
       if_id_q.pc    <= pc_q;
       if_id_q.instr <= instr_rdata_i;
@@ -304,9 +304,9 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_flush) begin
-      id_ex_q <= '0;
+      id_ex_q <= ID_EX_REG_ZERO;
     end else if (id_ex_en) begin
       id_ex_q.pc          <= if_id_q.pc;
       id_ex_q.dec         <= id_dec;
@@ -370,17 +370,17 @@ module kronos_top
   always_comb begin
     if      (id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
                                id_ex_q.dec.illegal  | irq_pending))
-      ex_pc_next = trap_vector;
+      ex_pc_d = trap_vector;
     else if (id_ex_q.valid & id_ex_q.dec.is_mret)
-      ex_pc_next = mepc;
+      ex_pc_d = mepc;
     else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
-      ex_pc_next = (fwd_rs1_data + id_ex_q.dec.imm) & ~32'd1;
+      ex_pc_d = (fwd_rs1_data + id_ex_q.dec.imm) & ~32'd1;
     else if (id_ex_q.valid & id_ex_q.dec.is_jal)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
     else if (branch_taken)
-      ex_pc_next = id_ex_q.pc + id_ex_q.dec.imm;
+      ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
     else
-      ex_pc_next = id_ex_q.pc + 32'd4;
+      ex_pc_d = id_ex_q.pc + 32'd4;
   end
 
   assign ex_redirect = id_ex_q.valid &
@@ -390,13 +390,13 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      ex_mem_q <= '0;
+      ex_mem_q <= '{default: '0};
     end else if (ex_mem_en) begin
       ex_mem_q.pc         <= id_ex_q.pc;
       ex_mem_q.dec        <= id_ex_q.dec;
       ex_mem_q.alu_result <= {{32{ex_result[31]}}, ex_result};     // STAGE2: ex_result, not alu_result
       ex_mem_q.rs2_data   <= {{32{fwd_rs2_data[31]}}, fwd_rs2_data};
-      ex_mem_q.pc_next    <= ex_pc_next;
+      ex_mem_q.pc_next    <= ex_pc_d;
       ex_mem_q.csr_rdata  <= {32'b0, csr_rdata};
       ex_mem_q.redirect   <= ex_redirect;
       // Squash valid on IRQ: instruction is re-fetched after MRET
@@ -428,7 +428,7 @@ module kronos_top
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      mem_wb_q <= '0;
+      mem_wb_q <= '{default: '0};
     end else if (mem_wb_en) begin
       mem_wb_q.dec        <= ex_mem_q.dec;
       mem_wb_q.alu_result <= ex_mem_q.alu_result;

@@ -15,14 +15,17 @@ module kronos_regfile (
   input  logic [63:0] rd_wdata_i
 );
 
-  logic [63:0] regs [32];
+  // -------------------------------------------------------------------------
+  // State registers (driven by always_ff)
+  // -------------------------------------------------------------------------
+  logic [63:0] regs_q [32];
 
   always_ff @(posedge clk_i) begin
     if (rd_wen_i && rd_addr_i != 5'd0)
-      regs[rd_addr_i] <= rd_wdata_i;
+      regs_q[rd_addr_i] <= rd_wdata_i;
   end
 
-  assign rs1_rdata_o = (rs1_addr_i == 5'd0) ? 64'd0 : regs[rs1_addr_i];
-  assign rs2_rdata_o = (rs2_addr_i == 5'd0) ? 64'd0 : regs[rs2_addr_i];
+  assign rs1_rdata_o = (rs1_addr_i == 5'd0) ? 64'd0 : regs_q[rs1_addr_i];
+  assign rs2_rdata_o = (rs2_addr_i == 5'd0) ? 64'd0 : regs_q[rs2_addr_i];
 
 endmodule

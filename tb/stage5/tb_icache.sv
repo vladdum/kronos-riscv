@@ -68,7 +68,7 @@ module tb_icache;
   assign word_hi_idx = word_lo_idx + 16'd1;
 
   always_comb begin
-    axi_rsp = '0;
+    axi_rsp = '{default: '0};
     axi_rsp.ar_ready = ~burst_pending_q;
     axi_rsp.r_valid  = burst_pending_q;
     axi_rsp.r.data   = {tb_mem[word_hi_idx], tb_mem[word_lo_idx]};

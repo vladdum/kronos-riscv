@@ -40,7 +40,7 @@ module tb_regfile;
   initial clk = 0;
 
   initial begin
-    rs2_addr = '0;
+    rs2_addr = 5'd0;
     rd_wen   = 0;
     @(posedge clk); #1;
 

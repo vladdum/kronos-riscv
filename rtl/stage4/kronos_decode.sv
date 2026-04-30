@@ -11,8 +11,8 @@
 //   - OP-32    (0111011): ADDW/SUBW/SLLW/SRLW/SRAW + MULW/DIVW/DIVUW/REMW/REMUW
 //   - AMO      (0101111): LR/SC/AMO*
 // Defaults for new fields (is_word_op, is_lr, is_sc, is_amo, amo_funct5) come
-// from the `dec_o = '0;` line at the top of always_comb, which zero-initialises
-// the entire decoded_instr_t struct.
+// from the DECODED_INSTR_ZERO assignment at the top of always_comb, which
+// zero-initialises every field of the decoded_instr_t struct.
 module kronos_decode
   import kronos_pkg::*;
 (
@@ -20,22 +20,7 @@ module kronos_decode
   output decoded_instr_t dec_o
 );
 
-  // Instruction fields
-  logic [6:0] opcode;
-  logic [4:0] rd;
-  logic [2:0] funct3;
-  logic [4:0] rs1;
-  logic [4:0] rs2;
-  logic [6:0] funct7;
-
-  assign opcode = instr_i[6:0];
-  assign rd     = instr_i[11:7];
-  assign funct3 = instr_i[14:12];
-  assign rs1    = instr_i[19:15];
-  assign rs2    = instr_i[24:20];
-  assign funct7 = instr_i[31:25];
-
-  // Opcode constants
+  // 1. Constants — opcode encodings
   localparam logic [6:0] OP         = 7'b011_0011; // R-type
   localparam logic [6:0] OP_IMM     = 7'b001_0011; // I-type ALU
   localparam logic [6:0] OP_IMM_32  = 7'b001_1011; // RV64 I-type ALU-W
@@ -50,8 +35,23 @@ module kronos_decode
   localparam logic [6:0] SYSTEM     = 7'b111_0011;
   localparam logic [6:0] AMO        = 7'b010_1111;
 
+  // 4. Combinational signals — instruction fields
+  logic [6:0] opcode;
+  logic [4:0] rd;
+  logic [2:0] funct3;
+  logic [4:0] rs1;
+  logic [4:0] rs2;
+  logic [6:0] funct7;
+
+  assign opcode = instr_i[6:0];
+  assign rd     = instr_i[11:7];
+  assign funct3 = instr_i[14:12];
+  assign rs1    = instr_i[19:15];
+  assign rs2    = instr_i[24:20];
+  assign funct7 = instr_i[31:25];
+
   always_comb begin
-    dec_o          = '0;
+    dec_o          = DECODED_INSTR_ZERO;
     dec_o.rs1      = rs1;
     dec_o.rs2      = rs2;
     dec_o.rd       = rd;

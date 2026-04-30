@@ -145,6 +145,11 @@ module tb_crv_cov;
   logic [ 1:0] instr_ar_burst_q;  // captured AR burst type
   logic [ 7:0] instr_beat_q;      // current beat index (0..len)
 
+  // TB beat-tracking helpers (promoted from `automatic` block-locals; see R2).
+  logic [63:0] instr_beat0_addr;
+  logic [ 7:0] instr_next_beat;
+  logic [63:0] instr_next_addr;
+
   // Beat-address helper: returns byte address for beat b of a WRAP/INCR burst.
   function automatic logic [63:0] burst_addr(
     input logic [63:0] base,
@@ -152,8 +157,8 @@ module tb_crv_cov;
     input logic [ 1:0] burst_type, // 01=INCR 10=WRAP
     input logic [ 7:0] beat
   );
-    automatic logic [63:0] off;
-    automatic logic [63:0] line_mask;
+    logic [63:0] off;
+    logic [63:0] line_mask;
     off = {53'h0, beat, 3'h0};  // beat * 8 bytes (64-bit beats)
     if (burst_type == 2'b10) begin
       // WRAP: mask = ((len+1)*8 - 1), for len=7 → 0x3F
@@ -185,14 +190,13 @@ module tb_crv_cov;
     end else begin
       if (!instr_r_pend && instr_req.ar_valid) begin
         // Capture AR and prepare first beat
-        automatic logic [63:0] beat0_addr;
         instr_ar_addr_q  <= instr_req.ar.addr;
         instr_ar_len_q   <= instr_req.ar.len;
         instr_ar_burst_q <= instr_req.ar.burst;
         instr_beat_q     <= 8'd0;
-        beat0_addr       = burst_addr(instr_req.ar.addr, instr_req.ar.len,
-                                      instr_req.ar.burst, 8'd0);
-        instr_r_data_q <= {mem[wa(beat0_addr)+1], mem[wa(beat0_addr)]};
+        instr_beat0_addr  = burst_addr(instr_req.ar.addr, instr_req.ar.len,
+                                       instr_req.ar.burst, 8'd0);
+        instr_r_data_q <= {mem[wa(instr_beat0_addr)+1], mem[wa(instr_beat0_addr)]};
         instr_r_last_q <= (instr_req.ar.len == 8'd0);
         instr_r_pend   <= 1'b1;
       end else if (instr_r_pend && instr_req.r_ready) begin
@@ -202,14 +206,12 @@ module tb_crv_cov;
           instr_beat_q  <= 8'd0;
         end else begin
           // Advance to next beat
-          automatic logic [ 7:0] next_beat;
-          automatic logic [63:0] next_addr;
-          next_beat      = instr_beat_q + 8'd1;
-          next_addr      = burst_addr(instr_ar_addr_q, instr_ar_len_q,
-                                      instr_ar_burst_q, next_beat);
-          instr_beat_q   <= next_beat;
-          instr_r_data_q <= {mem[wa(next_addr)+1], mem[wa(next_addr)]};
-          instr_r_last_q <= (next_beat == instr_ar_len_q);
+          instr_next_beat = instr_beat_q + 8'd1;
+          instr_next_addr = burst_addr(instr_ar_addr_q, instr_ar_len_q,
+                                       instr_ar_burst_q, instr_next_beat);
+          instr_beat_q   <= instr_next_beat;
+          instr_r_data_q <= {mem[wa(instr_next_addr)+1], mem[wa(instr_next_addr)]};
+          instr_r_last_q <= (instr_next_beat == instr_ar_len_q);
         end
       end
     end
@@ -226,6 +228,16 @@ module tb_crv_cov;
   logic [ 1:0] data_ar_burst_q;
   logic [ 7:0] data_r_beat;
   logic [63:0] data_r_data_q;
+  // TB beat-tracking helpers (promoted from `automatic` block-locals; see R2).
+  logic [ 7:0] data_nb;
+  logic [63:0] data_na;
+  logic [63:0] data_waddr;
+  int          data_wi_lo;
+  int          data_wi_hi;
+  // Mem-coverage helpers (promoted from `automatic` block-locals; see R2).
+  logic [1:0]  cov_msize;
+  logic [2:0]  cov_maddr3;
+  int          cov_align_bucket;
   // Write channel
   logic        data_aw_pend;
   logic [63:0] data_aw_addr_q;
@@ -276,13 +288,11 @@ module tb_crv_cov;
           data_r_pend <= 1'b0;
           data_r_beat <= 8'd0;
         end else begin
-          automatic logic [ 7:0] nb;
-          automatic logic [63:0] na;
-          nb            = data_r_beat + 8'd1;
-          na            = burst_addr(data_ar_addr_q, data_ar_len_q,
-                                     data_ar_burst_q, nb);
-          data_r_beat   <= nb;
-          data_r_data_q <= {mem[wa(na)+1], mem[wa(na)]};
+          data_nb       = data_r_beat + 8'd1;
+          data_na       = burst_addr(data_ar_addr_q, data_ar_len_q,
+                                     data_ar_burst_q, data_nb);
+          data_r_beat   <= data_nb;
+          data_r_data_q <= {mem[wa(data_na)+1], mem[wa(data_na)]};
         end
       end
 
@@ -296,20 +306,18 @@ module tb_crv_cov;
 
       // W channel write beats
       if (data_aw_pend && data_req.w_valid) begin
-        automatic logic [63:0] waddr;
-        automatic int wi_lo, wi_hi;
-        waddr  = data_aw_addr_q + {56'b0, data_w_beat} * 8;
-        wi_lo  = int'({waddr[16:3], 1'b0});
-        wi_hi  = wi_lo + 1;
-        if ((waddr & 64'hC000_0000) != 64'h4000_0000) begin
-          if (data_req.w.strb[0]) mem[wi_lo][ 7: 0] <= data_req.w.data[ 7: 0];
-          if (data_req.w.strb[1]) mem[wi_lo][15: 8] <= data_req.w.data[15: 8];
-          if (data_req.w.strb[2]) mem[wi_lo][23:16] <= data_req.w.data[23:16];
-          if (data_req.w.strb[3]) mem[wi_lo][31:24] <= data_req.w.data[31:24];
-          if (data_req.w.strb[4]) mem[wi_hi][ 7: 0] <= data_req.w.data[39:32];
-          if (data_req.w.strb[5]) mem[wi_hi][15: 8] <= data_req.w.data[47:40];
-          if (data_req.w.strb[6]) mem[wi_hi][23:16] <= data_req.w.data[55:48];
-          if (data_req.w.strb[7]) mem[wi_hi][31:24] <= data_req.w.data[63:56];
+        data_waddr = data_aw_addr_q + {56'b0, data_w_beat} * 8;
+        data_wi_lo = int'({data_waddr[16:3], 1'b0});
+        data_wi_hi = data_wi_lo + 1;
+        if ((data_waddr & 64'hC000_0000) != 64'h4000_0000) begin
+          if (data_req.w.strb[0]) mem[data_wi_lo][ 7: 0] <= data_req.w.data[ 7: 0];
+          if (data_req.w.strb[1]) mem[data_wi_lo][15: 8] <= data_req.w.data[15: 8];
+          if (data_req.w.strb[2]) mem[data_wi_lo][23:16] <= data_req.w.data[23:16];
+          if (data_req.w.strb[3]) mem[data_wi_lo][31:24] <= data_req.w.data[31:24];
+          if (data_req.w.strb[4]) mem[data_wi_hi][ 7: 0] <= data_req.w.data[39:32];
+          if (data_req.w.strb[5]) mem[data_wi_hi][15: 8] <= data_req.w.data[47:40];
+          if (data_req.w.strb[6]) mem[data_wi_hi][23:16] <= data_req.w.data[55:48];
+          if (data_req.w.strb[7]) mem[data_wi_hi][31:24] <= data_req.w.data[63:56];
         end
         data_w_beat <= data_w_beat + 8'd1;
         if (data_req.w.last) begin
@@ -586,17 +594,14 @@ module tb_crv_cov;
   always_ff @(posedge clk) begin
     if (is_mem_op) begin
       // size = funct3[1:0], align bucket = retire_mem_addr[2:0]
-      automatic logic [1:0] msize;
-      automatic logic [2:0] maddr3;
-      automatic int         align_bucket; // 0=aligned_8 1=off4 2=off2 3=odd
-      msize  = funct3[1:0];
-      maddr3 = retire_mem_addr[2:0];
-      if      (maddr3 == 3'b000)                                       align_bucket = 0;
-      else if (maddr3 == 3'b100)                                       align_bucket = 1;
-      else if (maddr3 == 3'b010 || maddr3 == 3'b110)                  align_bucket = 2;
-      else                                                              align_bucket = 3;
+      cov_msize  = funct3[1:0];
+      cov_maddr3 = retire_mem_addr[2:0];
+      if      (cov_maddr3 == 3'b000)                                       cov_align_bucket = 0;
+      else if (cov_maddr3 == 3'b100)                                       cov_align_bucket = 1;
+      else if (cov_maddr3 == 3'b010 || cov_maddr3 == 3'b110)               cov_align_bucket = 2;
+      else                                                                  cov_align_bucket = 3;
 
-      unique case ({msize, 2'(align_bucket)})
+      unique case ({cov_msize, 2'(cov_align_bucket)})
         4'b0000: cov_mem_byte_aligned   <= 1'b1;
         4'b0001: cov_mem_byte_off4      <= 1'b1;
         4'b0010: cov_mem_byte_off2      <= 1'b1;

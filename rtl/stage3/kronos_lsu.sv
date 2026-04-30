@@ -25,7 +25,7 @@ module kronos_lsu
 );
 
   // -------------------------------------------------------------------------
-  // FSM state
+  // 1. Types
   // -------------------------------------------------------------------------
   typedef enum logic [2:0] {
     IDLE       = 3'd0,
@@ -37,11 +37,10 @@ module kronos_lsu
     STORE_DONE = 3'd6
   } lsu_state_e;
 
-  lsu_state_e state_q;
-
   // -------------------------------------------------------------------------
-  // Registered operands (captured at IDLE→non-IDLE transition)
+  // 2. State registers (captured at IDLE → non-IDLE transition)
   // -------------------------------------------------------------------------
+  lsu_state_e  state_q;
   logic [31:0] addr_q;
   logic [31:0] wdata_q;
   logic [2:0]  funct3_q;
@@ -50,10 +49,18 @@ module kronos_lsu
   logic        w_acked_q;
 
   // -------------------------------------------------------------------------
-  // Byte-enable and store-data replication (64-bit AXI beat, lane by addr[2])
+  // 3. Combinational signals
   // -------------------------------------------------------------------------
+  // Byte-enable and store-data replication (64-bit AXI beat, lane by addr[2])
   logic [ 7:0] be;
   logic [63:0] wdata_rep;
+
+  // Load-data extraction and sign extension
+  logic [31:0] rdata_lane;
+  logic [1:0]  byte_off;
+  logic [31:0] rdata_shifted;
+  logic [7:0]  raw_byte;
+  logic [15:0] raw_half;
 
   always_comb begin
     be = 8'hFF;
@@ -74,15 +81,6 @@ module kronos_lsu
       default: wdata_rep = {2{wdata_q}};
     endcase
   end
-
-  // -------------------------------------------------------------------------
-  // Load-data extraction and sign extension
-  // -------------------------------------------------------------------------
-  logic [31:0] rdata_lane;
-  logic [1:0]  byte_off;
-  logic [31:0] rdata_shifted;
-  logic [7:0]  raw_byte;
-  logic [15:0] raw_half;
 
   assign rdata_lane    = addr_q[2] ? rdata_q[63:32] : rdata_q[31:0];
   assign byte_off      = addr_q[1:0];
@@ -175,7 +173,7 @@ module kronos_lsu
   // AXI4 request outputs — single 64-bit beat per access
   // -------------------------------------------------------------------------
   always_comb begin
-    axi_req_o = '0;
+    axi_req_o = '{default: '0};
     unique case (state_q)
       LOAD_ADDR: begin
         axi_req_o.ar_valid = 1'b1;

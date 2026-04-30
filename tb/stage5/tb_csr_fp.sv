@@ -20,11 +20,11 @@ module tb_csr_fp;
   logic        trap = 0, mret = 0;
   logic [31:0] trap_pc = 0, trap_cause = 0;
   logic [63:0] trap_vector, mepc_out;
-  logic [4:0]  fflags_delta = '0;
+  logic [4:0]  fflags_delta = 5'h0;
   logic        fflags_we = 0;
   logic [2:0]  frm;
   logic        irq_timer = 0;
-  logic [14:0] irq_fast = '0;
+  logic [14:0] irq_fast = 15'h0;
   logic        irq_pending;
 
   kronos_csr u_dut (

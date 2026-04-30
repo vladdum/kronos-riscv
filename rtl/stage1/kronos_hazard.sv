@@ -57,6 +57,7 @@ module kronos_hazard
   output logic       id_ex_flush_o
 );
 
+  // Combinational signals
   logic load_use;
   logic fp_load_use;
   logic jalr_fwd_stall;
@@ -75,7 +76,7 @@ module kronos_hazard
 
   // JALR in ID with rs1 matching the instruction in MEM (about to enter WB).
   // Stalling 1 cycle converts MEM/WB forward into EX/MEM forward or regfile read,
-  // breaking the JALR adder → mispredict comparator carry-chain path (class 2).
+  // breaking the JALR adder -> mispredict comparator carry-chain path (class 2).
   assign jalr_fwd_stall = if_id_is_jalr_i &&
                            ex_mem_valid_i && ex_mem_rd_wen_i &&
                            (ex_mem_rd_i != 5'd0) &&
@@ -109,7 +110,7 @@ module kronos_hazard
       pc_en_o       = 1'b0;
       if_id_en_o    = 1'b0;
       id_ex_en_o    = 1'b0;
-      id_ex_flush_o = 1'b1;   // flush overrides en → bubble in ID/EX
+      id_ex_flush_o = 1'b1;   // flush overrides en -> bubble in ID/EX
     end else if (ex_redirect_i | mem_redirect_i) begin
       // Priority 3: EX/MEM redirect — squash IF and ID.  Placed above
       // muldiv_stall so a wrong-path MUL (id_ex_q.valid=1, muldiv_valid=0)

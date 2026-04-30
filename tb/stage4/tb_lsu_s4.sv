@@ -53,10 +53,10 @@ module tb_lsu_s4;
   // 64-bit beat: return two consecutive 32-bit words (little-endian).
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      axi_rsp    <= '0;
+      axi_rsp    <= kronos_axi_resp_t'({$bits(kronos_axi_resp_t){1'b0}});
       ar_pending <= 0;
     end else begin
-      axi_rsp <= '0;
+      axi_rsp <= kronos_axi_resp_t'({$bits(kronos_axi_resp_t){1'b0}});
       axi_rsp.ar_ready <= 1;
       axi_rsp.aw_ready <= 1;
       axi_rsp.w_ready  <= 1;

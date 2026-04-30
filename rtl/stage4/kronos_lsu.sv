@@ -32,7 +32,7 @@ module kronos_lsu
 );
 
   // -------------------------------------------------------------------------
-  // FSM state
+  // 2. Types — FSM state encoding
   // -------------------------------------------------------------------------
   typedef enum logic [3:0] {
     IDLE        = 4'd0,
@@ -46,11 +46,11 @@ module kronos_lsu
     SC_FAIL     = 4'd8
   } lsu_state_e;
 
-  lsu_state_e state_q;
-
   // -------------------------------------------------------------------------
+  // 3. State registers
+  // -------------------------------------------------------------------------
+  lsu_state_e  state_q;
   // Registered operands (captured at IDLE→non-IDLE transition)
-  // -------------------------------------------------------------------------
   logic [31:0] addr_q;
   logic [63:0] wdata_q;
   logic [2:0]  funct3_q;
@@ -67,10 +67,27 @@ module kronos_lsu
   logic        sc_result_q;  // 0 = success, 1 = fail; presented in rdata_o on SC
 
   // -------------------------------------------------------------------------
-  // Byte-enable and store-data (64-bit AXI beat, lane selected by addr[2])
+  // 4. Combinational signals
   // -------------------------------------------------------------------------
+  // Byte-enable and store-data (64-bit AXI beat, lane selected by addr[2])
   logic [ 7:0] be;
   logic [63:0] wdata_rep;
+  // AMO compute datapath
+  logic        amo_is_word;
+  logic [63:0] amo_new_val;
+  logic [31:0] amo_a32;
+  logic [31:0] amo_b32;
+  logic [31:0] amo_r32;
+  logic [63:0] amo_a64;
+  logic [63:0] amo_b64;
+  // Load-data extraction and sign extension
+  logic [31:0] rdata_lane;
+  logic [1:0]  byte_off;
+  logic [31:0] rdata_shifted;
+  logic [7:0]  raw_byte;
+  logic [15:0] raw_half;
+  // AXI request address
+  logic [31:0] addr_aligned;
 
   always_comb begin
     be = 8'hFF;
@@ -99,14 +116,6 @@ module kronos_lsu
   // register-file source (amo_src_q), produce the value to be written back.
   // Word vs doubleword is selected from funct3_q (W=010, D=011).
   // -------------------------------------------------------------------------
-  logic        amo_is_word;
-  logic [63:0] amo_new_val;
-  logic [31:0] amo_a32;
-  logic [31:0] amo_b32;
-  logic [31:0] amo_r32;
-  logic [63:0] amo_a64;
-  logic [63:0] amo_b64;
-
   assign amo_is_word = (funct3_q[1:0] == 2'b10);
   assign amo_a32     = addr_q[2] ? rdata_q[63:32] : rdata_q[31:0];
   assign amo_b32     = amo_src_q[31:0];
@@ -156,12 +165,6 @@ module kronos_lsu
   // -------------------------------------------------------------------------
   // Load-data extraction and sign extension (64-bit result)
   // -------------------------------------------------------------------------
-  logic [31:0] rdata_lane;
-  logic [1:0]  byte_off;
-  logic [31:0] rdata_shifted;
-  logic [7:0]  raw_byte;
-  logic [15:0] raw_half;
-
   assign rdata_lane    = addr_q[2] ? rdata_q[63:32] : rdata_q[31:0];
   assign byte_off      = addr_q[1:0];
   assign rdata_shifted = rdata_lane >> ({3'b0, byte_off} * 4'd8);
@@ -306,11 +309,10 @@ module kronos_lsu
   // -------------------------------------------------------------------------
   // AXI4 request outputs — single 64-bit beat per access
   // -------------------------------------------------------------------------
-  logic [31:0] addr_aligned;
   assign addr_aligned = {addr_q[31:3], 3'b000};
 
   always_comb begin
-    axi_req_o = '0;
+    axi_req_o = kronos_axi_req_t'({$bits(kronos_axi_req_t){1'b0}});
     unique case (state_q)
       LOAD_ADDR: begin
         axi_req_o.ar_valid = 1'b1;

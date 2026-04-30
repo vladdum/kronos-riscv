@@ -45,7 +45,14 @@ module kronos_muldiv
 );
 
   // -------------------------------------------------------------------------
-  // FSM state encoding
+  // 1. Constants
+  // -------------------------------------------------------------------------
+  localparam logic [63:0] ALL_ONES_64 = 64'hFFFF_FFFF_FFFF_FFFF;
+  localparam logic [63:0] INT_MIN_64  = 64'h8000_0000_0000_0000;
+  localparam logic [63:0] INT_MIN_32  = 64'hFFFF_FFFF_8000_0000;
+
+  // -------------------------------------------------------------------------
+  // 2. Types — FSM state encoding
   // -------------------------------------------------------------------------
   typedef enum logic [1:0] {
     IDLE     = 2'd0,
@@ -54,30 +61,70 @@ module kronos_muldiv
     DONE     = 2'd3
   } muldiv_state_e;
 
+  // -------------------------------------------------------------------------
+  // 3. State registers
+  // -------------------------------------------------------------------------
   muldiv_state_e state_q;
+  logic [63:0]   result_q;
+  // Divider registers (restoring division)
+  logic [63:0]   dividend_q;   // left-shifted each step; MSB feeds remainder
+  logic [64:0]   remainder_q;  // 65-bit partial remainder (extra bit for borrow)
+  logic [63:0]   quotient_q;
+  logic [63:0]   abs_b_q;
+  logic [6:0]    count_q;      // counts down from 64 (or 32 for word_op)
+  logic          div_neg_q;    // negate quotient at end (signed DIV)
+  logic          rem_neg_q;    // negate remainder at end (signed REM)
+  logic          is_rem_q;     // 1 = REM/REMU, 0 = DIV/DIVU
+  logic          word_op_q;    // latch of word_op_i for this operation
 
   // -------------------------------------------------------------------------
-  // Stored result
-  // -------------------------------------------------------------------------
-  logic [63:0] result_q;
-
+  // 4. Combinational signals
   // -------------------------------------------------------------------------
   // Multiplier (combinational 65x65 -> 130-bit signed product)
-  // -------------------------------------------------------------------------
-  logic        mul_signed_a;
-  logic        mul_signed_b;
-  logic [31:0] mul_a_low;
-  logic [31:0] mul_b_low;
-  logic        mul_a_sign_bit;
-  logic        mul_b_sign_bit;
-  logic [63:0] mul_a_eff;
-  logic [63:0] mul_b_eff;
-  logic [64:0] mul_a65;
-  logic [64:0] mul_b65;
+  logic                mul_signed_a;
+  logic                mul_signed_b;
+  logic [31:0]         mul_a_low;
+  logic [31:0]         mul_b_low;
+  logic                mul_a_sign_bit;
+  logic                mul_b_sign_bit;
+  logic [63:0]         mul_a_eff;
+  logic [63:0]         mul_b_eff;
+  logic [64:0]         mul_a65;
+  logic [64:0]         mul_b65;
   logic signed [129:0] mul_product;
-  logic [63:0] mul_result_comb;
-  logic [63:0] mul_result_final;
+  logic [63:0]         mul_result_comb;
+  logic [63:0]         mul_result_final;
 
+  // IDLE → division setup combinational signals
+  logic                is_signed_div;
+  logic                a_sign_bit;
+  logic                b_sign_bit;
+  logic [63:0]         a_eff;
+  logic [63:0]         b_eff;
+  logic                neg_a;
+  logic                neg_b;
+  logic [63:0]         abs_a;
+  logic [63:0]         abs_b;
+  logic                b_is_zero;
+  logic                ov_div;
+  logic                ov_rem;
+  logic [63:0]         int_min;
+
+  // Restoring-division step
+  logic [64:0]         rem_shifted;
+  logic [64:0]         rem_sub;
+  logic [63:0]         div_shifted;
+
+  // Final-step divider result composition
+  logic [63:0]         final_quot;
+  logic [63:0]         final_rem;
+  logic [63:0]         signed_quot;
+  logic [63:0]         signed_rem;
+  logic [63:0]         pre_result;
+
+  // -------------------------------------------------------------------------
+  // Multiplier operand shaping
+  // -------------------------------------------------------------------------
   // MUL, MULH, MULHSU treat A as signed; MULHU is unsigned.
   assign mul_signed_a = (op_i == MULDIV_MUL) | (op_i == MULDIV_MULH) | (op_i == MULDIV_MULHSU);
   // MUL, MULH treat B as signed; MULHSU and MULHU are unsigned in B.
@@ -99,6 +146,7 @@ module kronos_muldiv
 
   // Select high or low half of the product depending on op.
   always_comb begin
+    mul_result_comb = mul_product[63:0];
     unique case (op_i)
       MULDIV_MUL:    mul_result_comb = mul_product[63:0];
       MULDIV_MULH:   mul_result_comb = mul_product[127:64];
@@ -114,26 +162,48 @@ module kronos_muldiv
                           : mul_result_comb;
 
   // -------------------------------------------------------------------------
-  // Divider registers (restoring division)
+  // Divider setup (combinational, used in IDLE on req_i)
   // -------------------------------------------------------------------------
-  logic [63:0] dividend_q;   // left-shifted each step; MSB feeds remainder
-  logic [64:0] remainder_q;  // 65-bit partial remainder (extra bit for borrow)
-  logic [63:0] quotient_q;
-  logic [63:0] abs_b_q;
-  logic [6:0]  count_q;      // counts down from 64 (or 32 for word_op)
-  logic        div_neg_q;    // negate quotient at end (signed DIV)
-  logic        rem_neg_q;    // negate remainder at end (signed REM)
-  logic        is_rem_q;     // 1 = REM/REMU, 0 = DIV/DIVU
-  logic        word_op_q;    // latch of word_op_i for this operation
+  assign is_signed_div = (op_i == MULDIV_DIV) | (op_i == MULDIV_REM);
 
-  // Combinational signals for one restoring-division step
-  logic [64:0] rem_shifted;
-  logic [64:0] rem_sub;
-  logic [63:0] div_shifted;
+  // Effective operands: low 32 bits sign-extended when word_op.
+  assign a_sign_bit = is_signed_div ? a_i[31] : 1'b0;
+  assign b_sign_bit = is_signed_div ? b_i[31] : 1'b0;
+  assign a_eff      = word_op_i ? {{32{a_sign_bit}}, a_i[31:0]} : a_i;
+  assign b_eff      = word_op_i ? {{32{b_sign_bit}}, b_i[31:0]} : b_i;
 
+  assign neg_a = is_signed_div & a_eff[63];
+  assign neg_b = is_signed_div & b_eff[63];
+  assign abs_a = neg_a ? (~a_eff + 64'd1) : a_eff;
+  assign abs_b = neg_b ? (~b_eff + 64'd1) : b_eff;
+
+  assign b_is_zero = (b_eff == 64'd0);
+
+  assign int_min = word_op_i ? INT_MIN_32 : INT_MIN_64;
+  assign ov_div  = (op_i == MULDIV_DIV) & (a_eff == int_min) & (b_eff == ALL_ONES_64);
+  assign ov_rem  = (op_i == MULDIV_REM) & (a_eff == int_min) & (b_eff == ALL_ONES_64);
+
+  // -------------------------------------------------------------------------
+  // Restoring-division step
+  // -------------------------------------------------------------------------
   assign rem_shifted = {remainder_q[63:0], dividend_q[63]};
   assign rem_sub     = rem_shifted - {1'b0, abs_b_q};
   assign div_shifted = {dividend_q[62:0], 1'b0};
+
+  // -------------------------------------------------------------------------
+  // Final-step divider result composition (used in COMPUTE last cycle)
+  // -------------------------------------------------------------------------
+  always_comb begin
+    final_quot  = {quotient_q[62:0], 1'b0};
+    final_rem   = rem_shifted[63:0];
+    if (!rem_sub[64]) begin
+      final_quot = {quotient_q[62:0], 1'b1};
+      final_rem  = rem_sub[63:0];
+    end
+    signed_quot = div_neg_q ? (~final_quot + 64'd1) : final_quot;
+    signed_rem  = rem_neg_q ? (~final_rem  + 64'd1) : final_rem;
+    pre_result  = is_rem_q  ? signed_rem : signed_quot;
+  end
 
   // -------------------------------------------------------------------------
   // Output wiring
@@ -174,41 +244,6 @@ module kronos_muldiv
               end
 
               MULDIV_DIV, MULDIV_DIVU, MULDIV_REM, MULDIV_REMU: begin
-                logic        is_signed_div;
-                logic        a_sign_bit;
-                logic        b_sign_bit;
-                logic [63:0] a_eff;
-                logic [63:0] b_eff;
-                logic        neg_a;
-                logic        neg_b;
-                logic [63:0] abs_a;
-                logic [63:0] abs_b;
-                logic        b_is_zero;
-                logic        ov_div;
-                logic        ov_rem;
-                logic [63:0] int_min;
-                logic [63:0] neg_one;
-
-                is_signed_div = (op_i == MULDIV_DIV) | (op_i == MULDIV_REM);
-
-                // Effective operands: low 32 bits sign-extended when word_op.
-                a_sign_bit = is_signed_div ? a_i[31] : 1'b0;
-                b_sign_bit = is_signed_div ? b_i[31] : 1'b0;
-                a_eff      = word_op_i ? {{32{a_sign_bit}}, a_i[31:0]} : a_i;
-                b_eff      = word_op_i ? {{32{b_sign_bit}}, b_i[31:0]} : b_i;
-
-                neg_a = is_signed_div & a_eff[63];
-                neg_b = is_signed_div & b_eff[63];
-                abs_a = neg_a ? (~a_eff + 64'd1) : a_eff;
-                abs_b = neg_b ? (~b_eff + 64'd1) : b_eff;
-
-                b_is_zero = (b_eff == 64'd0);
-
-                int_min = word_op_i ? 64'hFFFF_FFFF_8000_0000 : 64'h8000_0000_0000_0000;
-                neg_one = 64'hFFFF_FFFF_FFFF_FFFF;
-                ov_div  = (op_i == MULDIV_DIV) & (a_eff == int_min) & (b_eff == neg_one);
-                ov_rem  = (op_i == MULDIV_REM) & (a_eff == int_min) & (b_eff == neg_one);
-
                 word_op_q <= word_op_i;
 
                 if (b_is_zero) begin
@@ -219,7 +254,7 @@ module kronos_muldiv
                                 ? {{32{a_i[31]}}, a_i[31:0]}
                                 : a_i;
                   end else begin
-                    result_q <= 64'hFFFF_FFFF_FFFF_FFFF;
+                    result_q <= ALL_ONES_64;
                   end
                   state_q <= DONE;
                 end else if (ov_div) begin
@@ -271,25 +306,8 @@ module kronos_muldiv
           count_q    <= count_q - 7'd1;
 
           if (count_q == 7'd1) begin
-            logic [63:0] final_quot;
-            logic [63:0] final_rem;
-            logic [63:0] signed_quot;
-            logic [63:0] signed_rem;
-            logic [63:0] pre_result;
-
-            if (!rem_sub[64]) begin
-              final_quot = {quotient_q[62:0], 1'b1};
-              final_rem  = rem_sub[63:0];
-            end else begin
-              final_quot = {quotient_q[62:0], 1'b0};
-              final_rem  = rem_shifted[63:0];
-            end
-
-            signed_quot = div_neg_q ? (~final_quot + 64'd1) : final_quot;
-            signed_rem  = rem_neg_q ? (~final_rem  + 64'd1) : final_rem;
-            pre_result  = is_rem_q  ? signed_rem : signed_quot;
-
             // For word_op, sign-extend the low 32 bits of the result.
+            // pre_result is computed combinationally above.
             result_q <= word_op_q
                         ? {{32{pre_result[31]}}, pre_result[31:0]}
                         : pre_result;

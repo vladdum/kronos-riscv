@@ -13,9 +13,12 @@ module tb_pmp;
   logic              valid;
   logic [55:0]       addr;
   logic [2:0]        size;
-  logic              is_fetch, is_load, is_store;
+  logic              is_fetch;
+  logic              is_load;
+  logic              is_store;
   logic              fault;
   logic [55:0]       fault_addr;
+  int                errors;
 
   kronos_pmp #(.N(16)) u_dut (
     .pmpcfg_i     (pmpcfg),
@@ -32,12 +35,14 @@ module tb_pmp;
   );
 
   task automatic clear_all;
-    pmpcfg  = '0;
-    pmpaddr = '0;
-    valid   = 0;
-    is_fetch = 0; is_load = 0; is_store = 0;
-    addr     = '0;
-    size     = '0;
+    pmpcfg   = 128'h0;
+    pmpaddr  = {16{54'h0}};
+    valid    = 1'b0;
+    is_fetch = 1'b0;
+    is_load  = 1'b0;
+    is_store = 1'b0;
+    addr     = 56'h0;
+    size     = 3'h0;
     priv     = PRIV_M;
     #1;
   endtask
@@ -51,101 +56,111 @@ module tb_pmp;
   // NAPOT pmpaddr for [base, base+size_bytes), size_bytes a power of 2 >= 8.
   function automatic logic [53:0] mknapot(input logic [55:0] base,
                                            input int unsigned size_bytes);
-    automatic int unsigned trailing_ones = $clog2(size_bytes) - 3;  // size_bytes/4 has log2-1 ones
-    automatic logic [53:0] tail_mask = (54'd1 << trailing_ones) - 54'd1;
+    int unsigned   trailing_ones;
+    logic [53:0]   tail_mask;
+    trailing_ones = $clog2(size_bytes) - 3;  // size_bytes/4 has log2-1 ones
+    tail_mask     = (54'd1 << trailing_ones) - 54'd1;
     return (base[55:2] & ~tail_mask) | tail_mask;
   endfunction
 
-  int errors = 0;
   task automatic expect_fault(input string name,
                               input logic want,
                               input priv_e p,
                               input logic [55:0] a,
                               input logic [2:0] sz,
                               input logic isf, input logic isl, input logic iss);
-    priv = p; valid = 1; addr = a; size = sz;
-    is_fetch = isf; is_load = isl; is_store = iss;
+    priv     = p;
+    valid    = 1'b1;
+    addr     = a;
+    size     = sz;
+    is_fetch = isf;
+    is_load  = isl;
+    is_store = iss;
     #1;
     if (fault !== want) begin
       $display("FAIL %s: priv=%0d addr=%h fault=%b want=%b", name, p, a, fault, want);
       errors++;
     end
-    valid = 0; #1;
+    valid = 1'b0;
+    #1;
   endtask
 
   initial begin
+    errors = 0;
     clear_all;
     #5;
 
     // ----- Test 1: NA4 hit, S-mode read with R=1 -> no fault -----
     pmpaddr[0] = 54'h00000000_004000;        // PA[55:2] = 0x4000 -> addr = 0x10000
-    pmpcfg[0]  = mkcfg(.l(0), .a(2'b10), .x(0), .w(0), .r(1));
-    expect_fault("NA4 read S R=1", 1'b0, PRIV_S, 56'h0000_0000_0001_0000, 3'd2, 0, 1, 0);
+    pmpcfg[0]  = mkcfg(.l(1'b0), .a(2'b10), .x(1'b0), .w(1'b0), .r(1'b1));
+    expect_fault("NA4 read S R=1", 1'b0, PRIV_S, 56'h0000_0000_0001_0000, 3'd2, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 2: NA4 hit, S-mode write with W=0 -> fault -----
-    expect_fault("NA4 write S W=0", 1'b1, PRIV_S, 56'h0000_0000_0001_0000, 3'd2, 0, 0, 1);
+    expect_fault("NA4 write S W=0", 1'b1, PRIV_S, 56'h0000_0000_0001_0000, 3'd2, 1'b0, 1'b0, 1'b1);
 
     // ----- Test 3: NAPOT 4 KB hit, U-mode read with R=1 -> no fault -----
     pmpaddr[1] = mknapot(56'h0000_0000_0002_0000, 4096);
-    pmpcfg[1]  = mkcfg(.l(0), .a(2'b11), .x(1), .w(1), .r(1));
+    pmpcfg[1]  = mkcfg(.l(1'b0), .a(2'b11), .x(1'b1), .w(1'b1), .r(1'b1));
     expect_fault("NAPOT 4K read U RWX", 1'b0, PRIV_U,
-                 56'h0000_0000_0002_0010, 3'd0, 0, 1, 0);
+                 56'h0000_0000_0002_0010, 3'd0, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 4: NAPOT 1 MB hit -----
     pmpaddr[2] = mknapot(56'h0000_0000_0040_0000, 1024*1024);
-    pmpcfg[2]  = mkcfg(.l(0), .a(2'b11), .x(0), .w(0), .r(1));
+    pmpcfg[2]  = mkcfg(.l(1'b0), .a(2'b11), .x(1'b0), .w(1'b0), .r(1'b1));
     expect_fault("NAPOT 1M read S R=1", 1'b0, PRIV_S,
-                 56'h0000_0000_0040_1234, 3'd0, 0, 1, 0);
+                 56'h0000_0000_0040_1234, 3'd0, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 5: Region priority -- region 0 R=0 shadows region 1 R=1 -----
     clear_all;
     pmpaddr[0] = mknapot(56'h0000_0000_0008_0000, 4096);
-    pmpcfg[0]  = mkcfg(.l(0), .a(2'b11), .x(0), .w(0), .r(0));   // deny
+    pmpcfg[0]  = mkcfg(.l(1'b0), .a(2'b11), .x(1'b0), .w(1'b0), .r(1'b0));   // deny
     pmpaddr[1] = mknapot(56'h0000_0000_0008_0000, 4096);
-    pmpcfg[1]  = mkcfg(.l(0), .a(2'b11), .x(0), .w(0), .r(1));   // allow
+    pmpcfg[1]  = mkcfg(.l(1'b0), .a(2'b11), .x(1'b0), .w(1'b0), .r(1'b1));   // allow
     expect_fault("priority deny shadows allow", 1'b1, PRIV_S,
-                 56'h0000_0000_0008_0000, 3'd2, 0, 1, 0);
+                 56'h0000_0000_0008_0000, 3'd2, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 6: M-mode bypass when L=0 -----
     expect_fault("M bypass unlocked deny", 1'b0, PRIV_M,
-                 56'h0000_0000_0008_0000, 3'd2, 0, 1, 0);
+                 56'h0000_0000_0008_0000, 3'd2, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 7: M-mode trapped when L=1 (locked, deny applies to M too) -----
-    pmpcfg[0]  = mkcfg(.l(1), .a(2'b11), .x(0), .w(0), .r(0));
+    pmpcfg[0]  = mkcfg(.l(1'b1), .a(2'b11), .x(1'b0), .w(1'b0), .r(1'b0));
     expect_fault("M trapped locked deny", 1'b1, PRIV_M,
-                 56'h0000_0000_0008_0000, 3'd2, 0, 1, 0);
+                 56'h0000_0000_0008_0000, 3'd2, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 8: No region matches -- M passes, S faults -----
     clear_all;
-    expect_fault("no match M passes", 1'b0, PRIV_M, 56'h0000_dead_beef_babe, 3'd2, 0, 1, 0);
-    expect_fault("no match S faults", 1'b1, PRIV_S, 56'h0000_dead_beef_babe, 3'd2, 0, 1, 0);
+    expect_fault("no match M passes", 1'b0, PRIV_M, 56'h0000_dead_beef_babe, 3'd2,
+                 1'b0, 1'b1, 1'b0);
+    expect_fault("no match S faults", 1'b1, PRIV_S, 56'h0000_dead_beef_babe, 3'd2,
+                 1'b0, 1'b1, 1'b0);
 
     // ----- Test 9: NA4 cross-region access (size > 4) -> fault -----
     clear_all;
     pmpaddr[0] = 54'h00000000_004000;
-    pmpcfg[0]  = mkcfg(.l(0), .a(2'b10), .x(0), .w(0), .r(1));
+    pmpcfg[0]  = mkcfg(.l(1'b0), .a(2'b10), .x(1'b0), .w(1'b0), .r(1'b1));
     expect_fault("NA4 8B access faults", 1'b1, PRIV_S,
-                 56'h0000_0000_0001_0000, 3'd3, 0, 1, 0);
+                 56'h0000_0000_0001_0000, 3'd3, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 10: entry 8 hit (PMP_CFG2 region) -- S-mode read with R=1 -----
     clear_all;
     pmpaddr[8] = mknapot(56'h0000_0000_0040_0000, 4096);
-    pmpcfg[8]  = mkcfg(.l(0), .a(2'b11), .x(0), .w(0), .r(1));
+    pmpcfg[8]  = mkcfg(.l(1'b0), .a(2'b11), .x(1'b0), .w(1'b0), .r(1'b1));
     expect_fault("entry 8 NAPOT 4K read S R=1", 1'b0, PRIV_S,
-                 56'h0000_0000_0040_0010, 3'd2, 0, 1, 0);
+                 56'h0000_0000_0040_0010, 3'd2, 1'b0, 1'b1, 1'b0);
 
     // ----- Test 11: entry 15 hit + lock semantics -----
     clear_all;
     pmpaddr[15] = mknapot(56'h0000_0000_0080_0000, 4096);
-    pmpcfg[15]  = mkcfg(.l(1), .a(2'b11), .x(0), .w(0), .r(1));   // L=1
+    pmpcfg[15]  = mkcfg(.l(1'b1), .a(2'b11), .x(1'b0), .w(1'b0), .r(1'b1));   // L=1
     expect_fault("entry 15 NAPOT 4K read S R=1 (locked, allowed)", 1'b0, PRIV_S,
-                 56'h0000_0000_0080_0020, 3'd2, 0, 1, 0);
+                 56'h0000_0000_0080_0020, 3'd2, 1'b0, 1'b1, 1'b0);
     // M-mode locked region applies to M too. R=1 so reads still pass.
     expect_fault("entry 15 locked M read still passes (R=1)", 1'b0, PRIV_M,
-                 56'h0000_0000_0080_0020, 3'd2, 0, 1, 0);
+                 56'h0000_0000_0080_0020, 3'd2, 1'b0, 1'b1, 1'b0);
     // M-mode trapped on write (W=0)
     expect_fault("entry 15 locked M write fails (W=0)", 1'b1, PRIV_M,
-                 56'h0000_0000_0080_0020, 3'd2, 0, 0, 1);
+                 56'h0000_0000_0080_0020, 3'd2, 1'b0, 1'b0, 1'b1);
 
     if (errors == 0) $display("tb_pmp: PASS");
     else             $display("tb_pmp: FAIL %0d", errors);

@@ -14,7 +14,9 @@
 // Output is a 56-bit raw quotient (27-bit meaningful for single) and a sticky
 // bit indicating whether the final partial remainder is non-zero.
 
-module kronos_fpu_fdiv_core (
+module kronos_fpu_fdiv_core
+  import kronos_pkg::*;
+(
   input  logic        clk_i,
   input  logic        rst_ni,
   input  logic        flush_i,
@@ -28,6 +30,13 @@ module kronos_fpu_fdiv_core (
 );
 
   // -------------------------------------------------------------------------
+  // Constants
+  // -------------------------------------------------------------------------
+  // N = mantissa width + 4 guard bits (3 fractional + 1 integer)
+  localparam int unsigned N_S = FP_S_MANT_W + 4;  // 27 iterations for single
+  localparam int unsigned N_D = FP_D_MANT_W + 4;  // 56 iterations for double
+
+  // -------------------------------------------------------------------------
   // FSM encoding
   // -------------------------------------------------------------------------
   typedef enum logic [2:0] {
@@ -37,12 +46,6 @@ module kronos_fpu_fdiv_core (
     ST_UPD   = 3'b011,
     ST_DONE  = 3'b100
   } state_e;
-
-  // -------------------------------------------------------------------------
-  // Constants
-  // -------------------------------------------------------------------------
-  localparam int unsigned N_S = 27;
-  localparam int unsigned N_D = 56;
 
   // -------------------------------------------------------------------------
   // State registers
@@ -59,10 +62,10 @@ module kronos_fpu_fdiv_core (
   // -------------------------------------------------------------------------
   // Combinational signals
   // -------------------------------------------------------------------------
-  state_e        state_n;
-  logic [53:0]   p_n;
-  logic [55:0]   q_n;
-  logic [5:0]    ctr_n;
+  state_e        state_d;
+  logic [53:0]   p_d;
+  logic [55:0]   q_d;
+  logic [5:0]    ctr_d;
   logic [53:0]   p_shift;     // 2 * p_q (left-shifted partial remainder)
   logic          ge;          // p >= b comparison result
   logic [5:0]    target;      // iteration count for current format
@@ -76,59 +79,59 @@ module kronos_fpu_fdiv_core (
   // Combinational next-state and datapath
   // -------------------------------------------------------------------------
   always_comb begin
-    state_n = state_q;
-    p_n     = p_q;
-    q_n     = q_q;
-    ctr_n   = ctr_q;
+    state_d = state_q;
+    p_d     = p_q;
+    q_d     = q_q;
+    ctr_d   = ctr_q;
     ge      = 1'b0;
     p_shift = 54'h0;
 
     unique case (state_q)
       ST_IDLE: begin
-        if (start_i) state_n = ST_FIRST;
+        if (start_i) state_d = ST_FIRST;
       end
 
       ST_FIRST: begin
         ge = (p_q >= {1'b0, b_q});
         if (ge) begin
-          q_n = 56'd1;
-          p_n = p_q - {1'b0, b_q};
+          q_d = 56'd1;
+          p_d = p_q - {1'b0, b_q};
         end else begin
-          q_n = 56'd0;
-          p_n = p_q;
+          q_d = 56'd0;
+          p_d = p_q;
         end
-        ctr_n   = 6'd1;
-        state_n = ST_CMP;
+        ctr_d   = 6'd1;
+        state_d = ST_CMP;
       end
 
       ST_CMP: begin
         p_shift = {p_q[52:0], 1'b0};
         ge      = (p_shift >= {1'b0, b_q});
-        state_n = ST_UPD;
+        state_d = ST_UPD;
       end
 
       ST_UPD: begin
         if (ge_q) begin
-          q_n = {q_q[54:0], 1'b1};
-          p_n = p_shift_q - {1'b0, b_q};
+          q_d = {q_q[54:0], 1'b1};
+          p_d = p_shift_q - {1'b0, b_q};
         end else begin
-          q_n = {q_q[54:0], 1'b0};
-          p_n = p_shift_q;
+          q_d = {q_q[54:0], 1'b0};
+          p_d = p_shift_q;
         end
-        ctr_n = ctr_q + 6'd1;
-        if (ctr_n == target) state_n = ST_DONE;
-        else                  state_n = ST_CMP;
+        ctr_d = ctr_q + 6'd1;
+        if (ctr_d == target) state_d = ST_DONE;
+        else                  state_d = ST_CMP;
       end
 
       ST_DONE: begin
-        state_n = ST_IDLE;
+        state_d = ST_IDLE;
       end
 
-      default: state_n = ST_IDLE;
+      default: state_d = ST_IDLE;
     endcase
 
     if (flush_i) begin
-      state_n = ST_IDLE;
+      state_d = ST_IDLE;
     end
   end
 
@@ -146,10 +149,10 @@ module kronos_fpu_fdiv_core (
       p_shift_q <= 54'h0;
       ge_q      <= 1'b0;
     end else begin
-      state_q <= state_n;
-      p_q     <= p_n;
-      q_q     <= q_n;
-      ctr_q   <= ctr_n;
+      state_q <= state_d;
+      p_q     <= p_d;
+      q_q     <= q_d;
+      ctr_q   <= ctr_d;
 
       if (state_q == ST_CMP) begin
         p_shift_q <= p_shift;

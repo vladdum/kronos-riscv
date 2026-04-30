@@ -16,9 +16,9 @@ module tb_ptw;
   // -------------------------------------------------------------------------
   // Clock / reset
   // -------------------------------------------------------------------------
-  logic clk = 0;
+  logic clk = 1'b0;
   always #5 clk = ~clk;
-  logic rst_n = 0;
+  logic rst_n = 1'b0;
 
   // -------------------------------------------------------------------------
   // PTW signals
@@ -57,6 +57,20 @@ module tb_ptw;
   // SC-fail injection knob (used by test 10).  Driven only by the TB initial
   // block; cleared by the TB after observing the first failed SC response.
   logic        force_sc_fail;
+
+  // Memory model storage and busy flop.
+  bit [XLEN-1:0] mem [logic [55:0]];
+  logic          dc_busy_q;  // 1 = response delivered for current req pulse
+
+  // Test bookkeeping and per-test scratch (declared module-top per coding
+  // guidelines — no mid-block logic declarations).
+  int          errors = 0;
+  logic        refilled;
+  logic        faulted;
+  logic [55:0] leaf_addr;
+  logic [63:0] before_pte;
+  int          timeout_ix;
+  int          sc_seen;
 
   kronos_ptw u_dut (
     .clk_i                (clk),
@@ -108,13 +122,10 @@ module tb_ptw;
   // is set; the TB clears force_sc_fail after observing the first failed SC
   // so the retry can succeed.
   // -------------------------------------------------------------------------
-  bit [63:0] mem [logic [55:0]];
-  logic      dc_busy_q;  // 1 = response delivered for current req pulse
-
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       dc_rsp_v     <= 1'b0;
-      dc_rsp_rdata <= '0;
+      dc_rsp_rdata <= 64'h0;
       dc_rsp_sc_ok <= 1'b0;
       dc_busy_q    <= 1'b0;
     end else begin
@@ -136,7 +147,7 @@ module tb_ptw;
             mem[dc_req_addr] = dc_req_wdata;
             dc_rsp_sc_ok    <= 1'b1;
           end
-          dc_rsp_rdata <= '0;
+          dc_rsp_rdata <= 64'h0;
         end else begin
           dc_rsp_rdata <= mem.exists(dc_req_addr) ? mem[dc_req_addr] : 64'd0;
         end
@@ -149,15 +160,15 @@ module tb_ptw;
   // Helpers
   // -------------------------------------------------------------------------
   task automatic clear_inputs;
-    itlb_miss     = 0;
-    dtlb_miss     = 0;
-    itlb_va       = 0;
-    dtlb_va       = 0;
-    dtlb_is_load  = 0;
-    dtlb_is_store = 0;
+    itlb_miss     = 1'b0;
+    dtlb_miss     = 1'b0;
+    itlb_va       = 64'h0;
+    dtlb_va       = 64'h0;
+    dtlb_is_load  = 1'b0;
+    dtlb_is_store = 1'b0;
     miss_priv     = PRIV_S;
-    sum_in        = 0;
-    mxr_in        = 0;
+    sum_in        = 1'b0;
+    mxr_in        = 1'b0;
     satp_mode     = SATP_MODE_SV39;
     satp_asid     = 16'd1;
     satp_ppn      = 44'h0_0001_0000;  // root table at PA 0x0001_0000_0000_0000
@@ -183,28 +194,27 @@ module tb_ptw;
 
   task automatic kick_load_miss(input logic [63:0] va);
     @(posedge clk);
-    dtlb_miss     = 1;
+    dtlb_miss     = 1'b1;
     dtlb_va       = va;
-    dtlb_is_load  = 1;
-    dtlb_is_store = 0;
+    dtlb_is_load  = 1'b1;
+    dtlb_is_store = 1'b0;
     miss_priv     = PRIV_S;
     @(posedge clk);
-    dtlb_miss     = 0;
-    dtlb_is_load  = 0;
+    dtlb_miss     = 1'b0;
+    dtlb_is_load  = 1'b0;
   endtask
 
-  task automatic wait_done(output logic refilled, output logic faulted);
-    refilled = 0;
-    faulted  = 0;
+  task automatic wait_done(output logic refilled_o, output logic faulted_o);
+    refilled_o = 1'b0;
+    faulted_o  = 1'b0;
     repeat (100) begin
       @(posedge clk);
-      if (dtlb_rfv | itlb_rfv) refilled = 1;
-      if (pf_o)                faulted  = 1;
-      if (refilled | faulted) return;
+      if (dtlb_rfv | itlb_rfv) refilled_o = 1'b1;
+      if (pf_o)                faulted_o  = 1'b1;
+      if (refilled_o | faulted_o) return;
     end
   endtask
 
-  int errors = 0;
   task automatic check(input string n, input logic c);
     if (!c) begin
       $display("FAIL %s", n);
@@ -219,7 +229,7 @@ module tb_ptw;
     force_sc_fail = 1'b0;
     clear_inputs;
     repeat (3) @(posedge clk);
-    rst_n = 1;
+    rst_n = 1'b1;
     repeat (3) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -234,14 +244,11 @@ module tb_ptw;
             mk_leaf(44'h0_000A_BCDE, 4'b0_011, 1'b0, 1'b1, 1'b0));
 
     kick_load_miss(64'h0000_0000_0300_4000);
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T1 Sv39 4K leaf refilled",   refilled & ~faulted & dtlb_rfv);
-      check("T1 Sv39 4K size = 4K",       rf_size == 2'd0);
-      check("T1 Sv39 4K PPN = ABCDE",     rf_ppn  == 44'h0_000A_BCDE);
-      check("T1 Sv39 4K A set on refill", rf_a);
-    end
+    wait_done(refilled, faulted);
+    check("T1 Sv39 4K leaf refilled",   refilled & ~faulted & dtlb_rfv);
+    check("T1 Sv39 4K size = 4K",       rf_size == 2'd0);
+    check("T1 Sv39 4K PPN = ABCDE",     rf_ppn  == 44'h0_000A_BCDE);
+    check("T1 Sv39 4K A set on refill", rf_a);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -256,13 +263,10 @@ module tb_ptw;
             mk_leaf(44'h0_0010_0000, 4'b0_011, 1'b0, 1'b1, 1'b0));
 
     kick_load_miss(64'h0000_0000_6020_0000);
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T2 Sv39 2M leaf refilled", refilled & ~faulted);
-      check("T2 Sv39 2M size = 2M",     rf_size == 2'd1);
-      check("T2 Sv39 2M PPN",           rf_ppn  == 44'h0_0010_0000);
-    end
+    wait_done(refilled, faulted);
+    check("T2 Sv39 2M leaf refilled", refilled & ~faulted);
+    check("T2 Sv39 2M size = 2M",     rf_size == 2'd1);
+    check("T2 Sv39 2M PPN",           rf_ppn  == 44'h0_0010_0000);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -274,13 +278,10 @@ module tb_ptw;
             mk_leaf(44'h0_0008_0000, 4'b0_011, 1'b0, 1'b1, 1'b0));
 
     kick_load_miss(64'h0000_0000_8000_0000);
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T3 Sv39 1G leaf refilled", refilled & ~faulted);
-      check("T3 Sv39 1G size = 1G",     rf_size == 2'd2);
-      check("T3 Sv39 1G PPN",           rf_ppn  == 44'h0_0008_0000);
-    end
+    wait_done(refilled, faulted);
+    check("T3 Sv39 1G leaf refilled", refilled & ~faulted);
+    check("T3 Sv39 1G size = 1G",     rf_size == 2'd2);
+    check("T3 Sv39 1G PPN",           rf_ppn  == 44'h0_0008_0000);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -305,13 +306,10 @@ module tb_ptw;
             mk_leaf(44'h0_00BE_EF00, 4'b0_011, 1'b0, 1'b1, 1'b0));
 
     kick_load_miss(64'h0000_0080_4020_1000);
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T4 Sv48 4K leaf refilled", refilled & ~faulted);
-      check("T4 Sv48 4K size = 4K",     rf_size == 2'd0);
-      check("T4 Sv48 4K PPN",           rf_ppn  == 44'h0_00BE_EF00);
-    end
+    wait_done(refilled, faulted);
+    check("T4 Sv48 4K leaf refilled", refilled & ~faulted);
+    check("T4 Sv48 4K size = 4K",     rf_size == 2'd0);
+    check("T4 Sv48 4K PPN",           rf_ppn  == 44'h0_00BE_EF00);
     repeat (4) @(posedge clk);
 
     // Switch back to Sv39 for remaining tests.
@@ -323,14 +321,11 @@ module tb_ptw;
     // ----------------------------------------------------------------------
     set_pte(56'h00_0000_1000_0018, 64'h0);  // V=0
     kick_load_miss(64'h0000_0000_C000_0000);  // VPN[2]=3
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T5 invalid PTE -> page-fault", faulted & ~refilled);
-      check("T5 cause = LOAD_PAGE_FAULT",   pf_cause == CAUSE_LOAD_PAGE_FAULT);
-      check("T5 tval = original VA",        pf_tval == 64'h0000_0000_C000_0000);
-      check("T5 which = TLB_LOAD",          pf_which == TLB_LOAD);
-    end
+    wait_done(refilled, faulted);
+    check("T5 invalid PTE -> page-fault", faulted & ~refilled);
+    check("T5 cause = LOAD_PAGE_FAULT",   pf_cause == CAUSE_LOAD_PAGE_FAULT);
+    check("T5 tval = original VA",        pf_tval == 64'h0000_0000_C000_0000);
+    check("T5 which = TLB_LOAD",          pf_which == TLB_LOAD);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -341,12 +336,9 @@ module tb_ptw;
     // ----------------------------------------------------------------------
     set_pte(56'h00_0000_1000_0020, 64'h0000_0000_0000_000D);
     kick_load_miss(64'h0000_0001_0000_0000);  // VPN[2]=4
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T6 reserved enc -> page-fault", faulted & ~refilled);
-      check("T6 cause = LOAD_PAGE_FAULT",    pf_cause == CAUSE_LOAD_PAGE_FAULT);
-    end
+    wait_done(refilled, faulted);
+    check("T6 reserved enc -> page-fault", faulted & ~refilled);
+    check("T6 cause = LOAD_PAGE_FAULT",    pf_cause == CAUSE_LOAD_PAGE_FAULT);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -359,12 +351,9 @@ module tb_ptw;
     set_pte(56'h00_0005_0000_0000,
             mk_leaf(44'h0_0001_0001, 4'b0_011, 1'b0, 1'b1, 1'b0));
     kick_load_miss(64'h0000_0001_4000_0000);  // VPN[2]=5, VPN[1]=0
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T7 misaligned superpage -> page-fault", faulted & ~refilled);
-      check("T7 cause = LOAD_PAGE_FAULT", pf_cause == CAUSE_LOAD_PAGE_FAULT);
-    end
+    wait_done(refilled, faulted);
+    check("T7 misaligned superpage -> page-fault", faulted & ~refilled);
+    check("T7 cause = LOAD_PAGE_FAULT", pf_cause == CAUSE_LOAD_PAGE_FAULT);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -379,12 +368,9 @@ module tb_ptw;
             mk_leaf(44'h0_0001_2300, 4'b1_011, 1'b0, 1'b1, 1'b1));
     sum_in = 1'b0;  // S-mode w/o SUM access to U-page → fault
     kick_load_miss(64'h0000_0001_8000_0000);  // VPN[2]=6
-    begin
-      logic refilled, faulted;
-      wait_done(refilled, faulted);
-      check("T8 U-page in S w/o SUM -> page-fault", faulted & ~refilled);
-      check("T8 cause = LOAD_PAGE_FAULT", pf_cause == CAUSE_LOAD_PAGE_FAULT);
-    end
+    wait_done(refilled, faulted);
+    check("T8 U-page in S w/o SUM -> page-fault", faulted & ~refilled);
+    check("T8 cause = LOAD_PAGE_FAULT", pf_cause == CAUSE_LOAD_PAGE_FAULT);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -392,27 +378,22 @@ module tb_ptw;
     // the SC, and that the refill arrives.
     // VA: VPN[2]=7, VPN[1]=0, VPN[0]=0 → root[7] offset 0x38, leaf at lvl-0.
     // ----------------------------------------------------------------------
-    begin
-      automatic logic [55:0] leaf_addr = 56'h00_0007_0000_0000;
-      automatic logic [63:0] before_pte;
-      logic refilled, faulted;
+    leaf_addr = 56'h00_0007_0000_0000;
+    set_pte(56'h00_0000_1000_0038, mk_pointer(44'h0_0070_0000));
+    // perm = {U,X,W,R} = 4'b0_011 (S-accessible R/W), A=0.
+    set_pte(leaf_addr,
+            mk_leaf(44'h0_00CA_FE00, 4'b0_011, 1'b0, 1'b0, 1'b0));
+    before_pte = mem[leaf_addr];
+    check("T9 leaf A=0 before walk", ((before_pte >> PTE_A_BIT) & 64'd1) == 64'd0);
 
-      set_pte(56'h00_0000_1000_0038, mk_pointer(44'h0_0070_0000));
-      // perm = {U,X,W,R} = 4'b0_011 (S-accessible R/W), A=0.
-      set_pte(leaf_addr,
-              mk_leaf(44'h0_00CA_FE00, 4'b0_011, 1'b0, 1'b0, 1'b0));
-      before_pte = mem[leaf_addr];
-      check("T9 leaf A=0 before walk", ((before_pte >> PTE_A_BIT) & 64'd1) == 64'd0);
-
-      kick_load_miss(64'h0000_0001_C000_0000);  // VPN[2]=7
-      wait_done(refilled, faulted);
-      check("T9 A-set walk refilled",     refilled & ~faulted);
-      check("T9 A=1 in mem after SC",
-            ((mem[leaf_addr] >> PTE_A_BIT) & 64'd1) == 64'd1);
-      check("T9 PPN preserved",
-            mem[leaf_addr][53:10] == 44'h0_00CA_FE00);
-      check("T9 PPN refilled",            rf_ppn == 44'h0_00CA_FE00);
-    end
+    kick_load_miss(64'h0000_0001_C000_0000);  // VPN[2]=7
+    wait_done(refilled, faulted);
+    check("T9 A-set walk refilled",     refilled & ~faulted);
+    check("T9 A=1 in mem after SC",
+          ((mem[leaf_addr] >> PTE_A_BIT) & 64'd1) == 64'd1);
+    check("T9 PPN preserved",
+          mem[leaf_addr][53:10] == 44'h0_00CA_FE00);
+    check("T9 PPN refilled",            rf_ppn == 44'h0_00CA_FE00);
     repeat (4) @(posedge clk);
 
     // ----------------------------------------------------------------------
@@ -420,57 +401,51 @@ module tb_ptw;
     // still-asserted dtlb_miss, restarts the walk, second SC succeeds.
     // VA: VPN[2]=8, VPN[1]=0, VPN[0]=0 → root[8] offset 0x40, leaf at lvl-0.
     // ----------------------------------------------------------------------
-    begin
-      automatic logic [55:0] leaf_addr = 56'h00_0008_0000_0000;
-      logic refilled, faulted;
-      int   timeout;
-      int   sc_seen;
+    leaf_addr = 56'h00_0008_0000_0000;
+    set_pte(56'h00_0000_1000_0040, mk_pointer(44'h0_0080_0000));
+    // Leaf is at lvl-1 (2 MB megapage); PPN[8:0] must be 0 for alignment.
+    set_pte(leaf_addr,
+            mk_leaf(44'h0_00DE_A000, 4'b0_011, 1'b0, 1'b0, 1'b0));
 
-      set_pte(56'h00_0000_1000_0040, mk_pointer(44'h0_0080_0000));
-      // Leaf is at lvl-1 (2 MB megapage); PPN[8:0] must be 0 for alignment.
-      set_pte(leaf_addr,
-              mk_leaf(44'h0_00DE_A000, 4'b0_011, 1'b0, 1'b0, 1'b0));
+    // Arm the SC-fail injection knob.  The TB clears it as soon as the
+    // first failed SC response is delivered (then the retry succeeds).
+    force_sc_fail = 1'b1;
+    sc_seen       = 0;
 
-      // Arm the SC-fail injection knob.  The TB clears it as soon as the
-      // first failed SC response is delivered (then the retry succeeds).
-      force_sc_fail = 1'b1;
-      sc_seen       = 0;
+    // Drive a held miss so the FSM, on returning to IDLE after the failed
+    // SC, immediately picks the request up again.
+    @(posedge clk);
+    dtlb_miss     = 1'b1;
+    dtlb_va       = 64'h0000_0002_0000_0000;  // VPN[2]=8
+    dtlb_is_load  = 1'b1;
+    dtlb_is_store = 1'b0;
+    miss_priv     = PRIV_S;
 
-      // Drive a held miss so the FSM, on returning to IDLE after the failed
-      // SC, immediately picks the request up again.
+    // Wait up to 400 cycles for refill (two walks + LR/SC each).
+    refilled = 1'b0;
+    faulted  = 1'b0;
+    for (timeout_ix = 0; timeout_ix < 400; timeout_ix++) begin
       @(posedge clk);
-      dtlb_miss     = 1'b1;
-      dtlb_va       = 64'h0000_0002_0000_0000;  // VPN[2]=8
-      dtlb_is_load  = 1'b1;
-      dtlb_is_store = 1'b0;
-      miss_priv     = PRIV_S;
-
-      // Wait up to 400 cycles for refill (two walks + LR/SC each).
-      refilled = 0;
-      faulted  = 0;
-      for (timeout = 0; timeout < 400; timeout++) begin
-        @(posedge clk);
-        // Drop the SC-fail injection the cycle after we observe the first
-        // SC completing (with sc_ok=0).  Gated on dc_req_sc & dc_rsp_v to
-        // avoid being fooled by the LR response that precedes the SC.
-        if (force_sc_fail & dc_req_sc & dc_rsp_v & (sc_seen == 0)) begin
-          sc_seen       = 1;
-          force_sc_fail = 1'b0;
-        end
-        if (dtlb_rfv) refilled = 1;
-        if (pf_o)     faulted  = 1;
-        if (refilled | faulted) break;
+      // Drop the SC-fail injection the cycle after we observe the first
+      // SC completing (with sc_ok=0).  Gated on dc_req_sc & dc_rsp_v to
+      // avoid being fooled by the LR response that precedes the SC.
+      if (force_sc_fail & dc_req_sc & dc_rsp_v & (sc_seen == 0)) begin
+        sc_seen       = 1;
+        force_sc_fail = 1'b0;
       end
-      // Drop miss now that the walk has resolved.
-      dtlb_miss    = 1'b0;
-      dtlb_is_load = 1'b0;
-
-      check("T10 SC-fail retry refilled", refilled & ~faulted);
-      check("T10 PPN refilled",           rf_ppn == 44'h0_00DE_A000);
-      check("T10 A=1 in mem",
-            ((mem[leaf_addr] >> PTE_A_BIT) & 64'd1) == 64'd1);
-      check("T10 saw an SC-fail event",   sc_seen == 1);
+      if (dtlb_rfv) refilled = 1'b1;
+      if (pf_o)     faulted  = 1'b1;
+      if (refilled | faulted) break;
     end
+    // Drop miss now that the walk has resolved.
+    dtlb_miss    = 1'b0;
+    dtlb_is_load = 1'b0;
+
+    check("T10 SC-fail retry refilled", refilled & ~faulted);
+    check("T10 PPN refilled",           rf_ppn == 44'h0_00DE_A000);
+    check("T10 A=1 in mem",
+          ((mem[leaf_addr] >> PTE_A_BIT) & 64'd1) == 64'd1);
+    check("T10 saw an SC-fail event",   sc_seen == 1);
     repeat (4) @(posedge clk);
 
     if (errors == 0) $display("tb_ptw: PASS");

@@ -57,7 +57,7 @@ module kronos_fpu_fcvt
   // ---------------------------------------------------------------------------
   // Stage-1 combinational (NaN-unbox single-precision inputs)
   // ---------------------------------------------------------------------------
-  logic [63:0] s1_a_next;
+  logic [63:0] s1_a_d;
   logic        s1_src_is_single;
 
   always_comb begin
@@ -72,12 +72,13 @@ module kronos_fpu_fcvt
     endcase
 
     if (s1_src_is_single) begin
-      if (a_i[63:32] == FP_NANBOX_UPPER)
-        s1_a_next = {32'h0, a_i[31:0]};
-      else
-        s1_a_next = {32'h0, FP_CANON_QNAN_S};
+      if (a_i[63:32] == FP_NANBOX_UPPER) begin
+        s1_a_d = {32'h0, a_i[31:0]};
+      end else begin
+        s1_a_d = {32'h0, FP_CANON_QNAN_S};
+      end
     end else begin
-      s1_a_next = a_i;
+      s1_a_d = a_i;
     end
   end
 
@@ -88,14 +89,14 @@ module kronos_fpu_fcvt
       s1_fmt_d_q <= 1'b0;
       s1_rm_q    <= 3'd0;
       s1_a_q     <= {64{1'b0}};
-      s1_tag_q   <= '0;
+      s1_tag_q <= '{default: '0};
     end else begin
       s1_valid_q <= flush_i ? 1'b0 : in_valid_i;
       if (in_valid_i) begin
         s1_op_q    <= op_i;
         s1_fmt_d_q <= fmt_d_i;
         s1_rm_q    <= rm_i;
-        s1_a_q     <= s1_a_next;
+        s1_a_q     <= s1_a_d;
         s1_tag_q   <= tag_i;
       end
     end
@@ -584,7 +585,7 @@ module kronos_fpu_fcvt
       s2_valid_q <= 1'b0;
       s2_op_q    <= FP_FCVT_W_F;
       s2_fmt_d_q <= 1'b0;
-      s2_tag_q   <= '0;
+      s2_tag_q <= '{default: '0};
 
       s2_ifp_isneg      <= 1'b0;
       s2_ifp_imag_zero  <= 1'b0;
@@ -799,7 +800,7 @@ module kronos_fpu_fcvt
       out_valid_o <= 1'b0;
       result_o    <= {64{1'b0}};
       fflags_o    <= {5{1'b0}};
-      tag_o       <= '0;
+      tag_o <= '{default: '0};
     end else begin
       out_valid_o <= flush_i ? 1'b0 : s2_valid_q;
       if (s2_valid_q) begin

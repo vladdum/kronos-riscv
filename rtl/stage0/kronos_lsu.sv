@@ -27,15 +27,18 @@ module kronos_lsu (
   input  logic        data_err_i
 );
 
-  // Byte offset within the word
-  logic [1:0] byte_off;
-  assign byte_off = addr_i[1:0];
-
-  // Shift read data down so the target byte/half is at [7:0]/[15:0]
+  // -------------------------------------------------------------------------
+  // Combinational signals
+  // -------------------------------------------------------------------------
+  logic [1:0]  byte_off;
   logic [31:0] rdata_shifted;
   logic [7:0]  raw_byte;
   logic [15:0] raw_half;
 
+  // Byte offset within the word
+  assign byte_off = addr_i[1:0];
+
+  // Shift read data down so the target byte/half is at [7:0]/[15:0]
   assign rdata_shifted = data_rdata_i >> ({3'b0, byte_off} * 4'd8);
   assign raw_byte      = rdata_shifted[7:0];
   assign raw_half      = rdata_shifted[15:0];

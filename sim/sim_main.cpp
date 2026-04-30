@@ -441,7 +441,7 @@ int main(int argc, char** argv) {
             uint8_t  al_v = top->rootp->sim_top__DOT__u_top__DOT__align_instr_valid;
             uint32_t ins  = top->rootp->sim_top__DOT__u_top__DOT__align_instr;
             uint8_t  redir = top->rootp->sim_top__DOT__u_top__DOT__ex_redirect;
-            uint32_t epc  = top->rootp->sim_top__DOT__u_top__DOT__ex_pc_next;
+            uint32_t epc  = top->rootp->sim_top__DOT__u_top__DOT__ex_pc_d;
 #ifdef KRONOS_HAS_S6_PRIV
             uint8_t  priv = top->rootp->sim_top__DOT__u_top__DOT__priv_q;
             uint8_t  cstl = top->rootp->sim_top__DOT__u_top__DOT__combined_stall;

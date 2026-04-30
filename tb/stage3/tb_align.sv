@@ -47,7 +47,7 @@ module tb_align;
   task tick; @(posedge clk); #1; endtask
 
   initial begin
-    clk = 0; rst_n = 0; rdata = '0; rvalid = 0; stall = 0; flush = 0; pc_offset = 0;
+    clk = 0; rst_n = 0; rdata = 32'b0; rvalid = 0; stall = 0; flush = 0; pc_offset = 0;
     repeat(4) tick;
     rst_n = 1;
 

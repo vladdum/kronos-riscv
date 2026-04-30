@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// kronos_ptw.sv — Stage 6b shared hardware page-table walker.
+// kronos_ptw.sv — shared hardware page-table walker.
 // Walks satp.PPN through 3 (Sv39) or 4 (Sv48) levels, issuing 8B reads
 // through the dcache priority port.  Sets A/D atomically via LR/SC.  Refills
 // the requesting TLB on success; raises page-fault on any failure.
@@ -62,6 +62,12 @@ module kronos_ptw
   output logic              busy_o
 );
 
+  // 1. Constants
+  localparam logic [2:0]      PTE_BYTE_OFFSET = 3'b000;
+  localparam logic [XLEN-1:0] PTE_A_MASK      = XLEN'('h40);  // bit 6
+  localparam logic [XLEN-1:0] PTE_D_MASK      = XLEN'('h80);  // bit 7
+
+  // 2. Types
   typedef enum logic [3:0] {
     S_IDLE,
     S_FETCH_REQ,
@@ -74,8 +80,8 @@ module kronos_ptw
     S_PAGE_FAULT
   } state_e;
 
-  state_e state_q, state_n;
-
+  // 3. State registers
+  state_e       state_q;
   logic [63:0]  walk_va_q;
   logic [1:0]   walk_level_q;
   logic [55:0]  walk_addr_q;
@@ -85,6 +91,15 @@ module kronos_ptw
   logic         walk_is_store_q;
   logic         needs_a_q;
   logic         needs_d_q;
+
+  // 4. Combinational signals
+  state_e      state_d;
+  logic        accept_req;
+  tlb_op_e     accepted_which;
+  logic [63:0] accepted_va;
+  logic        accepted_is_load;
+  logic        accepted_is_store;
+  logic [1:0]  start_level;
 
   // PTE field accessors
   function automatic logic pte_v(input logic [63:0] p); return p[PTE_V_BIT]; endfunction
@@ -119,17 +134,12 @@ module kronos_ptw
                                       input priv_e prv,
                                       input logic isf, input logic isl, input logic iss,
                                       input logic sm, input logic mx);
-    automatic logic rx, rw, rr, ru_bit;
-    rx     = pte_x(p);
-    rw     = pte_w(p);
-    rr     = pte_r(p);
-    ru_bit = pte_u(p);
     perm_fail = 1'b0;
-    if (isf & ~rx) perm_fail = 1'b1;
-    if (isl & ~(rr | (rx & mx))) perm_fail = 1'b1;
-    if (iss & ~rw) perm_fail = 1'b1;
-    if ((prv == PRIV_S) & ru_bit & (isf | ~sm)) perm_fail = 1'b1;
-    if ((prv == PRIV_U) & ~ru_bit) perm_fail = 1'b1;
+    if (isf & ~pte_x(p)) perm_fail = 1'b1;
+    if (isl & ~(pte_r(p) | (pte_x(p) & mx))) perm_fail = 1'b1;
+    if (iss & ~pte_w(p)) perm_fail = 1'b1;
+    if ((prv == PRIV_S) & pte_u(p) & (isf | ~sm)) perm_fail = 1'b1;
+    if ((prv == PRIV_U) & ~pte_u(p)) perm_fail = 1'b1;
   endfunction
 
   function automatic logic [8:0] vpn_at_level(input logic [63:0] va,
@@ -139,20 +149,15 @@ module kronos_ptw
       2'b01: vpn_at_level = va[29:21];
       2'b10: vpn_at_level = va[38:30];
       2'b11: vpn_at_level = va[47:39];
-      default: vpn_at_level = '0;
+      default: vpn_at_level = 9'd0;
     endcase
   endfunction
 
   // Arbiter
-  logic        accept_req;
-  tlb_op_e     accepted_which;
-  logic [63:0] accepted_va;
-  logic        accepted_is_load, accepted_is_store;
-
   always_comb begin
     accept_req        = 1'b0;
     accepted_which    = TLB_NONE;
-    accepted_va       = '0;
+    accepted_va       = 64'd0;
     accepted_is_load  = 1'b0;
     accepted_is_store = 1'b0;
     if (state_q == S_IDLE) begin
@@ -170,15 +175,14 @@ module kronos_ptw
     end
   end
 
-  logic [1:0] start_level;
   assign start_level = (satp_mode_i == SATP_MODE_SV48) ? 2'd3 : 2'd2;
 
   always_comb begin
-    state_n             = state_q;
+    state_d             = state_q;
     dcache_req_valid_o  = 1'b0;
     dcache_req_addr_o   = walk_addr_q;
     dcache_req_we_o     = 1'b0;
-    dcache_req_wdata_o  = '0;
+    dcache_req_wdata_o  = {XLEN{1'b0}};
     dcache_req_size_o   = 3'd3;
     dcache_req_is_lr_o  = 1'b0;
     dcache_req_is_sc_o  = 1'b0;
@@ -186,41 +190,41 @@ module kronos_ptw
     itlb_refill_valid_o = 1'b0;
     dtlb_refill_valid_o = 1'b0;
     page_fault_o        = 1'b0;
-    page_fault_cause_o  = '0;
-    page_fault_tval_o   = '0;
+    page_fault_cause_o  = 5'd0;
+    page_fault_tval_o   = 64'd0;
     page_fault_which_o  = TLB_NONE;
     busy_o              = (state_q != S_IDLE);
 
     unique case (state_q)
       S_IDLE: begin
-        if (accept_req & (satp_mode_i != SATP_MODE_BARE)) state_n = S_FETCH_REQ;
+        if (accept_req & (satp_mode_i != SATP_MODE_BARE)) state_d = S_FETCH_REQ;
       end
 
       S_FETCH_REQ: begin
         dcache_req_valid_o = 1'b1;
         dcache_req_addr_o  = walk_addr_q;
-        if (dcache_rsp_valid_i) state_n = S_FETCH_WAIT;
+        if (dcache_rsp_valid_i) state_d = S_FETCH_WAIT;
       end
 
       S_FETCH_WAIT: begin
         if (~pte_v(cur_pte_q) | (pte_w(cur_pte_q) & ~pte_r(cur_pte_q)) |
             pte_reserved_set(cur_pte_q)) begin
-          state_n = S_PAGE_FAULT;
+          state_d = S_PAGE_FAULT;
         end else if (pte_is_leaf(cur_pte_q)) begin
-          if (~ppn_aligned(pte_ppn(cur_pte_q), walk_level_q)) state_n = S_PAGE_FAULT;
+          if (~ppn_aligned(pte_ppn(cur_pte_q), walk_level_q)) state_d = S_PAGE_FAULT;
           else if (perm_fail(cur_pte_q, miss_priv_i,
                               walk_which_q == TLB_FETCH,
                               walk_is_load_q, walk_is_store_q,
-                              sum_i, mxr_i)) state_n = S_PAGE_FAULT;
+                              sum_i, mxr_i)) state_d = S_PAGE_FAULT;
           else if (~pte_a(cur_pte_q) | (walk_is_store_q & ~pte_d(cur_pte_q)))
-            state_n = S_AD_LR_REQ;
+            state_d = S_AD_LR_REQ;
           else
-            state_n = S_REFILL;
+            state_d = S_REFILL;
         end else if (pte_is_pointer(cur_pte_q)) begin
-          if (walk_level_q == 2'b00) state_n = S_PAGE_FAULT;
-          else                       state_n = S_FETCH_REQ;
+          if (walk_level_q == 2'b00) state_d = S_PAGE_FAULT;
+          else                       state_d = S_FETCH_REQ;
         end else begin
-          state_n = S_PAGE_FAULT;
+          state_d = S_PAGE_FAULT;
         end
       end
 
@@ -228,12 +232,12 @@ module kronos_ptw
         dcache_req_valid_o = 1'b1;
         dcache_req_addr_o  = walk_addr_q;
         dcache_req_is_lr_o = 1'b1;
-        if (dcache_rsp_valid_i) state_n = S_AD_LR_WAIT;
+        if (dcache_rsp_valid_i) state_d = S_AD_LR_WAIT;
       end
 
       S_AD_LR_WAIT: begin
-        if (~pte_v(cur_pte_q)) state_n = S_IDLE;
-        else                   state_n = S_AD_SC_REQ;
+        if (~pte_v(cur_pte_q)) state_d = S_IDLE;
+        else                   state_d = S_AD_SC_REQ;
       end
 
       S_AD_SC_REQ: begin
@@ -243,20 +247,20 @@ module kronos_ptw
         dcache_req_is_sc_o = 1'b1;
         // Bit 6 = A, bit 7 = D
         dcache_req_wdata_o = cur_pte_q
-                              | (needs_a_q ? 64'h40 : 64'h00)
-                              | (needs_d_q ? 64'h80 : 64'h00);
-        if (dcache_rsp_valid_i) state_n = S_AD_SC_WAIT;
+                              | (needs_a_q ? PTE_A_MASK : XLEN'(0))
+                              | (needs_d_q ? PTE_D_MASK : XLEN'(0));
+        if (dcache_rsp_valid_i) state_d = S_AD_SC_WAIT;
       end
 
       S_AD_SC_WAIT: begin
-        if (dcache_rsp_sc_ok_i) state_n = S_REFILL;
-        else                    state_n = S_IDLE;
+        if (dcache_rsp_sc_ok_i) state_d = S_REFILL;
+        else                    state_d = S_IDLE;
       end
 
       S_REFILL: begin
         if (walk_which_q == TLB_FETCH) itlb_refill_valid_o = 1'b1;
         else                            dtlb_refill_valid_o = 1'b1;
-        state_n = S_IDLE;
+        state_d = S_IDLE;
       end
 
       S_PAGE_FAULT: begin
@@ -266,10 +270,10 @@ module kronos_ptw
                                                           : CAUSE_STORE_PAGE_FAULT;
         page_fault_tval_o  = walk_va_q;
         page_fault_which_o = walk_which_q;
-        state_n = S_IDLE;
+        state_d = S_IDLE;
       end
 
-      default: state_n = S_IDLE;
+      default: state_d = S_IDLE;
     endcase
   end
 
@@ -288,22 +292,22 @@ module kronos_ptw
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q          <= S_IDLE;
-      walk_va_q        <= '0;
-      walk_level_q     <= '0;
-      walk_addr_q      <= '0;
-      cur_pte_q        <= '0;
+      walk_va_q        <= 64'd0;
+      walk_level_q     <= 2'd0;
+      walk_addr_q      <= 56'd0;
+      cur_pte_q        <= {XLEN{1'b0}};
       walk_which_q     <= TLB_NONE;
       walk_is_load_q   <= 1'b0;
       walk_is_store_q  <= 1'b0;
       needs_a_q        <= 1'b0;
       needs_d_q        <= 1'b0;
     end else begin
-      state_q <= state_n;
+      state_q <= state_d;
 
       if (state_q == S_IDLE & accept_req & (satp_mode_i != SATP_MODE_BARE)) begin
         walk_va_q       <= accepted_va;
         walk_level_q    <= start_level;
-        walk_addr_q     <= {satp_ppn_i, vpn_at_level(accepted_va, start_level), 3'b000};
+        walk_addr_q     <= {satp_ppn_i, vpn_at_level(accepted_va, start_level), PTE_BYTE_OFFSET};
         walk_which_q    <= accepted_which;
         walk_is_load_q  <= accepted_is_load;
         walk_is_store_q <= accepted_is_store;
@@ -323,7 +327,7 @@ module kronos_ptw
           walk_level_q <= walk_level_q - 2'd1;
           walk_addr_q  <= {pte_ppn(cur_pte_q),
                            vpn_at_level(walk_va_q, walk_level_q - 2'd1),
-                           3'b000};
+                           PTE_BYTE_OFFSET};
         end
       end
     end

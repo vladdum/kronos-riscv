@@ -35,32 +35,28 @@ module kronos_csr #(
 );
 
   // -------------------------------------------------------------------------
-  // Machine-mode CSRs (state registers)
+  // 3. State registers — Machine-mode CSRs
   // -------------------------------------------------------------------------
-  logic [63:0] mstatus;   // 0x300
-  logic [63:0] mie;       // 0x304
-  logic [63:0] mtvec;     // 0x305
-  logic [63:0] mscratch;  // 0x340
-  logic [63:0] mepc;      // 0x341
-  logic [63:0] mcause;    // 0x342
+  logic [63:0] mstatus_q;   // 0x300
+  logic [63:0] mie_q;       // 0x304
+  logic [63:0] mtvec_q;     // 0x305
+  logic [63:0] mscratch_q;  // 0x340
+  logic [63:0] mepc_q;      // 0x341
+  logic [63:0] mcause_q;    // 0x342
 
   // -------------------------------------------------------------------------
-  // Read-only / combinational CSRs
+  // 4. Combinational signals — read-only CSRs and CSR-write datapath
   // -------------------------------------------------------------------------
   logic [63:0] misa;
   logic [63:0] mip;
+  logic [63:0] csr_wdata;
+  logic [63:0] csr_new_val;
 
   // MISA: MXL=10 (64-bit) in bits [63:62], extension bits from parameter
   assign misa = {2'b10, 36'b0, MISA_EXT};
 
   // MIP: fast IRQs at [30:16], timer at [7] — zero-extended to 64 bits
   assign mip  = {33'b0, irq_fast_i, 4'b0, 1'b0, 3'b0, irq_timer_i, 3'b0, 1'b0, 3'b0};
-
-  // -------------------------------------------------------------------------
-  // CSR write data (combinational)
-  // -------------------------------------------------------------------------
-  logic [63:0] csr_wdata;
-  logic [63:0] csr_new_val;
 
   // -------------------------------------------------------------------------
   // Outputs
@@ -70,23 +66,24 @@ module kronos_csr #(
   // when c.j is selected for the `j _kronos_boot_done` pseudo-instruction
   // (despite `.option norvc`), so bit[1] of mtvec is part of the actual
   // handler address, not a MODE bit.
-  assign trap_vector_o = mtvec;
-  assign mepc_o        = mepc;
-  assign irq_pending_o = |(mip & mie) & mstatus[3]; // MIE bit
+  assign trap_vector_o = mtvec_q;
+  assign mepc_o        = mepc_q;
+  assign irq_pending_o = |(mip & mie_q) & mstatus_q[3]; // MIE bit
   assign valid_o       = req_i;
 
   // -------------------------------------------------------------------------
   // CSR read (combinational)
   // -------------------------------------------------------------------------
   always_comb begin
+    rdata_o = 64'hDEAD_C5A0_DEAD_C5A0;
     unique case (addr_i)
-      12'h300: rdata_o = mstatus;
+      12'h300: rdata_o = mstatus_q;
       12'h301: rdata_o = misa;
-      12'h304: rdata_o = mie;
-      12'h305: rdata_o = mtvec;
-      12'h340: rdata_o = mscratch;
-      12'h341: rdata_o = mepc;
-      12'h342: rdata_o = mcause;
+      12'h304: rdata_o = mie_q;
+      12'h305: rdata_o = mtvec_q;
+      12'h340: rdata_o = mscratch_q;
+      12'h341: rdata_o = mepc_q;
+      12'h342: rdata_o = mcause_q;
       12'h344: rdata_o = mip;
       default: rdata_o = 64'hDEAD_C5A0_DEAD_C5A0; // unimplemented CSR
     endcase
@@ -108,34 +105,34 @@ module kronos_csr #(
   // -------------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      mstatus  <= 64'h0000_0000_0000_1800; // MPP=11 (machine mode)
-      mie      <= {64{1'b0}};
-      mtvec    <= {64{1'b0}};
-      mscratch <= {64{1'b0}};
-      mepc     <= {64{1'b0}};
-      mcause   <= {64{1'b0}};
+      mstatus_q  <= 64'h0000_0000_0000_1800; // MPP=11 (machine mode)
+      mie_q      <= {64{1'b0}};
+      mtvec_q    <= {64{1'b0}};
+      mscratch_q <= {64{1'b0}};
+      mepc_q     <= {64{1'b0}};
+      mcause_q   <= {64{1'b0}};
     end else begin
       // Trap entry (highest priority)
       if (trap_i) begin
-        mepc       <= {32'b0, trap_pc_i};
-        mcause     <= {32'b0, trap_cause_i};
-        mstatus[7] <= mstatus[3]; // MPIE = MIE
-        mstatus[3] <= 1'b0;       // MIE = 0 (disable interrupts on trap)
+        mepc_q       <= {32'b0, trap_pc_i};
+        mcause_q     <= {32'b0, trap_cause_i};
+        mstatus_q[7] <= mstatus_q[3]; // MPIE = MIE
+        mstatus_q[3] <= 1'b0;         // MIE = 0 (disable interrupts on trap)
       end
       // MRET: restore interrupt state
       if (mret_i) begin
-        mstatus[3] <= mstatus[7]; // MIE = MPIE
-        mstatus[7] <= 1'b1;       // MPIE = 1
+        mstatus_q[3] <= mstatus_q[7]; // MIE = MPIE
+        mstatus_q[7] <= 1'b1;         // MPIE = 1
       end
       // CSR write
       if (req_i) begin
         unique case (addr_i)
-          12'h300: mstatus  <= csr_new_val;
-          12'h304: mie      <= csr_new_val;
-          12'h305: mtvec    <= csr_new_val;
-          12'h340: mscratch <= csr_new_val;
-          12'h341: mepc     <= csr_new_val;
-          12'h342: mcause   <= csr_new_val;
+          12'h300: mstatus_q  <= csr_new_val;
+          12'h304: mie_q      <= csr_new_val;
+          12'h305: mtvec_q    <= csr_new_val;
+          12'h340: mscratch_q <= csr_new_val;
+          12'h341: mepc_q     <= csr_new_val;
+          12'h342: mcause_q   <= csr_new_val;
           default: ; // read-only or unimplemented: ignore write
         endcase
       end

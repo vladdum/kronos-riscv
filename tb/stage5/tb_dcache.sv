@@ -14,6 +14,8 @@ module tb_dcache;
   logic        req;
   logic [63:0] addr;
   logic [2:0]  size;
+  // Eviction-test address vector (promoted from `automatic` block-local; see R2).
+  bit [63:0]   evict_addrs[4] = '{64'h1_0000, 64'h2_0000, 64'h3_0000, 64'h4_0000};
   logic        we;
   logic [63:0] wdata;
   logic        amo_req;
@@ -73,7 +75,7 @@ module tb_dcache;
   logic        bvalid_pending_q;
 
   always_comb begin
-    axi_rsp = '0;
+    axi_rsp = '{default: '0};
     axi_rsp.ar_ready = ~burst_pending_q;
     axi_rsp.aw_ready = ~wb_pending_q;
     axi_rsp.w_ready  = wb_pending_q;
@@ -213,9 +215,8 @@ module tb_dcache;
 
     // Dirty eviction.  Fill 4 ways of one set with stores; 5th access evicts.
     begin
-      automatic bit [63:0] addrs[4] = '{64'h1_0000, 64'h2_0000, 64'h3_0000, 64'h4_0000};
-      foreach (addrs[i]) begin
-        @(negedge clk); req = 1; addr = addrs[i]; size = 3'd3; we = 1;
+      foreach (evict_addrs[i]) begin
+        @(negedge clk); req = 1; addr = evict_addrs[i]; size = 3'd3; we = 1;
                         wdata = 64'h1111_1111_1111_1111 + 64'(i);
         @(posedge clk) #1;
         while (stall) @(posedge clk);

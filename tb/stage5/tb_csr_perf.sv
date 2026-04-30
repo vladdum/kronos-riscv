@@ -24,14 +24,14 @@ module tb_csr_perf;
   logic        trap = 0, mret = 0;
   logic [31:0] trap_pc = 0, trap_cause = 0;
   logic [63:0] trap_vector, mepc_out;
-  logic [4:0]  fflags_delta = '0;
+  logic [4:0]  fflags_delta = 5'h0;
   logic        fflags_we = 0;
   logic [2:0]  frm;
   logic        irq_timer = 0;
-  logic [14:0] irq_fast = '0;
+  logic [14:0] irq_fast = 15'h0;
   logic        irq_pending;
   logic        instret_retire = 0;
-  logic [31:0] event_bus = '0;
+  logic [31:0] event_bus = 32'h0;
 
   kronos_csr u_dut (
     .clk_i(clk), .rst_ni(rst_n),
@@ -150,7 +150,7 @@ module tb_csr_perf;
     csrrw(12'h320, 64'h7FF);                      // inhibit ALL counters
     csrread(12'hB03, v);
     begin
-      static logic [63:0] before_v = '0;
+      static logic [63:0] before_v = 64'h0;
       before_v = v;
       for (int i = 0; i < 8; i++) begin
         @(negedge clk); event_bus = 32'h0020;
@@ -185,7 +185,7 @@ module tb_csr_perf;
     csrrw(12'h320, 64'h001);                      // inhibit only mcycle
     csrread(12'hB00, v);
     begin
-      static logic [63:0] before_v = '0;
+      static logic [63:0] before_v = 64'h0;
       before_v = v;
       repeat (5) @(posedge clk);
       csrread(12'hB00, v);
