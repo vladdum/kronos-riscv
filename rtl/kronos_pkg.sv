@@ -30,6 +30,33 @@ package kronos_pkg;
   localparam int unsigned INST_W     = 32;                  // RISC-V base instruction width
 
   // -------------------------------------------------------------------------
+  // RV64IMAFDC opcode constants — referenced by kronos_decode (the wrapper)
+  // and every sub-decoder (kronos_decode_int / _ctrl / _mem / _sys / _fp).
+  // Used inside `unique case` selectors; treat like enum members at use sites
+  // (bare reference, no `kronos_pkg::` prefix needed) for ergonomics.
+  // -------------------------------------------------------------------------
+  localparam logic [6:0] OP         = 7'b011_0011;  // R-type integer ALU
+  localparam logic [6:0] OP_IMM     = 7'b001_0011;  // I-type integer ALU
+  localparam logic [6:0] OP_IMM_32  = 7'b001_1011;  // RV64 I-type ALU-W
+  localparam logic [6:0] OP_32      = 7'b011_1011;  // RV64 R-type ALU-W
+  localparam logic [6:0] LOAD       = 7'b000_0011;
+  localparam logic [6:0] STORE      = 7'b010_0011;
+  localparam logic [6:0] LOAD_FP    = 7'b000_0111;
+  localparam logic [6:0] STORE_FP   = 7'b010_0111;
+  localparam logic [6:0] OP_FP      = 7'b101_0011;
+  localparam logic [6:0] FMADD_OP   = 7'b100_0011;
+  localparam logic [6:0] FMSUB_OP   = 7'b100_0111;
+  localparam logic [6:0] FNMSUB_OP  = 7'b100_1011;
+  localparam logic [6:0] FNMADD_OP  = 7'b100_1111;
+  localparam logic [6:0] BRANCH     = 7'b110_0011;
+  localparam logic [6:0] LUI        = 7'b011_0111;
+  localparam logic [6:0] AUIPC      = 7'b001_0111;
+  localparam logic [6:0] JAL        = 7'b110_1111;
+  localparam logic [6:0] JALR       = 7'b110_0111;
+  localparam logic [6:0] SYSTEM     = 7'b111_0011;
+  localparam logic [6:0] AMO        = 7'b010_1111;
+
+  // -------------------------------------------------------------------------
   // Floating-point widths and biases (IEEE-754 binary32 / binary64)
   // -------------------------------------------------------------------------
   localparam int unsigned FLEN          = 64;
@@ -154,6 +181,18 @@ package kronos_pkg;
     // FMA
     FP_FMADD, FP_FMSUB, FP_FNMADD, FP_FNMSUB
   } fp_op_e;
+
+  // FP rm-field helpers — used by kronos_decode_fp.
+  // resolve_rm: substitute FRM (FCSR.frm) when the instruction-encoded rm
+  // field is DYN (3'b111). rm_is_illegal: true for the two reserved encodings.
+  function automatic logic [2:0] resolve_rm(input logic [2:0] rm_in,
+                                            input logic [2:0] frm);
+    return (rm_in == 3'b111) ? frm : rm_in;
+  endfunction
+
+  function automatic logic rm_is_illegal(input logic [2:0] rm);
+    return (rm == 3'b101) || (rm == 3'b110);
+  endfunction
 
   // Decoded instruction — output of kronos_decode
   typedef struct packed {

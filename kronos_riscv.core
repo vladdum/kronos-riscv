@@ -81,6 +81,11 @@ filesets:
       - rtl/stage3/kronos_bpred.sv
       - rtl/stage6/kronos_alu.sv
       - rtl/stage6/kronos_decode.sv
+      - rtl/stage6/kronos_decode_ctrl.sv
+      - rtl/stage6/kronos_decode_sys.sv
+      - rtl/stage6/kronos_decode_mem.sv
+      - rtl/stage6/kronos_decode_int.sv
+      - rtl/stage6/kronos_decode_fp.sv
       - rtl/stage6/kronos_regfile_fp.sv
       - rtl/stage6/kronos_icache.sv
       - rtl/stage6/kronos_csr.sv
