@@ -1,0 +1,163 @@
+digraph alu_structural {
+  // ────────────────────────────────────────────────────────────────
+  // kronos_alu — BOOM/Rocket-style structural decomposition.
+  //
+  // Layout: neato -n2 (pinned positions, orthogonal routing).
+  //
+  // Left column   (x=80):   operand and control inputs
+  // Middle-left   (x=380):  word-op pre-mask
+  // Middle        (x=820):  four functional units (vertical lanes)
+  // Middle-right  (x=1180): op-class final mux (tall)
+  // Right         (x=1460): word-op post-extend
+  // Far right     (x=1740): outputs
+  //
+  // The comparator sits directly below the adder and consumes
+  // adder_out — visually showing that LT/EQ are derived from the
+  // adder's sign bit and zero detect, not a second subtractor.
+  //
+  // Control signals (op_i, word_op_i) are not drawn as edges; they
+  // are listed in the box labels of the units they gate.
+  // ────────────────────────────────────────────────────────────────
+  graph [
+    splines     = ortho,
+    pad         = 0.3,
+    outputorder = edgesfirst,
+    fontname    = "Helvetica",
+  ];
+
+  node [
+    shape    = box,
+    style    = "filled,rounded",
+    fontname = "Helvetica",
+    fontsize = 14,
+    penwidth = 2,
+  ];
+
+  edge [
+    fontname = "Helvetica",
+    fontsize = 12,
+    penwidth = 2,
+    color    = "#111827",
+  ];
+
+  // Title
+  title [pos="900,720!", label="kronos_alu — Structural Decomposition (BOOM/Rocket-style)",
+         shape=plaintext, style="", fontsize=20, fontcolor="#7f1d1d"];
+
+  // ── Inputs (left column, gray) ───────────────────────────────────
+  a_i        [pos="80,560!", label="a_i [63:0]",
+              fillcolor="#e5e7eb", color="#9ca3af", fontsize=14,
+              width=1.8, height=0.6, fixedsize=true];
+  b_i        [pos="80,440!", label="b_i [63:0]",
+              fillcolor="#e5e7eb", color="#9ca3af", fontsize=14,
+              width=1.8, height=0.6, fixedsize=true];
+  op_i       [pos="80,260!", label="op_i (alu_op_e)",
+              fillcolor="#e5e7eb", color="#9ca3af", fontsize=13,
+              width=1.8, height=0.6, fixedsize=true];
+  word_op_i  [pos="80,140!", label="word_op_i",
+              fillcolor="#e5e7eb", color="#9ca3af", fontsize=13,
+              width=1.8, height=0.6, fixedsize=true];
+
+  // ── Word-op pre-mask (orange) ────────────────────────────────────
+  premask [pos="380,500!",
+           label="Word-op pre-mask\na_pre, b_pre, shamt\n(SRA → sign-ext low 32;\nelse zero-ext low 32)",
+           fillcolor="#fed7aa", color="#fb923c", fontsize=12,
+           width=2.6, height=1.6, fixedsize=true];
+
+  // ── Functional units (red) ───────────────────────────────────────
+  // Adder — single 64-bit adder; SUB = a + ~b + 1
+  adder [pos="820,580!",
+         label="Adder\na + (b ⊕ is_sub) + is_sub\n(is_sub on SUB / SLT / SLTU)",
+         fillcolor="#fecaca", color="#f87171", fontsize=12,
+         width=2.8, height=1.0, fixedsize=true];
+
+  // Comparator — derived from adder
+  cmp [pos="820,400!",
+       label="Comparator (from adder)\nLT = sign-of-(a−b),\noverflow-corrected\nEQ = (adder_out == 0)",
+       fillcolor="#fecaca", color="#f87171", fontsize=12,
+       width=2.8, height=1.2, fixedsize=true];
+
+  // Shifter — right-only + reverse for SLL
+  shifter [pos="820,240!",
+           label="Shifter\nright-only barrel\nSLL via {<<{x}} reverse\nSRA: sign-fill from a_pre[63]",
+           fillcolor="#fecaca", color="#f87171", fontsize=12,
+           width=2.8, height=1.2, fixedsize=true];
+
+  // Logic — bitwise AND/OR/XOR + PASSB
+  logic_blk [pos="820,80!",
+             label="Logic\nAND / OR / XOR / PASSB",
+             fillcolor="#fecaca", color="#f87171", fontsize=12,
+             width=2.8, height=0.7, fixedsize=true];
+
+  // ── Op-class final mux (purple, tall) ────────────────────────────
+  opmux [pos="1180,330!",
+         label="Op-class final mux\n\nis_alu_shift  → shift_out\nis_alu_slt    → {0…0, cmp_lt}\nis_alu_logic  → logic_out\nADD / SUB     → adder_out\ndefault        → 0",
+         fillcolor="#e9d5ff", color="#a855f7",
+         fontcolor="#4a044e", penwidth=3, fontsize=12,
+         width=3.0, height=4.4, fixedsize=true];
+
+  // ── Word-op post-extend (orange) ─────────────────────────────────
+  postext [pos="1460,330!",
+           label="Post-extend\nword_op_i ?\n  sext32→64 :\n  passthrough",
+           fillcolor="#fed7aa", color="#fb923c", fontsize=12,
+           width=2.0, height=1.4, fixedsize=true];
+
+  // ── Outputs (right column, gray) ─────────────────────────────────
+  result_o    [pos="1740,330!", label="result_o [63:0]",
+               fillcolor="#e5e7eb", color="#9ca3af", fontsize=13,
+               width=1.8, height=0.6, fixedsize=true];
+  adder_out_o [pos="1740,580!", label="adder_out_o [63:0]",
+               fillcolor="#e5e7eb", color="#9ca3af", fontsize=13,
+               width=1.8, height=0.6, fixedsize=true];
+  cmp_lt_o    [pos="1740,440!", label="cmp_lt_o",
+               fillcolor="#e5e7eb", color="#9ca3af", fontsize=13,
+               width=1.8, height=0.6, fixedsize=true];
+  eq_o        [pos="1740,180!", label="eq_o",
+               fillcolor="#e5e7eb", color="#9ca3af", fontsize=13,
+               width=1.8, height=0.6, fixedsize=true];
+
+  // ── Datapath edges ───────────────────────────────────────────────
+  // Inputs → pre-mask (a_i, b_i, word_op_i shape operands; op_i used
+  // for SRA-detect inside pre-mask). Drawn as solid for operands,
+  // dashed for control fan-in.
+  a_i       -> premask [tailport=e, headport=w];
+  b_i       -> premask [tailport=e, headport=w];
+  word_op_i -> premask [color="#6b7280", style=dashed,
+                        tailport=e, headport=sw];
+  op_i      -> premask [color="#6b7280", style=dashed,
+                        tailport=e, headport=sw];
+
+  // Pre-mask → all four functional units (a_pre / b_pre / shamt)
+  premask -> adder     [tailport=e, headport=w];
+  premask -> cmp       [tailport=e, headport=w];
+  premask -> shifter   [tailport=e, headport=w];
+  premask -> logic_blk [tailport=e, headport=w];
+
+  // Adder → comparator (sign and zero detect derive from adder_out)
+  adder -> cmp [color="#dc2626", style=bold, penwidth=3,
+                tailport=s, headport=n,
+                label="adder_out"];
+
+  // Adder → op-class mux (ADD/SUB arm) and adder_out_o
+  adder -> opmux       [tailport=e, headport=nw];
+  adder -> adder_out_o [tailport=e, headport=w];
+
+  // Comparator → op-class mux (SLT arm) and cmp_lt_o, eq_o outputs
+  cmp -> opmux    [tailport=e, headport=w];
+  cmp -> cmp_lt_o [tailport=e, headport=w];
+  cmp -> eq_o     [tailport=e, headport=w];
+
+  // Shifter → op-class mux (SHIFT arm)
+  shifter -> opmux [tailport=e, headport=w];
+
+  // Logic → op-class mux (LOGIC arm)
+  logic_blk -> opmux [tailport=e, headport=sw];
+
+  // Op-class mux → post-extend → result_o
+  opmux   -> postext  [tailport=e, headport=w];
+  postext -> result_o [tailport=e, headport=w];
+
+  // word_op_i fan-out to post-extend (control)
+  word_op_i -> postext [color="#6b7280", style=dashed,
+                        tailport=e, headport=sw];
+}

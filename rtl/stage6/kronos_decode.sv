@@ -228,6 +228,14 @@ module kronos_decode
         // B-type immediate: imm[12|10:5|4:1|11], bit 0 always 0
         decoded_o.imm = {{19{instr_i[31]}}, instr_i[31], instr_i[7],
                          instr_i[30:25], instr_i[11:8], 1'b0};
+        // Drive the ALU's comparator with the right signedness so kronos_top
+        // can consume cmp_lt_o for BLT/BGE/BLTU/BGEU. BEQ/BNE consume eq_o,
+        // which is valid for any subtract-style alu_op.
+        unique case (funct3)
+          3'b100, 3'b101: decoded_o.alu_op = ALU_SLT;   // BLT, BGE
+          3'b110, 3'b111: decoded_o.alu_op = ALU_SLTU;  // BLTU, BGEU
+          default:        decoded_o.alu_op = ALU_SLTU;  // BEQ, BNE — any sub-style op
+        endcase
         if (funct3 == 3'b010 || funct3 == 3'b011) illegal = 1'b1;
       end
 

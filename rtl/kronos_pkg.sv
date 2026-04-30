@@ -455,4 +455,27 @@ package kronos_pkg;
     logic                fp_dest;  // 1 = FP regfile, 0 = integer regfile
   } fpu_tag_t;
 
+  // --- ALU op-class classifiers (consumed by kronos_alu's final result mux) -
+
+  function automatic logic is_alu_slt(alu_op_e op);
+    case (op)
+      ALU_SLT, ALU_SLTU: is_alu_slt = 1'b1;
+      default:           is_alu_slt = 1'b0;
+    endcase
+  endfunction
+
+  function automatic logic is_alu_logic(alu_op_e op);
+    case (op)
+      ALU_AND, ALU_OR, ALU_XOR, ALU_PASSB: is_alu_logic = 1'b1;
+      default:                             is_alu_logic = 1'b0;
+    endcase
+  endfunction
+
+  function automatic logic is_alu_shift(alu_op_e op);
+    case (op)
+      ALU_SLL, ALU_SRL, ALU_SRA: is_alu_shift = 1'b1;
+      default:                   is_alu_shift = 1'b0;
+    endcase
+  endfunction
+
 endpackage
