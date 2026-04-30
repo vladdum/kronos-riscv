@@ -133,8 +133,9 @@ module tb_icache;
         @(posedge clk);
         cycles_to_valid++;
       end
-      if (cycles_to_valid > 8)
+      if (cycles_to_valid > 8) begin
         $fatal(1, "CWF should bypass within ~8 cycles, got %0d", cycles_to_valid);
+      end
     end
     @(negedge clk); req = 0;
     repeat (12) @(posedge clk);     // let refill finish
@@ -182,8 +183,9 @@ module tb_icache;
     repeat (3) @(posedge clk);
     @(negedge clk); req = 1; addr = 64'h0;
     @(posedge clk) #1;
-    if (!miss_pulse)
+    if (!miss_pulse) begin
       $fatal(1, "FENCE.I should have invalidated; expected miss on re-access");
+    end
     @(negedge clk); req = 0;
     repeat (20) @(posedge clk);   // let refill finish
 

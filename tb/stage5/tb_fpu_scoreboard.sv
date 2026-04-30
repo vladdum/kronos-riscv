@@ -68,8 +68,9 @@ module tb_fpu_scoreboard;
     // Test 1: late_req=1, target slot free → grant=1, reservation appears.
     @(negedge clk) late_req = 1; late_fp = 1; late_latency = 4'd2;
     #1;
-    if (late_grant_comb !== 1'b1)
+    if (late_grant_comb !== 1'b1) begin
       $fatal(1, "late-probe free: expected grant=1, got=%b", late_grant_comb);
+    end
     // Let the posedge commit the reservation, then deassert.
     @(posedge clk) #1;
     @(negedge clk) late_req = 0; late_fp = 0;

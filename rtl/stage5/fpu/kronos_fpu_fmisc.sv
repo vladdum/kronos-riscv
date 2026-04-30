@@ -173,48 +173,50 @@ module kronos_fpu_fmisc
     // RISC-V spec: bit 8 = signalling NaN, bit 9 = quiet NaN.
     if (fmt_d_i) begin
       // Double
-      if (is_snan_d(a_i[62:0]))
+      if (is_snan_d(a_i[62:0])) begin
         fclass_bits = 10'b01_0000_0000; // bit 8: sNaN
-      else if (is_qnan_d(a_i[62:0]))
+      end else if (is_qnan_d(a_i[62:0])) begin
         fclass_bits = 10'b10_0000_0000; // bit 9: qNaN
-      else if (a_i[63] && (a_i[62:52] == 11'h7FF))
+      end else if (a_i[63] && (a_i[62:52] == 11'h7FF)) begin
         fclass_bits = 10'b00_0000_0001; // bit 0: -inf
-      else if (!a_i[63] && (a_i[62:52] == 11'h7FF))
+      end else if (!a_i[63] && (a_i[62:52] == 11'h7FF)) begin
         fclass_bits = 10'b00_1000_0000; // bit 7: +inf
-      else if (a_i[63] && (a_i[62:52] != 11'd0))
+      end else if (a_i[63] && (a_i[62:52] != 11'd0)) begin
         fclass_bits = 10'b00_0000_0010; // bit 1: -normal
-      else if (!a_i[63] && (a_i[62:52] != 11'd0))
+      end else if (!a_i[63] && (a_i[62:52] != 11'd0)) begin
         fclass_bits = 10'b00_0100_0000; // bit 6: +normal
-      else if (a_i[63] && (a_i[62:52] == 11'd0) && (a_i[51:0] != 52'd0))
+      end else if (a_i[63] && (a_i[62:52] == 11'd0) && (a_i[51:0] != 52'd0)) begin
         fclass_bits = 10'b00_0000_0100; // bit 2: -subnormal
-      else if (!a_i[63] && (a_i[62:52] == 11'd0) && (a_i[51:0] != 52'd0))
+      end else if (!a_i[63] && (a_i[62:52] == 11'd0) && (a_i[51:0] != 52'd0)) begin
         fclass_bits = 10'b00_0010_0000; // bit 5: +subnormal
-      else if (a_i[63])
+      end else if (a_i[63]) begin
         fclass_bits = 10'b00_0000_1000; // bit 3: -zero
-      else
+      end else begin
         fclass_bits = 10'b00_0001_0000; // bit 4: +zero
+      end
     end else begin
       // Single (use unboxed a_s)
-      if (is_snan_s(a_s))
+      if (is_snan_s(a_s)) begin
         fclass_bits = 10'b01_0000_0000; // bit 8: sNaN
-      else if (is_qnan_s(a_s))
+      end else if (is_qnan_s(a_s)) begin
         fclass_bits = 10'b10_0000_0000; // bit 9: qNaN
-      else if (a_s[31] && (a_s[30:23] == 8'hFF))
+      end else if (a_s[31] && (a_s[30:23] == 8'hFF)) begin
         fclass_bits = 10'b00_0000_0001; // bit 0: -inf
-      else if (!a_s[31] && (a_s[30:23] == 8'hFF))
+      end else if (!a_s[31] && (a_s[30:23] == 8'hFF)) begin
         fclass_bits = 10'b00_1000_0000; // bit 7: +inf
-      else if (a_s[31] && (a_s[30:23] != 8'd0))
+      end else if (a_s[31] && (a_s[30:23] != 8'd0)) begin
         fclass_bits = 10'b00_0000_0010; // bit 1: -normal
-      else if (!a_s[31] && (a_s[30:23] != 8'd0))
+      end else if (!a_s[31] && (a_s[30:23] != 8'd0)) begin
         fclass_bits = 10'b00_0100_0000; // bit 6: +normal
-      else if (a_s[31] && (a_s[30:23] == 8'd0) && (a_s[22:0] != 23'd0))
+      end else if (a_s[31] && (a_s[30:23] == 8'd0) && (a_s[22:0] != 23'd0)) begin
         fclass_bits = 10'b00_0000_0100; // bit 2: -subnormal
-      else if (!a_s[31] && (a_s[30:23] == 8'd0) && (a_s[22:0] != 23'd0))
+      end else if (!a_s[31] && (a_s[30:23] == 8'd0) && (a_s[22:0] != 23'd0)) begin
         fclass_bits = 10'b00_0010_0000; // bit 5: +subnormal
-      else if (a_s[31])
+      end else if (a_s[31]) begin
         fclass_bits = 10'b00_0000_1000; // bit 3: -zero
-      else
+      end else begin
         fclass_bits = 10'b00_0001_0000; // bit 4: +zero
+      end
     end
   end
 

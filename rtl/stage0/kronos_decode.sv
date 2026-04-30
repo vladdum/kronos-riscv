@@ -153,8 +153,9 @@ module kronos_decode
         dec_o.is_load    = 1'b1;
         dec_o.mem_funct3 = funct3;
         dec_o.wb_sel     = WB_MEM;
-        if (funct3 == 3'b011 || funct3 == 3'b110 || funct3 == 3'b111)
+        if (funct3 == 3'b011 || funct3 == 3'b110 || funct3 == 3'b111) begin
           dec_o.illegal = 1'b1; // LD/LWU not in RV32I
+        end
       end
 
       STORE: begin  // SB, SH, SW

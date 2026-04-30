@@ -164,8 +164,9 @@ module tb_dcache;
         @(posedge clk);
         cycles_to_valid++;
       end
-      if (cycles_to_valid > 8)
+      if (cycles_to_valid > 8) begin
         $fatal(1, "CWF should bypass within ~8 cycles, got %0d", cycles_to_valid);
+      end
     end
     @(negedge clk); req = 0;
     repeat (15) @(posedge clk);

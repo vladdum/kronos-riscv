@@ -403,10 +403,11 @@ module kronos_top
     end else begin
       unique case (fetch_state_q)
         FETCH_IDLE: begin
-          if (align_need_upper & beat_upper_valid_q & align_needs_fetch)
+          if (align_need_upper & beat_upper_valid_q & align_needs_fetch) begin
             fetch_state_q <= FETCH_SERVE_UPPER;
-          else if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready)
+          end else if (instr_axi_req_o.ar_valid & instr_axi_rsp_i.ar_ready) begin
             fetch_state_q <= FETCH_WAIT_R;
+          end
         end
         FETCH_WAIT_R:
           if (instr_axi_rsp_i.r_valid) fetch_state_q <= FETCH_IDLE;
@@ -531,18 +532,19 @@ module kronos_top
 
   always_comb begin
     if      (id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
-                               id_ex_q.dec.illegal  | irq_pending))
+                               id_ex_q.dec.illegal  | irq_pending)) begin
       ex_pc_d = trap_vector[31:0];
-    else if (id_ex_q.valid & id_ex_q.dec.is_mret)
+    end else if (id_ex_q.valid & id_ex_q.dec.is_mret) begin
       ex_pc_d = mepc[31:0];
-    else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
+    end else if (id_ex_q.valid & id_ex_q.dec.is_jalr) begin
       ex_pc_d = jalr_target_64[31:0];
-    else if (id_ex_q.valid & id_ex_q.dec.is_jal)
+    end else if (id_ex_q.valid & id_ex_q.dec.is_jal) begin
       ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
-    else if (branch_taken)
+    end else if (branch_taken) begin
       ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
-    else
+    end else begin
       ex_pc_d = id_ex_q.is_16b ? id_ex_q.pc + 32'd2 : id_ex_q.pc + 32'd4;
+    end
   end
 
   // STAGE3: branch predictor — misprediction detection and update
@@ -570,7 +572,7 @@ module kronos_top
       ex_mem_q.dec        <= id_ex_q.dec;
       ex_mem_q.alu_result <= ex_result;
       ex_mem_q.rs2_data   <= fwd_rs2_data;
-      ex_mem_q.pc_next    <= ex_pc_d;
+      ex_mem_q.pc_d    <= ex_pc_d;
       ex_mem_q.csr_rdata  <= csr_rdata;
       ex_mem_q.redirect   <= ex_redirect;
       ex_mem_q.valid      <= id_ex_q.valid & ~irq_pending;

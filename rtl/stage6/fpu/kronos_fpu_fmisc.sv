@@ -218,48 +218,50 @@ module kronos_fpu_fmisc
     // RISC-V spec: bit 8 = signalling NaN, bit 9 = quiet NaN.
     if (fmt_d_i) begin
       // Double
-      if (is_snan_d(a_i[kronos_pkg::FLEN-2:0]))
+      if (is_snan_d(a_i[kronos_pkg::FLEN-2:0])) begin
         fclass_bits = kronos_pkg::FCLASS_SNAN;
-      else if (is_qnan_d(a_i[kronos_pkg::FLEN-2:0]))
+      end else if (is_qnan_d(a_i[kronos_pkg::FLEN-2:0])) begin
         fclass_bits = kronos_pkg::FCLASS_QNAN;
-      else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX))
+      end else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX)) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_INF;
-      else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX))
+      end else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == kronos_pkg::FP_D_EXP_MAX)) begin
         fclass_bits = kronos_pkg::FCLASS_POS_INF;
-      else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] != {kronos_pkg::FP_D_EXP_W{1'b0}}))
+      end else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] != {kronos_pkg::FP_D_EXP_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_NORMAL;
-      else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] != {kronos_pkg::FP_D_EXP_W{1'b0}}))
+      end else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] != {kronos_pkg::FP_D_EXP_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_POS_NORMAL;
-      else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == {kronos_pkg::FP_D_EXP_W{1'b0}}) && (a_i[kronos_pkg::FP_D_MANT_W-1:0] != {kronos_pkg::FP_D_MANT_W{1'b0}}))
+      end else if (a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == {kronos_pkg::FP_D_EXP_W{1'b0}}) && (a_i[kronos_pkg::FP_D_MANT_W-1:0] != {kronos_pkg::FP_D_MANT_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_SUBNORMAL;
-      else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == {kronos_pkg::FP_D_EXP_W{1'b0}}) && (a_i[kronos_pkg::FP_D_MANT_W-1:0] != {kronos_pkg::FP_D_MANT_W{1'b0}}))
+      end else if (!a_i[kronos_pkg::FLEN-1] && (a_i[kronos_pkg::FLEN-2:FP_D_MANT_W] == {kronos_pkg::FP_D_EXP_W{1'b0}}) && (a_i[kronos_pkg::FP_D_MANT_W-1:0] != {kronos_pkg::FP_D_MANT_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_POS_SUBNORMAL;
-      else if (a_i[kronos_pkg::FLEN-1])
+      end else if (a_i[kronos_pkg::FLEN-1]) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_ZERO;
-      else
+      end else begin
         fclass_bits = kronos_pkg::FCLASS_POS_ZERO;
+      end
     end else begin
       // Single (use unboxed a_s)
-      if (is_snan_s(a_s))
+      if (is_snan_s(a_s)) begin
         fclass_bits = kronos_pkg::FCLASS_SNAN;
-      else if (is_qnan_s(a_s))
+      end else if (is_qnan_s(a_s)) begin
         fclass_bits = kronos_pkg::FCLASS_QNAN;
-      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX))
+      end else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX)) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_INF;
-      else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX))
+      end else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == kronos_pkg::FP_S_EXP_MAX)) begin
         fclass_bits = kronos_pkg::FCLASS_POS_INF;
-      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] != {kronos_pkg::FP_S_EXP_W{1'b0}}))
+      end else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] != {kronos_pkg::FP_S_EXP_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_NORMAL;
-      else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] != {kronos_pkg::FP_S_EXP_W{1'b0}}))
+      end else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] != {kronos_pkg::FP_S_EXP_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_POS_NORMAL;
-      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == {kronos_pkg::FP_S_EXP_W{1'b0}}) && (a_s[kronos_pkg::FP_S_MANT_W-1:0] != {kronos_pkg::FP_S_MANT_W{1'b0}}))
+      end else if (a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == {kronos_pkg::FP_S_EXP_W{1'b0}}) && (a_s[kronos_pkg::FP_S_MANT_W-1:0] != {kronos_pkg::FP_S_MANT_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_SUBNORMAL;
-      else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == {kronos_pkg::FP_S_EXP_W{1'b0}}) && (a_s[kronos_pkg::FP_S_MANT_W-1:0] != {kronos_pkg::FP_S_MANT_W{1'b0}}))
+      end else if (!a_s[kronos_pkg::FP_S_TOTAL_W-1] && (a_s[kronos_pkg::FP_S_TOTAL_W-2:FP_S_MANT_W] == {kronos_pkg::FP_S_EXP_W{1'b0}}) && (a_s[kronos_pkg::FP_S_MANT_W-1:0] != {kronos_pkg::FP_S_MANT_W{1'b0}})) begin
         fclass_bits = kronos_pkg::FCLASS_POS_SUBNORMAL;
-      else if (a_s[kronos_pkg::FP_S_TOTAL_W-1])
+      end else if (a_s[kronos_pkg::FP_S_TOTAL_W-1]) begin
         fclass_bits = kronos_pkg::FCLASS_NEG_ZERO;
-      else
+      end else begin
         fclass_bits = kronos_pkg::FCLASS_POS_ZERO;
+      end
     end
   end
 

@@ -11,7 +11,7 @@ stage0/kronos_regfile.sv
 stage1/kronos_forward.sv
 stage1/kronos_hazard.sv
 stage6/kronos_align.sv
-stage3/kronos_bpred.sv
+common/kronos_bpred.sv
 stage6/kronos_alu.sv
 stage6/kronos_decode.sv
 stage6/kronos_regfile_fp.sv

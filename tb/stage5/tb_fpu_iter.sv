@@ -263,10 +263,11 @@ module tb_fpu_iter;
       sf_f = sf_exceptions();
       sf_expected = sf_r64;
     end else begin
-      if (t_op == FP_FDIV)
+      if (t_op == FP_FDIV) begin
         sf_r32 = sf_f32_div(t_a[31:0], t_b[31:0], {5'b0, t_rm});
-      else
+      end else begin
         sf_r32 = sf_f32_sqrt(t_a[31:0], {5'b0, t_rm});
+      end
       sf_f = sf_exceptions();
       sf_expected = {32'hFFFF_FFFF, sf_r32};
     end

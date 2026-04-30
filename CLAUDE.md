@@ -426,9 +426,11 @@ endfunction
 
 ### No declarations inside processes
 
-`always_ff` and `always_comb` bodies contain only assignments and control flow. No `logic`, `int`, `bit`, `reg`, struct, or enum declarations.
+`always_ff` and `always_comb` bodies contain only assignments and control flow. No `logic`, `int`, `bit`, `reg`, struct, or enum declarations at the top of the always block.
 
 **Exception:** `for (int i = …; …)` loop indices may be declared in the loop header.
+
+**Exception — named block locals:** declarations are allowed inside a labelled `begin : <name>` block. The label introduces a per-execution scope analogous to a function-local frame, so the locals don't leak to module scope and don't have re-entrancy hazards (each `always_*` evaluation enters a fresh frame). This pattern is common in FPU pipeline stages (`always_comb begin : proc_s3_align_amt` with stage-local intermediates).
 
 ### State suffix discipline: `_q` and `_d`
 
@@ -560,6 +562,27 @@ endmodule
 - Right-shifts on signed values must use `$signed()` to get arithmetic shift: `$signed(a) >>> b`.
 - Concatenations must have explicit widths on all operands.
 - When extending a value, be explicit: `{{24{byte[7]}}, byte}` not `{byte}`.
+
+## Pre-commit hook
+
+A small Python checker (`scripts/check_rtl_rules.py`) catches the highest-leverage RTL-rule regressions automatically. Install once:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, every `git commit` runs the hook on staged files in **delta mode** — it only flags violations on lines you added or modified, so legacy issues in untouched files don't block you. The hook checks:
+
+- **R2:** `automatic` keyword on a variable (only `function automatic` / `task automatic` are allowed).
+- **R1+R3:** `logic` / `int` / `bit` / `reg` / struct / enum declared after the first `always_*` block in a module body (with `function` / `task` / `generate` / labelled-`begin` carve-outs).
+- **History-prefix comments:** `// Stage NX: …`, `// Fix #N: …`.
+- **Multi-line `if` body without `begin`/`end`** (with the reset idiom and same-line bodies as carve-outs).
+
+Run a full repository scan manually with `python3 scripts/check_rtl_rules.py` (no `--staged`). Bypass the hook with `git commit --no-verify` only when you have a justified reason.
+
+### Known full-scan offenders
+
+A full-repo scan (no `--staged`) currently flags around 700 R1 violations concentrated in the FPU pipeline files (`rtl/stage5/fpu/kronos_fpu_fma.sv`, `kronos_fpu_fmul.sv`, `kronos_fpu_fcvt.sv`, `kronos_fpu_iter.sv`, `kronos_fpu_fadd.sv`, plus their stage-6 mirrors and `kronos_dcache.sv`). These files use a per-pipeline-stage layout — sectioned blocks of `logic` declarations interleaved with the corresponding `always_ff` / `always_comb` blocks — instead of the canonical "single decl block at the top." The pattern is established and not a hazard, but it does not match R1. A dedicated FPU restructuring pass would consolidate the decls; until that lands, the hook's delta mode is the practical guardrail.
 
 ## OpenSoC Integration
 

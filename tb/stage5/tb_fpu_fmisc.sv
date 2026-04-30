@@ -43,10 +43,12 @@ module tb_fpu_fmisc;
     apply(FP_FSGNJ, 1'b0,
           64'hFFFF_FFFF_BF80_0000,
           64'hFFFF_FFFF_4048_F5C3);
-    if (!out_valid || result[31:0] !== 32'h3F80_0000)
+    if (!out_valid || result[31:0] !== 32'h3F80_0000) begin
       $fatal(1, "fsgnj.s: %h", result);
-    if (result[63:32] !== 32'hFFFF_FFFF)
+    end
+    if (result[63:32] !== 32'hFFFF_FFFF) begin
       $fatal(1, "fsgnj.s nan-box: %h", result);
+    end
 
     // ── FCLASS.D — all ten number categories ─────────────────────────────
     apply(FP_FCLASS, 1'b1, 64'h7FF4_0000_0000_0000, 64'h0); // sNaN.D
@@ -98,8 +100,9 @@ module tb_fpu_fmisc;
 
     // FLT.S with sNaN → result 0, NV flag set
     apply(FP_FLT, 1'b0, 64'hFFFF_FFFF_7FA0_0000, 64'hFFFF_FFFF_4000_0000);
-    if (result[0] !== 1'b0 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1)
+    if (result[0] !== 1'b0 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1) begin
       $fatal(1, "flt sNaN: r=%h f=%b", result, fflags);
+    end
 
     // FMIN.S(+0, -0) = -0 (IEEE 754 edge case)
     apply(FP_FMIN, 1'b0, 64'hFFFF_FFFF_0000_0000, 64'hFFFF_FFFF_8000_0000);
@@ -111,13 +114,15 @@ module tb_fpu_fmisc;
 
     // FMV.X.W sign-extends low 32 bits to 64.
     apply(FP_FMV_X_W, 1'b0, 64'hFFFF_FFFF_FFFF_8000, 64'h0);
-    if ($signed(result) !== -64'sd32768)
+    if ($signed(result) !== -64'sd32768) begin
       $fatal(1, "fmv.x.w sign-extend: %h", result);
+    end
 
     // FMV.W.X NaN-boxes the low 32 bits.
     apply(FP_FMV_W_X, 1'b0, 64'h0000_0000_DEAD_BEEF, 64'h0);
-    if (result !== 64'hFFFF_FFFF_DEAD_BEEF)
+    if (result !== 64'hFFFF_FFFF_DEAD_BEEF) begin
       $fatal(1, "fmv.w.x nan-box: %h", result);
+    end
 
     // NaN-unboxing: upper 32 bits != FFFF_FFFF → becomes canonical qNaN
     apply(FP_FSGNJ, 1'b0, 64'h0000_0000_BF80_0000, 64'hFFFF_FFFF_0000_0000);
@@ -195,8 +200,9 @@ module tb_fpu_fmisc;
     if (!out_valid || result !== 64'h8000_0000_0000_0000) $fatal(1, "fmin.d +0/-0: %h", result);
     // sNaN → non-NaN operand + NV (per RISC-V spec: "result is the non-NaN operand")
     apply(FP_FMIN, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1)
+    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1) begin
       $fatal(1, "fmin.d sNaN: %h/%b", result, fflags);
+    end
     // qNaN a, number b → return b
     apply(FP_FMIN, 1'b1, 64'h7FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000);
     if (!out_valid || result !== 64'h3FF0_0000_0000_0000) $fatal(1, "fmin.d qNaN-a: %h", result);
@@ -213,8 +219,9 @@ module tb_fpu_fmisc;
     if (!out_valid || result !== 64'h0000_0000_0000_0000) $fatal(1, "fmax.d +0/-0: %h", result);
     // sNaN → non-NaN operand + NV (per RISC-V spec: "result is the non-NaN operand")
     apply(FP_FMAX, 1'b1, 64'h7FF4_0000_0000_0000, 64'h3FF0_0000_0000_0000);
-    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1)
+    if (!out_valid || result !== 64'h3FF0_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b1) begin
       $fatal(1, "fmax.d sNaN: %h/%b", result, fflags);
+    end
     // qNaN a, number b → return b
     apply(FP_FMAX, 1'b1, 64'h7FF8_0000_0000_0000, 64'h3FF0_0000_0000_0000);
     if (!out_valid || result !== 64'h3FF0_0000_0000_0000) $fatal(1, "fmax.d qNaN-a: %h", result);
@@ -224,18 +231,21 @@ module tb_fpu_fmisc;
 
     // FMIN.D(qNaN, qNaN) → canonical qNaN, no NV  [covers both-NaN branch]
     apply(FP_FMIN, 1'b1, 64'h7FF8_0000_0000_0000, 64'h7FF8_0000_0000_0000);
-    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b0)
+    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b0) begin
       $fatal(1, "fmin.d both-qNaN: r=%h f=%b", result, fflags);
+    end
 
     // FMAX.D(qNaN, qNaN) → canonical qNaN, no NV
     apply(FP_FMAX, 1'b1, 64'h7FF8_0000_0000_0000, 64'h7FF8_0000_0000_0000);
-    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b0)
+    if (!out_valid || result !== 64'h7FF8_0000_0000_0000 || fflags[kronos_pkg::FP_FFLAG_NV] !== 1'b0) begin
       $fatal(1, "fmax.d both-qNaN: r=%h f=%b", result, fflags);
+    end
 
     // FMAX.S(-0, -0) → -0  [covers the -0/-0 equal-zero branch for FMAX.S]
     apply(FP_FMAX, 1'b0, 64'hFFFF_FFFF_8000_0000, 64'hFFFF_FFFF_8000_0000);
-    if (result[31:0] !== 32'h8000_0000)
+    if (result[31:0] !== 32'h8000_0000) begin
       $fatal(1, "fmax.s -0/-0: %h", result);
+    end
 
     // ── FMV.X.D / FMV.D.X ────────────────────────────────────────────────
     apply(FP_FMV_X_D, 1'b1, 64'hDEAD_BEEF_1234_5678, 64'h0);
@@ -399,8 +409,9 @@ module tb_fpu_fmisc;
         end
       end
 
-      if (|rand_errors)
+      if (|rand_errors) begin
         $fatal(1, "random fmisc: %0d/%0d errors", rand_errors, rand_total);
+      end
       $display("random fmisc: %0d checks passed", rand_total);
     end
 

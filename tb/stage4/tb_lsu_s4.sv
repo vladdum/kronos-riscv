@@ -76,13 +76,17 @@ module tb_lsu_s4;
 
       if (axi_req.aw_valid && axi_req.w_valid) begin
         // Write lower 32-bit word (bytes 0-3)
-        for (int i = 0; i < 4; i++)
-          if (axi_req.w.strb[i])
+        for (int i = 0; i < 4; i++) begin
+          if (axi_req.w.strb[i]) begin
             mem[axi_req.aw.addr[9:3] * 2][i*8 +: 8] <= axi_req.w.data[i*8 +: 8];
+          end
+        end
         // Write upper 32-bit word (bytes 4-7)
-        for (int i = 0; i < 4; i++)
-          if (axi_req.w.strb[4+i])
+        for (int i = 0; i < 4; i++) begin
+          if (axi_req.w.strb[4+i]) begin
             mem[axi_req.aw.addr[9:3] * 2 + 1][i*8 +: 8] <= axi_req.w.data[(4+i)*8 +: 8];
+          end
+        end
         axi_rsp.b_valid <= 1;
       end
     end

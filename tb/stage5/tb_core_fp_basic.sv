@@ -225,10 +225,11 @@ module tb_core_fp_basic;
   // write-back eviction timing.
   // -----------------------------------------------------------------------
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n)
+    if (!rst_n) begin
       halted <= 0;
-    else if (retire_mem_wen && (retire_mem_addr & 64'hC000_0000) == 64'h4000_0000)
+    end else if (retire_mem_wen && (retire_mem_addr & 64'hC000_0000) == 64'h4000_0000) begin
       halted <= halted + 1;
+    end
   end
 
   // -----------------------------------------------------------------------

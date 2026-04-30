@@ -81,8 +81,8 @@ module tb_kronos_ram;
     for (int unsigned i = 0; i < DEPTH; i++) begin
       write_word(i[ADDR_W-1:0], 32'hCAFE_0000 | i);
     end
-    for (int unsigned i = 0; i < DEPTH; i++) begin
-      automatic logic [WIDTH-1:0] got;
+    for (int unsigned i = 0; i < DEPTH; i++) begin : check_case1
+      logic [WIDTH-1:0] got;
       read_word(i[ADDR_W-1:0], got);
       if (got !== (32'hCAFE_0000 | i)) begin
         $display("FAIL case1: addr=%0d got=%h expected=%h", i, got, 32'hCAFE_0000 | i);
@@ -101,8 +101,8 @@ module tb_kronos_ram;
     @(posedge clk);
     @(negedge clk);
     we    = 1'b0;
-    begin
-      automatic logic [WIDTH-1:0] got;
+    begin : check_case2
+      logic [WIDTH-1:0] got;
       read_word(4'd0, got);
       if (got[15:8] !== 8'hCC) begin
         $display("FAIL case2: byte1 got=%h expected=CC", got[15:8]);
@@ -148,10 +148,11 @@ module tb_kronos_ram;
       fail_count++;
     end
 
-    if (fail_count == 0)
+    if (fail_count == 0) begin
       $display("tb_kronos_ram: PASS");
-    else
+    end else begin
       $display("tb_kronos_ram: FAIL (%0d cases failed)", fail_count);
+    end
     $finish;
   end
 

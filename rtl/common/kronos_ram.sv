@@ -101,9 +101,10 @@ module kronos_ram
   always_ff @(posedge clk_i) begin
     if (we_i) begin
       for (int unsigned i = 0; i < NB; i++) begin
-        if (wmask_i[i])
+        if (wmask_i[i]) begin
           mem[waddr_i][i*BYTE_WIDTH +: BYTE_WIDTH] <=
             wdata_i[i*BYTE_WIDTH +: BYTE_WIDTH];
+        end
       end
     end
   end

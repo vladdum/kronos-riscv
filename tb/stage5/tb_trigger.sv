@@ -83,8 +83,9 @@ module tb_trigger;
     begin
       logic [63:0] v;
       csr_read(12'h7A4, v);
-      if (v !== 64'h0000_0000_0000_0040)
+      if (v !== 64'h0000_0000_0000_0040) begin
         $fatal(1, "tinfo: expected 0x40, got %h", v);
+      end
     end
 
     // ---- Test 2: tselect read/write (only low 2 bits) ----
