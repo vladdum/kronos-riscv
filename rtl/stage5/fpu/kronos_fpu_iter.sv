@@ -825,12 +825,13 @@ module kronos_fpu_iter
   // FSM state register
   // -----------------------------------------------------------------------
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_fsm_state
-    if (!rst_ni)
+    if (!rst_ni) begin
       state_q <= IDLE;
-    else if (flush_i)
+    end else if (flush_i) begin
       state_q <= IDLE;
-    else
+    end else begin
       state_q <= state_d;
+    end
   end
 
   // -----------------------------------------------------------------------

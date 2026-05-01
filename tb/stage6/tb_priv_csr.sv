@@ -137,12 +137,12 @@ module tb_priv_csr;
     .trig_csr_match_i(trig_csr_match_i),
     .trig_csr_we_o(trig_csr_we_o),
     .trig_csr_wdata_o(trig_csr_wdata_o),
-    // Stage 6c: post-write CSR value — unused in this TB (T3 wires it at top).
+    // post-write CSR value — unused in this TB (T3 wires it at top).
     .csr_new_val_o(),
     .csr_illegal_o(csr_illegal_o),
     .pmpcfg_o(pmpcfg_o),
     .pmpaddr_o(pmpaddr_o),
-    // Stage 6b: SFENCE.VMA passthrough + satp fields.  Tied off / left
+    // SFENCE.VMA passthrough + satp fields.  Tied off / left
     // unconnected — this TB exercises CSR semantics, not translation.
     .sfence_vma_i        (1'b0),
     .sfence_va_i         (64'b0),

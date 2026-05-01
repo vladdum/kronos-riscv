@@ -21,8 +21,9 @@ module kronos_regfile (
   logic [63:0] regs_q [32];
 
   always_ff @(posedge clk_i) begin
-    if (rd_wen_i && rd_addr_i != 5'd0)
+    if (rd_wen_i && rd_addr_i != 5'd0) begin
       regs_q[rd_addr_i] <= rd_wdata_i;
+    end
   end
 
   assign rs1_rdata_o = (rs1_addr_i == 5'd0) ? 64'd0 : regs_q[rs1_addr_i];

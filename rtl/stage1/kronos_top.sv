@@ -358,7 +358,7 @@ module kronos_top
       ex_mem_q.dec        <= id_ex_q.dec;
       ex_mem_q.alu_result <= {{32{alu_result[31]}}, alu_result};
       ex_mem_q.rs2_data   <= {{32{fwd_rs2_data[31]}}, fwd_rs2_data};
-      ex_mem_q.pc_next    <= ex_pc_d;
+      ex_mem_q.pc_d    <= ex_pc_d;
       ex_mem_q.csr_rdata  <= {32'b0, csr_rdata};
       ex_mem_q.redirect   <= ex_redirect;
       // Squash valid on IRQ: instruction is re-fetched after MRET

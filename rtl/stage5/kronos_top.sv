@@ -357,12 +357,13 @@ module kronos_top
                              (id_ex_q.instr[14:12] == 3'b001);
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni)
+    if (!rst_ni) begin
       fence_i_active_q <= 1'b0;
-    else if (fence_i_pulse_raw & dcache_dirty_pending & ~fence_i_active_q)
+    end else if (fence_i_pulse_raw & dcache_dirty_pending & ~fence_i_active_q) begin
       fence_i_active_q <= 1'b1;
-    else if (dcache_flush_done)
+    end else if (dcache_flush_done) begin
       fence_i_active_q <= 1'b0;
+    end
   end
 
   assign fence_i_pulse = fence_i_pulse_raw &
@@ -734,7 +735,7 @@ module kronos_top
     .rvalid_i            (icache_data_valid),
     .stall_i             (align_instr_valid & ~if_id_en),
     .flush_i             (fetch_flush),
-    .pc_offset_i         (mem_redirect ? ex_mem_q.pc_next[1]
+    .pc_offset_i         (mem_redirect ? ex_mem_q.pc_d[1]
                         : ex_redirect  ? ex_pc_d[1]
                         : pred_taken   ? pred_target[1]
                         :                pc_q[1]),
@@ -765,7 +766,7 @@ module kronos_top
   // Priority: mem_redirect before ex_redirect so that when both fire simultaneously
   // (MEM-stage target mismatch + speculative instr in EX also generates a redirect),
   // the pipeline returns to the architecturally correct target from the MEM branch.
-  assign pc_d = mem_redirect  ? ex_mem_q.pc_next
+  assign pc_d = mem_redirect  ? ex_mem_q.pc_d
                  : ex_redirect   ? ex_pc_d
                  : pred_taken    ? pred_target
                  : align_is_16b  ? pc_q + 32'd2
@@ -993,18 +994,19 @@ module kronos_top
 
   always_comb begin
     if      ((id_ex_q.valid & (id_ex_q.dec.is_ecall | id_ex_q.dec.is_ebreak |
-                               id_ex_q.dec.illegal  | irq_pending)) | trig_hit)
+                               id_ex_q.dec.illegal  | irq_pending)) | trig_hit) begin
       ex_pc_d = trap_vector[31:0];
-    else if (id_ex_q.valid & id_ex_q.dec.is_mret)
+    end else if (id_ex_q.valid & id_ex_q.dec.is_mret) begin
       ex_pc_d = mepc[31:0];
-    else if (id_ex_q.valid & id_ex_q.dec.is_jalr)
+    end else if (id_ex_q.valid & id_ex_q.dec.is_jalr) begin
       ex_pc_d = jalr_target_64[31:0];
-    else if (id_ex_q.valid & id_ex_q.dec.is_jal)
+    end else if (id_ex_q.valid & id_ex_q.dec.is_jal) begin
       ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
-    else if (branch_taken)
+    end else if (branch_taken) begin
       ex_pc_d = id_ex_q.pc + id_ex_q.dec.imm;
-    else
+    end else begin
       ex_pc_d = id_ex_q.is_16b ? id_ex_q.pc + 32'd2 : id_ex_q.pc + 32'd4;
+    end
   end
 
   // STAGE3: branch predictor — misprediction detection and update
@@ -1076,7 +1078,7 @@ module kronos_top
                               ~id_ex_q.dec.fp_load & ~id_ex_q.dec.fp_store)
                              ? fp_result_cur : ex_result;
       ex_mem_q.rs2_data   <= fwd_rs2_data;
-      ex_mem_q.pc_next    <= ex_pc_d;
+      ex_mem_q.pc_d    <= ex_pc_d;
       ex_mem_q.csr_rdata  <= csr_rdata;
       ex_mem_q.redirect    <= ex_redirect;
       // When mem_redirect fires, the instruction currently in EX (id_ex_q) was
@@ -1097,11 +1099,11 @@ module kronos_top
 
   // MEM-stage target misprediction: predictor predicted taken with the right
   // direction (so EX did not redirect), but the predicted target was wrong.
-  // Both ex_mem_q.pc_next and ex_mem_q.pred_target are registered, so this
+  // Both ex_mem_q.pc_d and ex_mem_q.pred_target are registered, so this
   // comparison sits on a short path. Guard with ~ex_mem_q.redirect: if EX
   // already redirected (direction mismatch or trap), no second redirect needed.
   assign bpred_mispredict_target = ex_mem_q.valid & ~ex_mem_q.redirect &
-    ex_mem_q.pred_taken & (ex_mem_q.pred_target != ex_mem_q.pc_next);
+    ex_mem_q.pred_taken & (ex_mem_q.pred_target != ex_mem_q.pc_d);
   assign mem_redirect = bpred_mispredict_target;
 
   // Any flush that redirects the fetch stream.

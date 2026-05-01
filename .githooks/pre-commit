@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# kronos-riscv pre-commit hook.
+#
+# Activate by running once:
+#   git config core.hooksPath .githooks
+#
+# Runs scripts/check_rtl_rules.py on the staged file list. Bypass with
+# `git commit --no-verify` only when you have a justified reason.
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+exec python3 "$repo_root/scripts/check_rtl_rules.py" --staged

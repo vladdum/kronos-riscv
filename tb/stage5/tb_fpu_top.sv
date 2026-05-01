@@ -147,12 +147,13 @@ module tb_fpu_top;
         $error("[fadd] no out_valid within 8 cycles");
         errors++;
       end else begin
-        if (result !== expected)
+        if (result !== expected) begin
           $error("[fadd] result %h != expected %h", result, expected);
-        else if (tag_out !== tg)
+        end else if (tag_out !== tg) begin
           $error("[fadd] tag_out mismatch: got %p expected %p", tag_out, tg);
-        else
+        end else begin
           $display("[fadd] OK: result=%h tag.rd=%0d", result, tag_out.rd);
+        end
       end
     end
 
@@ -180,12 +181,13 @@ module tb_fpu_top;
         $error("[fma] no out_valid within 8 cycles");
         errors++;
       end else begin
-        if (result !== expected)
+        if (result !== expected) begin
           $error("[fma] result %h != expected %h", result, expected);
-        else if (tag_out !== tg)
+        end else if (tag_out !== tg) begin
           $error("[fma] tag_out mismatch: got %p expected %p", tag_out, tg);
-        else
+        end else begin
           $display("[fma] OK: result=%h tag.rd=%0d", result, tag_out.rd);
+        end
       end
     end
 

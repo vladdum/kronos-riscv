@@ -297,7 +297,7 @@ module kronos_fpu_fma
   end
 
   // ---------------------------------------------------------------------------
-  // Stage 2b: re-latch all S2 signals. This is the pure-pipelining stage that
+  // re-latch all S2 signals. This is the pure-pipelining stage that
   // gives Vivado retiming room inside the 53x53 DSP cascade. No new functional
   // content.
   // ---------------------------------------------------------------------------
@@ -357,7 +357,7 @@ module kronos_fpu_fma
   end
 
   // ---------------------------------------------------------------------------
-  // Stage 2b: multiply significands (reads from s2b to break DSP cascade path)
+  // multiply significands (reads from s2b to break DSP cascade path)
   // ---------------------------------------------------------------------------
   logic [PROD_W-1:0] s2_product_comb;
 
@@ -768,7 +768,7 @@ module kronos_fpu_fma
   end
 
   // ---------------------------------------------------------------------------
-  // Stage 4b: leading-zero count on registered 160-bit magnitude
+  // leading-zero count on registered 160-bit magnitude
   // ---------------------------------------------------------------------------
   logic [8:0]          s4b_msb_pos_comb;
   logic signed [12:0]  s4b_norm_exp_comb;
@@ -1035,7 +1035,7 @@ module kronos_fpu_fma
   end
 
   // ---------------------------------------------------------------------------
-  // Stage 5b: round, pack, overflow/underflow (old stage 5 second half)
+  // round, pack, overflow/underflow (old stage 5 second half)
   // ---------------------------------------------------------------------------
   logic [63:0] s5b_result_comb;
   logic [4:0]  s5b_flags_comb;

@@ -485,7 +485,7 @@ module kronos_fpu_fadd
   end
 
   // ===========================================================================
-  // Stage 2b: add / subtract only.  LZC and normalize moved to Stage 3 so the
+  // add / subtract only.  LZC and normalize moved to Stage 3 so the
   // 56-bit carry chain no longer shares a clock period with the CLZ + barrel
   // shift + sticky extraction.  Resolves the S2→S3 critical path.
   // ===========================================================================
@@ -604,7 +604,7 @@ module kronos_fpu_fadd
   end
 
   // ===========================================================================
-  // Stage 3b: subnormal barrel shift + G/R/S bit collection
+  // subnormal barrel shift + G/R/S bit collection
   // ===========================================================================
   s3b_t s3b_d;
 

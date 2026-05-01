@@ -506,7 +506,7 @@ SV_FILES_S3 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage2/kronos_muldiv.sv \
                $(RTL_DIR)/stage3/kronos_decompress.sv \
                $(RTL_DIR)/stage3/kronos_align.sv \
-               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR)/stage3/kronos_top.sv \
                sim_top.sv
 
@@ -567,7 +567,7 @@ sim-lsu-s3:
 
 TB_BPRED_FILES := $(AXI_PKG_SV) \
                   $(RTL_DIR)/kronos_pkg.sv \
-                  $(RTL_DIR)/stage3/kronos_bpred.sv \
+                  $(RTL_DIR)/common/kronos_bpred.sv \
                   $(TB_DIR)/stage3/tb_bpred.sv
 
 sim-bpred:
@@ -609,7 +609,7 @@ SV_FILES_S4 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage4/kronos_muldiv.sv \
                $(RTL_DIR)/stage4/kronos_decompress.sv \
                $(RTL_DIR)/stage3/kronos_align.sv \
-               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR)/stage4/kronos_top.sv \
                sim_top.sv
 
@@ -821,7 +821,7 @@ SV_FILES_S5 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage5/kronos_muldiv.sv \
                $(RTL_DIR)/stage5/kronos_decompress.sv \
                $(RTL_DIR)/stage3/kronos_align.sv \
-               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR)/stage5/kronos_top.sv \
                sim_top.sv \
                $(RTL_DIR)/stage5/kronos_regfile_fp.sv \
@@ -1034,7 +1034,7 @@ SV_FILES_S6 := $(AXI_PKG_SV) \
                $(RTL_DIR_S6)/kronos_muldiv.sv \
                $(RTL_DIR_S6)/kronos_decompress.sv \
                $(RTL_DIR_S6)/kronos_align.sv \
-               $(RTL_DIR)/stage3/kronos_bpred.sv \
+               $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR_S6)/kronos_top.sv \
                sim_top.sv \
                $(RTL_DIR_S6)/kronos_regfile_fp.sv \

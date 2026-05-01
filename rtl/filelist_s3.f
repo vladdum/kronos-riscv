@@ -13,8 +13,8 @@ stage1/kronos_forward.sv
 stage1/kronos_hazard.sv
 stage2/kronos_decode.sv
 stage2/kronos_muldiv.sv
+common/kronos_bpred.sv
 stage3/kronos_lsu.sv
 stage3/kronos_decompress.sv
 stage3/kronos_align.sv
-stage3/kronos_bpred.sv
 stage3/kronos_top.sv

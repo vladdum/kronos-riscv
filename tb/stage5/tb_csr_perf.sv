@@ -83,8 +83,9 @@ module tb_csr_perf;
     // mcountinhibit (0x320): write 0x7FF, read back 0x7FF (only bits [10:0]).
     csrrw(12'h320, 64'h0000_0000_0000_07FF);
     csrread(12'h320, v);
-    if (v[10:0] !== 11'h7FF || v[63:11] !== 53'b0)
+    if (v[10:0] !== 11'h7FF || v[63:11] !== 53'b0) begin
       $fatal(1, "mcountinhibit: %h", v);
+    end
 
     // mhpmevent3..10: write distinct event IDs, read back.
     csrrw(12'h323, 64'd3);
@@ -170,8 +171,9 @@ module tb_csr_perf;
     rs1_data = 64'hDEAD_BEEF_DEAD_BEEF;           // CSRRW: write DEAD_BEEF...
     @(negedge clk); req = 0; event_bus = 32'h0;
     csrread(12'hB03, v);
-    if (v !== 64'hDEAD_BEEF_DEAD_BEEF)
+    if (v !== 64'hDEAD_BEEF_DEAD_BEEF) begin
       $fatal(1, "SW write should win, got %h", v);
+    end
 
     // ---- Test: out-of-range event ID does not increment ----
     csrrw(12'h325, 64'h10);                       // mhpmevent5 = 0x10 (>= 16)
@@ -189,8 +191,9 @@ module tb_csr_perf;
       before_v = v;
       repeat (5) @(posedge clk);
       csrread(12'hB00, v);
-      if (v !== before_v)
+      if (v !== before_v) begin
         $fatal(1, "mcycle should be frozen by mcountinhibit[0]: %h vs %h", v, before_v);
+      end
     end
     csrrw(12'h320, 64'h0);
 
@@ -212,8 +215,9 @@ module tb_csr_perf;
                     funct3 = 3'b010; use_imm = 1; rs1_addr = 0;
     @(negedge clk); event_bus = 32'h0; req = 0;
     csrread(12'hB03, v);
-    if (v === 64'd0)
+    if (v === 64'd0) begin
       $fatal(1, "unrelated CSR access suppressed counter tick: %h", v);
+    end
 
     // ---- Test: CSRRC clears bits ----
     // Use mscratch (a plain RW CSR) to avoid side-effects.
