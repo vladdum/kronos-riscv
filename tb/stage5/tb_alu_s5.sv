@@ -10,13 +10,22 @@ module tb_alu_s5;
   logic [63:0] a, b, result;
   alu_op_e     op;
   logic        word_op;
+  // Structural-ALU sub-products exposed by the unified rtl/common/kronos_alu.sv.
+  // Stage 5 doesn't consume them; capture into local signals so they don't
+  // float and so PINMISSING stays quiet.
+  logic [63:0] adder_out_unused;
+  logic        cmp_lt_unused;
+  logic        eq_unused;
 
   kronos_alu dut (
-    .op_i      (op),
-    .a_i       (a),
-    .b_i       (b),
-    .word_op_i (word_op),
-    .result_o  (result)
+    .op_i        (op),
+    .a_i         (a),
+    .b_i         (b),
+    .word_op_i   (word_op),
+    .result_o    (result),
+    .adder_out_o (adder_out_unused),
+    .cmp_lt_o    (cmp_lt_unused),
+    .eq_o        (eq_unused)
   );
 
   int errors = 0;

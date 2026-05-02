@@ -68,5 +68,5 @@ lint_off -rule VARHIDDEN -file "*/rtl/stage4/kronos_decode.sv"
 lint_off -rule VARHIDDEN -file "*/rtl/stage5/kronos_decode.sv"
 lint_off -rule VARHIDDEN -file "*/rtl/stage3/kronos_decompress.sv"
 lint_off -rule VARHIDDEN -file "*/rtl/stage4/kronos_decompress.sv"
-lint_off -rule VARHIDDEN -file "*/rtl/stage5/kronos_decompress.sv"
-lint_off -rule VARHIDDEN -file "*/rtl/stage6/kronos_decompress.sv"
+// Stage 5 and Stage 6 now share the unified module under rtl/common/.
+lint_off -rule VARHIDDEN -file "*/rtl/common/kronos_decompress.sv"

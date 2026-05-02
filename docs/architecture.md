@@ -37,7 +37,7 @@ kronos_top  (rtl/stage5/kronos_top.sv)
 ├── u_decompress    kronos_decompress        (rtl/stage4/kronos_decompress.sv)         [stage 4: RV64C]
 ├── u_decode        kronos_decode            (rtl/stage5/kronos_decode.sv)             [stage 5: IMAFDC]
 ├── u_regfile       kronos_regfile           (rtl/stage0/kronos_regfile.sv)            [stage 0, reused]
-├── u_regfile_fp    kronos_regfile_fp        (rtl/stage5/kronos_regfile_fp.sv)         [stage 5a]
+├── u_regfile_fp    kronos_regfile_fp        (rtl/common/kronos_regfile_fp.sv)         [stage 5a]
 ├── u_alu           kronos_alu               (rtl/stage4/kronos_alu.sv)                [stage 4: 64-bit]
 ├── u_csr           kronos_csr               (rtl/stage5/kronos_csr.sv)                [stage 5: FCSR/FRM]
 ├── u_lsu           kronos_lsu               (rtl/stage5/kronos_lsu.sv)                [stage 5: FP loads/stores]

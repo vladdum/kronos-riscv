@@ -809,35 +809,35 @@ sim-all: $(SF_LIB)
 SV_FILES_S5 := $(AXI_PKG_SV) \
                $(RTL_DIR)/kronos_pkg.sv \
                $(RTL_DIR_COMMON)/kronos_ram.sv \
-               $(RTL_DIR)/stage5/kronos_alu.sv \
+               $(RTL_DIR)/common/kronos_alu.sv \
                $(RTL_DIR)/stage5/kronos_decode.sv \
                $(RTL_DIR)/stage0/kronos_regfile.sv \
                $(RTL_DIR)/stage5/kronos_icache.sv \
                $(RTL_DIR)/stage5/kronos_csr.sv \
-               $(RTL_DIR)/stage5/kronos_trigger.sv \
+               $(RTL_DIR)/common/kronos_trigger.sv \
                $(RTL_DIR)/stage5/kronos_lsu.sv \
                $(RTL_DIR)/stage5/kronos_dcache.sv \
                $(RTL_DIR)/stage1/kronos_forward.sv \
                $(RTL_DIR)/stage1/kronos_hazard.sv \
-               $(RTL_DIR)/stage5/kronos_muldiv.sv \
-               $(RTL_DIR)/stage5/kronos_decompress.sv \
+               $(RTL_DIR)/common/kronos_muldiv.sv \
+               $(RTL_DIR)/common/kronos_decompress.sv \
                $(RTL_DIR_COMMON)/kronos_predecode.sv \
                $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
                $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR)/stage5/kronos_top.sv \
                sim_top.sv \
-               $(RTL_DIR)/stage5/kronos_regfile_fp.sv \
+               $(RTL_DIR)/common/kronos_regfile_fp.sv \
                $(HARDFLOAT_V) \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
-               $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv
+               $(RTL_DIR)/common/fpu/kronos_fpu_scoreboard.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_fmisc.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_fcvt.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_fadd.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_fmul.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_fma.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_fdiv_core.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_fsqrt_core.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_iter.sv \
+               $(RTL_DIR)/common/fpu/kronos_fpu_top.sv
 
 TOP_S5     := sim_top
 SIM_BIN_S5 := $(OBJ_DIR)/s5/V$(TOP_S5)
@@ -1015,7 +1015,7 @@ SIM_BIN_S6 := $(OBJ_DIR)/s6/V$(TOP_S5)
 SV_FILES_S6 := $(AXI_PKG_SV) \
                $(RTL_DIR)/kronos_pkg.sv \
                $(RTL_DIR_COMMON)/kronos_ram.sv \
-               $(RTL_DIR_S6)/kronos_alu.sv \
+               $(RTL_DIR_COMMON)/kronos_alu.sv \
                $(RTL_DIR_S6)/kronos_decode.sv \
                $(RTL_DIR_S6)/kronos_decode_int.sv \
                $(RTL_DIR_S6)/kronos_decode_ctrl.sv \
@@ -1028,30 +1028,30 @@ SV_FILES_S6 := $(AXI_PKG_SV) \
                $(RTL_DIR_S6)/kronos_pmp.sv \
                $(RTL_DIR_S6)/kronos_tlb.sv \
                $(RTL_DIR_S6)/kronos_ptw.sv \
-               $(RTL_DIR_S6)/kronos_trigger.sv \
+               $(RTL_DIR_COMMON)/kronos_trigger.sv \
                $(RTL_DIR_S6)/kronos_lsu.sv \
                $(RTL_DIR_S6)/kronos_dcache.sv \
                $(RTL_DIR)/stage1/kronos_forward.sv \
                $(RTL_DIR)/stage1/kronos_hazard.sv \
-               $(RTL_DIR_S6)/kronos_muldiv.sv \
-               $(RTL_DIR_S6)/kronos_decompress.sv \
+               $(RTL_DIR_COMMON)/kronos_muldiv.sv \
+               $(RTL_DIR_COMMON)/kronos_decompress.sv \
                $(RTL_DIR_COMMON)/kronos_predecode.sv \
                $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
                $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR_S6)/kronos_top.sv \
                sim_top.sv \
-               $(RTL_DIR_S6)/kronos_regfile_fp.sv \
+               $(RTL_DIR_COMMON)/kronos_regfile_fp.sv \
                $(HARDFLOAT_V) \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_scoreboard.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_fmisc.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_fcvt.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_fadd.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_fmul.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_fma.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_fdiv_core.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_fsqrt_core.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_iter.sv \
-               $(RTL_DIR_S6)/fpu/kronos_fpu_top.sv
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_scoreboard.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_fmisc.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_fcvt.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_fadd.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_fmul.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_fma.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_fdiv_core.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_fsqrt_core.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_iter.sv \
+               $(RTL_DIR_COMMON)/fpu/kronos_fpu_top.sv
 
 build-s6: $(SIM_BIN_S6)
 
@@ -1259,7 +1259,7 @@ sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6:
 # ── Stage 6 ALU unit TB ───────────────────────────────────────────────────
 TB_ALU_S6_FILES := $(AXI_PKG_SV) \
                    $(RTL_DIR)/kronos_pkg.sv \
-                   $(RTL_DIR)/stage6/kronos_alu.sv \
+                   $(RTL_DIR)/common/kronos_alu.sv \
                    $(TB_DIR)/stage6/tb_alu_s6.sv
 sim-alu-s6:
 	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
@@ -1311,7 +1311,7 @@ sim-pkg-fp:
 	$(OBJ_DIR)/pkg_fp/Vtb_pkg_fp
 
 TB_REGFILE_FP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
-                       $(RTL_DIR)/stage5/kronos_regfile_fp.sv \
+                       $(RTL_DIR)/common/kronos_regfile_fp.sv \
                        $(TB_DIR)/stage5/tb_regfile_fp.sv
 sim-regfile-fp:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/regfile_fp \
@@ -1353,7 +1353,7 @@ sim-csr-perf-s5:
 	$(OBJ_DIR)/csr_perf/Vtb_csr_perf
 
 TB_TRIGGER_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
-                    $(RTL_DIR)/stage5/kronos_trigger.sv \
+                    $(RTL_DIR)/common/kronos_trigger.sv \
                     $(TB_DIR)/stage5/tb_trigger.sv
 sim-trigger:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/trigger -Wno-UNUSED \
@@ -1411,7 +1411,7 @@ sim-fetch-buffer: | $(OBJ_DIR)
 # ---------------------------------------------------------------------------
 TB_PREDECODE_FILES := $(AXI_PKG_SV) \
                       $(RTL_DIR)/kronos_pkg.sv \
-                      $(RTL_DIR)/stage6/kronos_decompress.sv \
+                      $(RTL_DIR)/common/kronos_decompress.sv \
                       $(RTL_DIR_COMMON)/kronos_predecode.sv \
                       $(TB_DIR)/common/tb_predecode.sv
 
@@ -1438,7 +1438,7 @@ TB_IFU_FILES := $(AXI_PKG_SV) \
                 $(RTL_DIR)/kronos_pkg.sv \
                 $(RTL_DIR_COMMON)/kronos_ram.sv \
                 $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
-                $(RTL_DIR)/stage6/kronos_decompress.sv \
+                $(RTL_DIR)/common/kronos_decompress.sv \
                 $(RTL_DIR_COMMON)/kronos_predecode.sv \
                 $(RTL_DIR)/stage6/kronos_icache.sv \
                 $(TB_DIR)/common/tb_ifu.sv
@@ -1501,7 +1501,7 @@ sim-dcache-pma-s6:
 	$(OBJ_DIR)/dcache_pma_s6/Vtb_dcache_pma
 
 TB_FPU_SB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
-                   $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
+                   $(RTL_DIR)/common/fpu/kronos_fpu_scoreboard.sv \
                    $(TB_DIR)/stage5/tb_fpu_scoreboard.sv
 sim-fpu-scoreboard:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Mdir $(OBJ_DIR)/fpu_sb \
@@ -1524,7 +1524,7 @@ FPU_COMMON_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                     $(TB_DIR)/stage5/fp_tb_pkg.sv
 
 TB_FMISC_FILES := $(FPU_COMMON_FILES) \
-                  $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
+                  $(RTL_DIR)/common/fpu/kronos_fpu_fmisc.sv \
                   $(TB_DIR)/stage5/tb_fpu_fmisc.sv
 sim-fpu-fmisc: $(SF_LIB)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
@@ -1534,7 +1534,7 @@ sim-fpu-fmisc: $(SF_LIB)
 	$(OBJ_DIR)/fpu_fmisc/Vtb_fpu_fmisc
 
 TB_FCVT_FILES := $(FPU_COMMON_FILES) \
-                 $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
+                 $(RTL_DIR)/common/fpu/kronos_fpu_fcvt.sv \
                  $(TB_DIR)/stage5/tb_fpu_fcvt.sv
 sim-fpu-fcvt: $(SF_LIB)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
@@ -1544,7 +1544,7 @@ sim-fpu-fcvt: $(SF_LIB)
 	$(OBJ_DIR)/fpu_fcvt/Vtb_fpu_fcvt
 
 TB_FADD_FILES := $(FPU_COMMON_FILES) \
-                 $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
+                 $(RTL_DIR)/common/fpu/kronos_fpu_fadd.sv \
                  $(TB_DIR)/stage5/tb_fpu_fadd.sv
 sim-fpu-fadd: $(SF_LIB)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
@@ -1554,7 +1554,7 @@ sim-fpu-fadd: $(SF_LIB)
 	$(OBJ_DIR)/fpu_fadd/Vtb_fpu_fadd
 
 TB_FMUL_FILES := $(FPU_COMMON_FILES) \
-                 $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
+                 $(RTL_DIR)/common/fpu/kronos_fpu_fmul.sv \
                  $(TB_DIR)/stage5/tb_fpu_fmul.sv
 sim-fpu-fmul: $(SF_LIB)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
@@ -1564,7 +1564,7 @@ sim-fpu-fmul: $(SF_LIB)
 	$(OBJ_DIR)/fpu_fmul/Vtb_fpu_fmul
 
 TB_FMA_FILES := $(FPU_COMMON_FILES) \
-                $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
+                $(RTL_DIR)/common/fpu/kronos_fpu_fma.sv \
                 $(TB_DIR)/stage5/tb_fpu_fma.sv
 sim-fpu-fma: $(SF_LIB)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
@@ -1574,7 +1574,7 @@ sim-fpu-fma: $(SF_LIB)
 	$(OBJ_DIR)/fpu_fma/Vtb_fpu_fma
 
 TB_FPU_FDIV_CORE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
-                          $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
+                          $(RTL_DIR)/common/fpu/kronos_fpu_fdiv_core.sv \
                           $(TB_DIR)/stage5/tb_fpu_fdiv_core.sv
 sim-fpu-fdiv-core:
 	cd ../tb/stage5/ref && python3 gen_fdiv_vectors.py
@@ -1585,7 +1585,7 @@ sim-fpu-fdiv-core:
 	$(OBJ_DIR)/fpu_fdiv_core/Vtb_fpu_fdiv_core
 
 TB_FPU_FSQRT_CORE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
-                           $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
+                           $(RTL_DIR)/common/fpu/kronos_fpu_fsqrt_core.sv \
                            $(TB_DIR)/stage5/tb_fpu_fsqrt_core.sv
 sim-fpu-fsqrt-core:
 	cd ../tb/stage5/ref && python3 gen_fsqrt_vectors.py
@@ -1596,9 +1596,9 @@ sim-fpu-fsqrt-core:
 	$(OBJ_DIR)/fpu_fsqrt_core/Vtb_fpu_fsqrt_core
 
 TB_FPU_ITER_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
-                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
-                     $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
-                     $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
+                     $(RTL_DIR)/common/fpu/kronos_fpu_fdiv_core.sv \
+                     $(RTL_DIR)/common/fpu/kronos_fpu_fsqrt_core.sv \
+                     $(RTL_DIR)/common/fpu/kronos_fpu_iter.sv \
                      $(TB_DIR)/stage5/tb_fpu_iter.sv
 sim-fpu-iter-skeleton:
 	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-lint -Wno-style \
@@ -1607,9 +1607,9 @@ sim-fpu-iter-skeleton:
 	$(OBJ_DIR)/fpu_iter/Vtb_fpu_iter
 
 TB_FPU_ITER_SF_FILES := $(FPU_COMMON_FILES) \
-                        $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
-                        $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
-                        $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
+                        $(RTL_DIR)/common/fpu/kronos_fpu_fdiv_core.sv \
+                        $(RTL_DIR)/common/fpu/kronos_fpu_fsqrt_core.sv \
+                        $(RTL_DIR)/common/fpu/kronos_fpu_iter.sv \
                         $(TB_DIR)/stage5/tb_fpu_iter.sv
 sim-fpu-iter: $(SF_LIB)
 	$(VERILATOR) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-lint -Wno-style \
@@ -1628,7 +1628,7 @@ sim-decode-fp-cov:
 # ── Stage 5 integer unit TBs (SIM_GROUP_S5_INT) ───────────────────────────
 TB_ALU_S5_FILES := $(AXI_PKG_SV) \
                    $(RTL_DIR)/kronos_pkg.sv \
-                   $(RTL_DIR)/stage5/kronos_alu.sv \
+                   $(RTL_DIR)/common/kronos_alu.sv \
                    $(TB_DIR)/stage5/tb_alu_s5.sv
 sim-alu-s5:
 	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
@@ -1638,7 +1638,7 @@ sim-alu-s5:
 
 TB_MULDIV_S5_FILES := $(AXI_PKG_SV) \
                       $(RTL_DIR)/kronos_pkg.sv \
-                      $(RTL_DIR)/stage5/kronos_muldiv.sv \
+                      $(RTL_DIR)/common/kronos_muldiv.sv \
                       $(TB_DIR)/stage5/tb_muldiv_s5.sv
 sim-muldiv-s5:
 	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
@@ -1657,16 +1657,16 @@ sim-decode-s5:
 	$(OBJ_DIR)/tb_decode_s5/Vtb_decode_s5
 
 TB_FPU_TOP_FILES := $(FPU_COMMON_FILES) \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_scoreboard.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fmisc.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fcvt.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fadd.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fmul.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fma.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fdiv_core.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fsqrt_core.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_iter.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_top.sv \
                     $(TB_DIR)/stage5/tb_fpu_top.sv
 sim-fpu-top: $(SF_LIB)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-WIDTHTRUNC --Wno-TIMESCALEMOD \
@@ -1676,16 +1676,16 @@ sim-fpu-top: $(SF_LIB)
 	$(OBJ_DIR)/fpu_top/Vtb_fpu_top
 
 TB_FPU_TOP_ITER_FILES := $(FPU_COMMON_FILES) \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_scoreboard.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmisc.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fcvt.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fadd.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fmul.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fma.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fdiv_core.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_fsqrt_core.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_iter.sv \
-                    $(RTL_DIR)/stage5/fpu/kronos_fpu_top.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_scoreboard.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fmisc.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fcvt.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fadd.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fmul.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fma.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fdiv_core.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_fsqrt_core.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_iter.sv \
+                    $(RTL_DIR)/common/fpu/kronos_fpu_top.sv \
                     $(TB_DIR)/stage5/tb_fpu_top_iter.sv
 sim-fpu-top-iter: $(SF_LIB)
 	$(VERILATOR) --binary $(AXI_FLAGS) -Wno-lint -Wno-style --Wno-TIMESCALEMOD \

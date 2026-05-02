@@ -103,6 +103,12 @@ module kronos_top
   // -------------------------------------------------------------------------
   logic [63:0] fwd_rs1_data, fwd_rs2_data;
   logic [63:0] alu_a, alu_b, alu_result;
+  // Stage 5 only consumes alu.result_o.  The structural-ALU's adder/cmp/eq
+  // sub-products are exposed for stage-6's branch-resolution path; here they
+  // tie into the unused-signal aggregator below.
+  logic [63:0] alu_adder_out_unused;
+  logic        alu_cmp_lt_unused;
+  logic        alu_eq_unused;
   logic [63:0] ex_result;
   logic [31:0] ex_pc_d                        /* verilator public_flat_rd */;
   logic        ex_redirect                        /* verilator public_flat_rd */;
@@ -495,11 +501,14 @@ module kronos_top
   );
 
   kronos_alu u_alu (
-    .op_i      (id_ex_q.dec.alu_op),
-    .a_i       (alu_a),
-    .b_i       (alu_b),
-    .word_op_i (id_ex_q.dec.is_word_op),
-    .result_o  (alu_result)
+    .op_i        (id_ex_q.dec.alu_op),
+    .a_i         (alu_a),
+    .b_i         (alu_b),
+    .word_op_i   (id_ex_q.dec.is_word_op),
+    .result_o    (alu_result),
+    .adder_out_o (alu_adder_out_unused),
+    .cmp_lt_o    (alu_cmp_lt_unused),
+    .eq_o        (alu_eq_unused)
   );
 
   kronos_muldiv u_muldiv (
@@ -1433,6 +1442,8 @@ module kronos_top
   assign _unused_irq = ^{irq_msi_i, irq_mei_i, irq_ssi_i, irq_sti_i,
                          irq_sei_i, cross_page_fault, align_stall,
                          align_need_upper, align_needs_fetch,
-                         predecode_instr_pc};
+                         predecode_instr_pc,
+                         alu_adder_out_unused, alu_cmp_lt_unused,
+                         alu_eq_unused};
 
 endmodule
