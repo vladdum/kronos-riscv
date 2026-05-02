@@ -9,7 +9,13 @@
 // burst, dirty-line writeback via AXI INCR burst.  AMO RMW and LR/SC
 // reservation tracking live inside the cache.
 //
-// See docs/superpowers/specs/2026-04-27-dcache-design.md.
+// Per-way data arrays are 4 x kronos_ram (one per way); tag/valid/dirty/
+// PLRU/FSM state stay in flops.  The LSU's same-cycle hit response is
+// preserved by pre-launching the BRAM read in EX with the dTLB-translated
+// PA via the early_req_valid_i / early_addr_i ports.
+//
+// See docs/superpowers/specs/2026-04-27-dcache-design.md and
+//     docs/superpowers/specs/2026-05-01-stage6g-dcache-bram-design.md.
 module kronos_dcache
   import kronos_pkg::*;
 #(
@@ -38,6 +44,13 @@ module kronos_dcache
   output logic [kronos_pkg::XLEN-1:0]        rdata_o,
   output logic                   sc_success_o,
   output logic                   stall_o,
+
+  // EX-stage pre-launch port. The dTLB exposes the translated PA
+  // combinationally in EX; this port lets the dcache fire the BRAM read
+  // one cycle ahead of the MEM-stage req_i so ram_rdata is registered
+  // exactly when the MEM stage consumes it.
+  input  logic                   early_req_valid_i,
+  input  logic [PHYS_ADDR_W-1:0] early_addr_i,
 
   // PTW priority request port (preempts LSU when ptw_req_valid_i=1)
   input  logic                   ptw_req_valid_i,
@@ -74,6 +87,8 @@ module kronos_dcache
   localparam int unsigned BEAT_IDX_W  = OFFSET_W - 3;
   localparam int unsigned TAG_W       = PHYS_ADDR_W - SET_IDX_W - OFFSET_W;
   localparam int unsigned BEATS       = LINE_BYTES / 8;
+  localparam int unsigned RAM_DEPTH   = NUM_SETS * BEATS;
+  localparam int unsigned RAM_ADDR_W  = $clog2(RAM_DEPTH);
 
   // ---- Types ---------------------------------------------------------------
   typedef enum logic [3:0] {
@@ -91,16 +106,17 @@ module kronos_dcache
     DC_NC_R       = 4'b1010,
     DC_NC_AW      = 4'b1011,
     DC_NC_W       = 4'b1100,
-    DC_NC_B       = 4'b1101
+    DC_NC_B       = 4'b1101,
+    // PTW hit lookup wait cycle (BRAM read latency)
+    DC_PTW_LOOKUP = 4'b1110
   } dcache_state_e;
 
   // ---- State registers (driven by always_ff) -------------------------------
-  // Storage arrays
+  // Storage arrays (data_q is now in 4 x kronos_ram, see gen_data_ram below)
   logic [TAG_W-1:0] tag_q   [NUM_SETS][NUM_WAYS];
   logic             valid_q [NUM_SETS][NUM_WAYS];
   logic             dirty_q [NUM_SETS][NUM_WAYS];
   logic [2:0]       plru_q  [NUM_SETS];
-  logic [kronos_pkg::XLEN-1:0]  data_q  [NUM_WAYS][NUM_SETS][BEATS];
 
   // Top-level FSM state
   dcache_state_e state_q;
@@ -169,6 +185,25 @@ module kronos_dcache
   // the latched bit.
   logic in_flight_is_ptw_q;
 
+  // 1-deep RAW bypass: tracks the previous cycle's BRAM port-A write so
+  // that a same-line / same-beat / same-way load presented this cycle can
+  // merge in the just-written bytes — port B's "no_change" mode (the only
+  // collision mode RAMB36/RAMB18 SDP supports) leaves rdata stale on
+  // same-address write+read collisions. Covers two paths: store-hit→load
+  // back-to-back, and last-refill-beat→load on the cycle after refill
+  // completes.
+  logic [NUM_WAYS-1:0]                       prev_write_way_oh_q;
+  logic [RAM_ADDR_W-1:0]                     prev_write_addr_q;
+  logic [kronos_pkg::XLEN-1:0]               prev_write_data_q;
+  logic [kronos_pkg::XLEN_BYTES-1:0]         prev_write_mask_q;
+  logic                                      prev_write_active_q;
+
+  // PTW hit lookup state — captured at DC_IDLE entry on a PTW hit so that
+  // DC_PTW_LOOKUP can way-mux ram_rdata[ptw_lookup_way_q] as the response.
+  // ram_rdata itself was registered the cycle before from the PTW PA's
+  // pre-launch in DC_IDLE, so no extra raddr capture is needed.
+  logic [$clog2(NUM_WAYS)-1:0]     ptw_lookup_way_q;
+
   // ---- Combinational signals ------------------------------------------------
   // PTW vs LSU arbitration (effective request signals)
   logic                   eff_req_valid;
@@ -204,7 +239,6 @@ module kronos_dcache
   logic dirty_pending;
 
   // AMO intermediate signals for DC_AMO_RMW
-  logic [kronos_pkg::XLEN-1:0]       amo_cur_beat;
   logic [kronos_pkg::XLEN-1:0]       amo_result;
   logic [kronos_pkg::XLEN_BYTES-1:0] amo_be;
   logic [kronos_pkg::XLEN-1:0]       amo_aligned;
@@ -212,14 +246,13 @@ module kronos_dcache
   // hit_way_idx: binary encoding of hit way for AMO/SC use
   logic [$clog2(NUM_WAYS)-1:0] hit_way_idx;
 
-  // hit_beat: full kronos_pkg::XLEN-wide beat from the hit way (consumed by the AMO RMW
-  // capture inside the always_ff block below). Declared here so synthesis
-  // sees it before its first use (Synth 8-6901).
+  // hit_beat: full kronos_pkg::XLEN-wide beat from the hit way (way-mux on
+  // ram_rdata).  Consumed both by the load-extension mux below and by the
+  // AMO old-value capture inside the FSM.
   logic [kronos_pkg::XLEN-1:0] hit_beat;
 
   // Pre-computed strobes/aligned-data for store-hit and SC-success write
-  // paths.  Promoted from `automatic` block-locals (R2) so the FSM can
-  // index them directly inside the per-way write loops.
+  // paths.
   logic [kronos_pkg::XLEN_BYTES-1:0] st_strobes;
   logic [kronos_pkg::XLEN-1:0]       st_aligned;
   logic [kronos_pkg::XLEN_BYTES-1:0] sc_strobes;
@@ -242,6 +275,29 @@ module kronos_dcache
 
   // route the response to either LSU or PTW
   logic rsp_to_ptw;
+
+  // ---- Per-way RAM interface signals (driven combinationally) --------------
+  logic [NUM_WAYS-1:0]                       ram_we;
+  logic [RAM_ADDR_W-1:0]                     ram_waddr;
+  logic [kronos_pkg::XLEN-1:0]               ram_wdata;
+  logic [kronos_pkg::XLEN_BYTES-1:0]         ram_wmask;
+  logic                                      ram_re;
+  logic [RAM_ADDR_W-1:0]                     ram_raddr;
+  logic [kronos_pkg::XLEN-1:0]               ram_rdata [NUM_WAYS];
+
+  // Refill beat-in-burst pointer (CWF wrap inside the line).
+  logic [BEAT_IDX_W-1:0] refill_beat_in_burst;
+
+  // Store-hit / SC-success / refill / AMO RMW write predicates (mutually
+  // exclusive by FSM state).
+  logic store_hit_fire;
+  logic sc_hit_write_fire;
+  logic refill_beat_write;
+  logic amo_rmw_write_fire;
+
+  // AXI W handshake / wb-last helpers used by the WB read pre-launch.
+  logic axi_w_handshake;
+  logic wb_last_beat;
 
   // Lint-only: tie off intentionally-read register
   logic _unused;
@@ -439,23 +495,209 @@ module kronos_dcache
     end
   end
 
-  // hit_beat: full 64-bit beat from the hit way (consumed by the AMO RMW
-  // capture inside the always_ff block below).
+  // hit_beat: full 64-bit beat from the hit way, sourced from the registered
+  // ram_rdata array (populated by the EX-stage pre-launch one cycle earlier).
+  // Includes the 1-deep RAW bypass: when the previous cycle had a port-A
+  // write to the same {way, set, beat}, byte-merge the prev cycle's
+  // wdata over ram_rdata for the strobed bytes — port B's "no_change"
+  // mode left ram_rdata stale on that collision.
   always_comb begin
     hit_beat = {kronos_pkg::XLEN{1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
-      if (hit_way_oh[w]) hit_beat = data_q[w][set_idx][beat_idx];
+      if (hit_way_oh[w]) begin
+        hit_beat = ram_rdata[w];
+        if (prev_write_active_q & prev_write_way_oh_q[w] &
+            (prev_write_addr_q == {set_idx, beat_idx})) begin
+          for (int b = 0; b < kronos_pkg::XLEN_BYTES; b++) begin
+            if (prev_write_mask_q[b]) begin
+              hit_beat[b*8 +: 8] = prev_write_data_q[b*8 +: 8];
+            end
+          end
+        end
+      end
     end
   end
 
   // Pre-computed store/SC strobes and aligned-data — pure functions of the
-  // effective request size/offset/wdata.  Used by the per-way write loops
-  // inside the FSM (avoids `automatic` block-locals; see R2).
+  // effective request size/offset/wdata.
   always_comb begin
     st_strobes = store_strobes(eff_req_size, eff_req_addr[2:0]);
     st_aligned = store_data_aligned(eff_req_size, eff_req_addr[2:0], eff_req_wdata);
     sc_strobes = st_strobes;
     sc_aligned = st_aligned;
+  end
+
+  // ==========================================================================
+  // BRAM data array (one kronos_ram per way)
+  // ==========================================================================
+  generate
+    for (genvar gi = 0; gi < NUM_WAYS; gi++) begin : gen_data_ram
+      kronos_ram #(
+        .DEPTH        (RAM_DEPTH),
+        .WIDTH        (kronos_pkg::XLEN),
+        .BYTE_WIDTH   (8),
+        // Vivado SDP block-RAM only allows "no_change" / "read_first" on
+        // port B (RAMB36/RAMB18 hard limitation). Same-cycle store-then-
+        // load to the same beat is handled by the 1-deep RAW bypass mux
+        // below (prev_write_*_q on the hit-data path) — covers the two
+        // collision paths: store-hit→load and last-refill-beat→load.
+        .WRITE_MODE_B ("no_change")
+      ) u_ram (
+        .clk_i   (clk_i),
+        .we_i    (ram_we[gi]),
+        .waddr_i (ram_waddr),
+        .wdata_i (ram_wdata),
+        .wmask_i (ram_wmask),
+        .re_i    (ram_re),
+        .raddr_i (ram_raddr),
+        .rdata_o (ram_rdata[gi])
+      );
+    end
+  endgenerate
+
+  // ==========================================================================
+  // BRAM port-A: per-way write enables / write data / mask
+  // ==========================================================================
+  // Refill beat-in-burst (CWF wrap).
+  assign refill_beat_in_burst = miss_beat_q + beat_cnt_q[BEAT_IDX_W-1:0];
+
+  // Store-hit fires on the same cycle as the hit response, in DC_IDLE,
+  // when the request is a plain store hitting a valid line and we are not
+  // entering a flush, NC bypass, AMO, LR/SC, or refill path.  These
+  // exclusions are captured by ANDing hit & eff_req_we & eff_req_valid &
+  // ~eff_amo_req & ~eff_req_is_lr & ~eff_req_is_sc & ~is_uncacheable &
+  // ~(flush_i & ~flush_done_q) & (state_q == DC_IDLE).
+  always_comb begin
+    store_hit_fire = (state_q == DC_IDLE)
+                   & ~(flush_i & ~flush_done_q)
+                   & eff_req_valid
+                   & eff_req_we
+                   & ~eff_amo_req
+                   & ~eff_req_is_lr
+                   & ~eff_req_is_sc
+                   & ~is_uncacheable
+                   & hit;
+  end
+
+  // SC-success write fires on a successful SC: reservation valid, address
+  // matches, line hits, in DC_IDLE, not flushing.
+  always_comb begin
+    sc_hit_write_fire = (state_q == DC_IDLE)
+                      & ~(flush_i & ~flush_done_q)
+                      & eff_req_valid
+                      & eff_amo_req
+                      & (eff_amo_op == 5'b00011)
+                      & ~is_uncacheable
+                      & rsrv_valid_q
+                      & (rsrv_addr_q == eff_req_addr)
+                      & hit;
+  end
+
+  // Refill beat write — once per accepted R beat in DC_REFILL_R.
+  assign refill_beat_write = (state_q == DC_REFILL_R)
+                           & axi_req_o.r_ready & axi_rsp_i.r_valid;
+
+  // AMO RMW write — single cycle in DC_AMO_RMW state.
+  assign amo_rmw_write_fire = (state_q == DC_AMO_RMW);
+
+  always_comb begin
+    // Defaults: no write.
+    ram_we    = {NUM_WAYS{1'b0}};
+    ram_waddr = {RAM_ADDR_W{1'b0}};
+    ram_wdata = {kronos_pkg::XLEN{1'b0}};
+    ram_wmask = {kronos_pkg::XLEN_BYTES{1'b0}};
+
+    unique case (1'b1)
+      // Store-hit (DC_IDLE, same-cycle as req_i)
+      store_hit_fire: begin
+        for (int w = 0; w < NUM_WAYS; w++) begin
+          ram_we[w] = hit_way_oh[w];
+        end
+        ram_waddr = {set_idx, beat_idx};
+        ram_wdata = st_aligned;
+        ram_wmask = st_strobes;
+      end
+      // SC-success (DC_IDLE)
+      sc_hit_write_fire: begin
+        for (int w = 0; w < NUM_WAYS; w++) begin
+          ram_we[w] = hit_way_oh[w];
+        end
+        ram_waddr = {set_idx, beat_idx};
+        ram_wdata = sc_aligned;
+        ram_wmask = sc_strobes;
+      end
+      // Refill beat write (DC_REFILL_R)
+      refill_beat_write: begin
+        ram_we[victim_q] = 1'b1;
+        ram_waddr = {miss_set_q, refill_beat_in_burst};
+        // Critical-word merge for store-miss: byte-pick from
+        // miss_store_data_q for strobed bytes, AXI data otherwise.
+        for (int b = 0; b < kronos_pkg::XLEN_BYTES; b++) begin
+          ram_wdata[b*8 +: 8] =
+            ((beat_cnt_q == 4'd0) & miss_was_store_q & miss_store_strobes_q[b])
+              ? miss_store_data_q[b*8 +: 8]
+              : axi_rsp_i.r.data[b*8 +: 8];
+        end
+        ram_wmask = {kronos_pkg::XLEN_BYTES{1'b1}};
+      end
+      // AMO RMW (DC_AMO_RMW)
+      amo_rmw_write_fire: begin
+        ram_we[victim_q] = 1'b1;
+        ram_waddr = {miss_set_q, miss_beat_q};
+        ram_wdata = amo_aligned;
+        ram_wmask = amo_be;
+      end
+      default: ;   // no write
+    endcase
+  end
+
+  // ==========================================================================
+  // BRAM port-B: pre-launch read address arbitration
+  // ==========================================================================
+  // Priority: writeback / flush-writeback > PTW lookup launch (in DC_IDLE
+  // when ptw_active) > LSU pre-launch (default).  WB and PTW only override
+  // during cycles in which the LSU is stalled anyway, so the LSU's
+  // pre-launch is wasted with no IPC visible effect.
+  assign axi_w_handshake = axi_req_o.w_valid & axi_rsp_i.w_ready;
+  assign wb_last_beat    = (wb_beat_cnt_q == 4'd7);
+
+  always_comb begin
+    // Default: LSU pre-launch from EX-stage dTLB PA.
+    ram_re    = early_req_valid_i;
+    ram_raddr = early_addr_i[OFFSET_W + SET_IDX_W - 1 : 3];
+
+    // Writeback / flush-writeback beat-0 pre-launch (free cycle in AW).
+    if ((state_q == DC_WB_AW) | (state_q == DC_FLUSH_AW)) begin
+      ram_re    = 1'b1;
+      ram_raddr = {miss_set_q, {BEAT_IDX_W{1'b0}}};   // beat 0
+    end else if ((state_q == DC_WB_W) | (state_q == DC_FLUSH_W)) begin
+      // Pre-launch beat N+1 on the cycle beat N's W handshake completes.
+      // ram_rdata holds the current beat across w_ready stalls because
+      // ram_re stays low until the next handshake fires.
+      ram_re    = axi_w_handshake & ~wb_last_beat;
+      ram_raddr = {miss_set_q,
+                   wb_beat_cnt_q[BEAT_IDX_W-1:0] + {{(BEAT_IDX_W-1){1'b0}}, 1'b1}};
+    end else if ((state_q == DC_REFILL_R) | (state_q == DC_REFILL_AR)
+               | (state_q == DC_AMO_RMW)) begin
+      // Drive the BRAM read from the in-flight request's PA so ram_rdata is
+      // populated when the FSM returns to DC_IDLE and the LSU consumes the
+      // hit response.  The EX-stage pre-launch only fires for the
+      // CURRENTLY-EX instruction; while a miss refill is in progress, the
+      // EX-stage instruction is the one BEHIND the missing op (or a non-
+      // memory op), so its pre-launch cannot keep ram_rdata fresh for the
+      // missing op.  eff_req_addr tracks the current owner of the cache
+      // (LSU's addr_i during a load/store miss, PTW's addr during a PTW
+      // miss); this signal is stable across the refill because mem_stall
+      // freezes ex_mem_q and the PTW latches its own request.
+      ram_re    = 1'b1;
+      ram_raddr = eff_req_addr[OFFSET_W + SET_IDX_W - 1 : 3];
+    end else if ((state_q == DC_IDLE) & ptw_active) begin
+      // PTW preempt in DC_IDLE: drive PTW's PA so ram_rdata is registered
+      // for DC_PTW_LOOKUP next cycle.  Overrides LSU's pre-launch (LSU
+      // is stalled anyway by ptw_active / state transitions).
+      ram_re    = 1'b1;
+      ram_raddr = eff_req_addr[OFFSET_W + SET_IDX_W - 1 : 3];
+    end
   end
 
   // ==========================================================================
@@ -503,6 +745,12 @@ module kronos_dcache
       nc_rsp_err_q         <= 1'b0;
       nc_b_done_q          <= 1'b0;
       nc_b_err_q           <= 1'b0;
+      ptw_lookup_way_q     <= {$clog2(NUM_WAYS){1'b0}};
+      prev_write_way_oh_q  <= {NUM_WAYS{1'b0}};
+      prev_write_addr_q    <= {RAM_ADDR_W{1'b0}};
+      prev_write_data_q    <= {kronos_pkg::XLEN{1'b0}};
+      prev_write_mask_q    <= {kronos_pkg::XLEN_BYTES{1'b0}};
+      prev_write_active_q  <= 1'b0;
       for (int s = 0; s < NUM_SETS; s++) begin
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
@@ -511,17 +759,8 @@ module kronos_dcache
           tag_q[s][w]   <= {TAG_W{1'b0}};
         end
       end
-      // Explicit reset of data_q. Without this, Vivado inferred FFs with
-      // both async Set and async Reset on the byte-strobed write paths
-      // (Synth 8-7137), producing nondeterministic reset behavior in the
-      // gate-level netlist.
-      for (int w = 0; w < NUM_WAYS; w++) begin
-        for (int s = 0; s < NUM_SETS; s++) begin
-          for (int b = 0; b < BEATS; b++) begin
-            data_q[w][s][b] <= {kronos_pkg::XLEN{1'b0}};
-          end
-        end
-      end
+      // No data_q reset — BRAM contents are don't-care at reset; valid_q
+      // is the source of truth for "is this address readable".
     end else begin
       miss_pulse_q   <= miss_event;
       bypass_valid_q <= 1'b0;
@@ -529,6 +768,15 @@ module kronos_dcache
       amo_done_q     <= 1'b0;
       sc_success_q   <= 1'b0;
       flush_done_q   <= 1'b0;     // default: one-cycle pulse
+      // Capture this cycle's BRAM port-A write for the next cycle's
+      // RAW-bypass hit-data mux. ram_we is the per-way OR of every
+      // write predicate (store-hit / SC / refill / AMO RMW); when none
+      // fire, prev_write_active_q clears.
+      prev_write_active_q <= |ram_we;
+      prev_write_way_oh_q <= ram_we;
+      prev_write_addr_q   <= ram_waddr;
+      prev_write_data_q   <= ram_wdata;
+      prev_write_mask_q   <= ram_wmask;
       // NC response/completion pulses — default-clear each cycle.
       nc_rsp_valid_q <= 1'b0;
       nc_b_done_q    <= 1'b0;
@@ -596,27 +844,26 @@ module kronos_dcache
               end
             end
             // else: stay in DC_IDLE while the previous NC completion drains.
-            // The LSU's mem_stall drops the cycle data_valid_o pulses, so
-            // the pipeline advances and req_i for this access deasserts on
-            // the next cycle. No re-entry needed.
+          end else if (ptw_active & hit & ~eff_req_is_sc) begin
+            // PTW read hit (plain load OR PTW LR) — capture the way and wait
+            // one cycle for ram_rdata.  ram_re/ram_raddr were driven by the
+            // PTW PA this cycle (see pre-launch arbitration), so the
+            // registered ram_rdata holds the beat in DC_PTW_LOOKUP next
+            // cycle.  PTW SC is intentionally excluded so it falls through
+            // to the SC branch and acks same-cycle via sc_success_q.
+            ptw_lookup_way_q  <= hit_way_idx;
+            // Update PLRU on the PTW access (mirrors LSU hit behavior).
+            plru_q[set_idx]   <= plru_update(plru_q[set_idx], hit_way_idx);
+            state_q <= DC_PTW_LOOKUP;
           end else if (eff_req_valid & eff_amo_req & ~amo_pending_q & ~amo_done_q) begin
             if (eff_amo_op == 5'b00011) begin
               // SC: check reservation; if matched, write; else no-op.
               if (rsrv_valid_q & (rsrv_addr_q == eff_req_addr) & hit) begin
-                // SC success on cached line: write, set dirty.
-                // Strobes / aligned-data are pre-computed combinationally
-                // (sc_strobes, sc_aligned) so the per-way write loop indexes
-                // them directly.  Hoisting works around Vivado xsim/Synth
-                // rejecting "function_call(...)[bit_select]" per IEEE 1800.
-                for (int w = 0; w < NUM_WAYS; w++) begin : sc_write_loop
-                  if (hit_way_oh[w]) begin
-                    for (int b = 0; b < 8; b++) begin
-                      if (sc_strobes[b]) begin
-                        data_q[w][set_idx][beat_idx][b*8 +: 8] <= sc_aligned[b*8 +: 8];
-                      end
-                    end
-                    dirty_q[set_idx][w] <= 1'b1;
-                  end
+                // SC success on cached line.  BRAM write fires
+                // combinationally via sc_hit_write_fire; FSM marks dirty
+                // and returns the success ack.
+                for (int w = 0; w < NUM_WAYS; w++) begin
+                  if (hit_way_oh[w]) dirty_q[set_idx][w] <= 1'b1;
                 end
                 plru_q[set_idx] <= plru_update(plru_q[set_idx], hit_way_idx);
                 sc_success_q    <= 1'b1;
@@ -668,7 +915,9 @@ module kronos_dcache
             end else begin
               // Non-LR/SC AMO: hit → RMW state; miss → refill then RMW.
               if (hit) begin
-                // Capture for the AMO RMW state.
+                // Capture for the AMO RMW state.  hit_beat sources from
+                // ram_rdata via the way-mux (populated by the EX pre-launch
+                // one cycle earlier).
                 amo_pending_q  <= 1'b1;
                 amo_op_q       <= eff_amo_op;
                 amo_src_q      <= eff_req_wdata;
@@ -704,21 +953,12 @@ module kronos_dcache
               end
             end
           end else begin
-            // Store hit: write into RAM, set dirty.
-            // Strobes / aligned-data are pre-computed combinationally
-            // (st_strobes, st_aligned) so the per-way write loop indexes
-            // them directly.  Hoisting works around Vivado xsim/Synth
-            // rejecting "function_call(...)[bit_select]" per IEEE 1800.
+            // Plain load/store path.  Store-hit BRAM write fires
+            // combinationally via store_hit_fire; the FSM only updates
+            // dirty/PLRU here.
             if (hit & eff_req_we & eff_req_valid) begin
-              for (int w = 0; w < NUM_WAYS; w++) begin : store_hit_loop
-                if (hit_way_oh[w]) begin
-                  for (int b = 0; b < 8; b++) begin
-                    if (st_strobes[b]) begin
-                      data_q[w][set_idx][beat_idx][b*8 +: 8] <= st_aligned[b*8 +: 8];
-                    end
-                  end
-                  dirty_q[set_idx][w] <= 1'b1;
-                end
+              for (int w = 0; w < NUM_WAYS; w++) begin
+                if (hit_way_oh[w]) dirty_q[set_idx][w] <= 1'b1;
               end
             end
             // Hit (load or store): update PLRU.
@@ -749,20 +989,18 @@ module kronos_dcache
             end
           end
         end
+        DC_PTW_LOOKUP: begin
+          // ram_rdata holds the PTW's beat (launched when entering this
+          // state).  ptw_rsp_valid_o fires combinationally via rsp_valid_int
+          // (see Outputs); just return to IDLE.
+          state_q <= DC_IDLE;
+        end
         DC_REFILL_AR: begin
           if (axi_req_o.ar_valid & axi_rsp_i.ar_ready) state_q <= DC_REFILL_R;
         end
         DC_REFILL_R: begin
           if (axi_req_o.r_ready & axi_rsp_i.r_valid) begin
-            // On the critical beat of a store-miss, merge store bytes.
-            for (int b = 0; b < 8; b++) begin
-              if ((beat_cnt_q == 4'd0) & miss_was_store_q & miss_store_strobes_q[b])
-                data_q[victim_q][miss_set_q][miss_beat_q + beat_cnt_q[BEAT_IDX_W-1:0]][b*8 +: 8]
-                  <= miss_store_data_q[b*8 +: 8];
-              else
-                data_q[victim_q][miss_set_q][miss_beat_q + beat_cnt_q[BEAT_IDX_W-1:0]][b*8 +: 8]
-                  <= axi_rsp_i.r.data[b*8 +: 8];
-            end
+            // Refill BRAM write fires combinationally via refill_beat_write.
             // CWF: bypass first beat ONLY for loads (not store-miss).
             if ((beat_cnt_q == 4'd0) & ~miss_was_store_q) begin
               bypass_valid_q <= 1'b1;
@@ -798,17 +1036,8 @@ module kronos_dcache
           end
         end
         DC_AMO_RMW: begin
-          // Compute new value, write to RAM with byte strobes, set dirty,
-          // capture old value, return to IDLE.
-          for (int w = 0; w < NUM_WAYS; w++) begin
-            if (w[$clog2(NUM_WAYS)-1:0] == victim_q) begin
-              for (int b = 0; b < 8; b++) begin
-                data_q[w][miss_set_q][miss_beat_q][b*8 +: 8] <=
-                  amo_be[b] ? amo_aligned[b*8 +: 8]
-                            : amo_cur_beat[b*8 +: 8];
-              end
-            end
-          end
+          // Combinational BRAM byte-strobed write fires via amo_rmw_write_fire.
+          // FSM marks dirty, signals done, and returns to IDLE.
           dirty_q[miss_set_q][victim_q] <= 1'b1;
           amo_done_q     <= 1'b1;
           amo_pending_q  <= 1'b0;
@@ -946,7 +1175,10 @@ module kronos_dcache
     axi_req_o.aw.id    = {$bits(axi_req_o.aw.id){1'b0}};
     axi_req_o.aw_valid = (state_q == DC_WB_AW) | (state_q == DC_FLUSH_AW);
 
-    axi_req_o.w.data   = data_q[victim_q][miss_set_q][wb_beat_cnt_q[BEAT_IDX_W-1:0]];
+    // W.data is the previously-launched beat held in the victim way's
+    // ram_rdata register (DC_WB_AW pre-launches beat 0 in the AW handshake
+    // cycle; DC_WB_W pre-launches beat N+1 each time beat N retires).
+    axi_req_o.w.data   = ram_rdata[victim_q];
     axi_req_o.w.strb   = {kronos_pkg::XLEN_BYTES{1'b1}};
     axi_req_o.w.last   = (wb_beat_cnt_q == 4'd7);
     axi_req_o.w_valid  = (state_q == DC_WB_W) | (state_q == DC_FLUSH_W);
@@ -979,7 +1211,6 @@ module kronos_dcache
   // AMO combinational datapath
   // ==========================================================================
   always_comb begin
-    amo_cur_beat = data_q[victim_q][miss_set_q][miss_beat_q];
     amo_result   = amo_compute(amo_op_q, amo_old_val_q, amo_src_q, amo_is_word_q);
     amo_be       = amo_is_word_q
                      ? store_strobes(3'd2, amo_addr_off_q)
@@ -990,14 +1221,15 @@ module kronos_dcache
   end
 
   // ==========================================================================
-  // Hit data path: select between cache hit and refill bypass
+  // Hit data path: select between cache hit, refill bypass, NC response, and
+  // PTW lookup beat.
   // ==========================================================================
-  // hit_beat is built earlier (top of the file) so the AMO RMW capture path
-  // can read it; here we just pick between the cached value and the
-  // critical-word-first bypass register on a refill.
-  assign beat_for_load = nc_rsp_valid_q  ? nc_rsp_data_q
-                       : bypass_valid_q  ? bypass_data_q
-                       : hit_beat;
+  // In DC_PTW_LOOKUP, ram_rdata[ptw_lookup_way_q] holds the PTW's beat;
+  // hit_beat is otherwise the right way-mux output for LSU hits.
+  assign beat_for_load = nc_rsp_valid_q             ? nc_rsp_data_q
+                       : bypass_valid_q             ? bypass_data_q
+                       : (state_q == DC_PTW_LOOKUP) ? ram_rdata[ptw_lookup_way_q]
+                                                    : hit_beat;
 
   always_comb begin
     // Defaults (R7).
@@ -1006,6 +1238,10 @@ module kronos_dcache
     if (nc_rsp_valid_q) begin
       eff_size_for_load = nc_size_q;
       eff_off_for_load  = nc_addr_q[2:0];
+    end else if (state_q == DC_PTW_LOOKUP) begin
+      // PTW always issues 8B; offset within the beat is zero.
+      eff_size_for_load = 3'd3;
+      eff_off_for_load  = 3'b000;
     end else begin
       eff_size_for_load = eff_req_size;
       eff_off_for_load  = eff_req_addr[2:0];
@@ -1050,20 +1286,28 @@ module kronos_dcache
   // Outputs
   // ==========================================================================
   // Aggregate response signal (before LSU/PTW demux).
-  assign rsp_valid_int  = hit | bypass_valid_q | store_done_q | amo_done_q
+  // - LSU hits fire same-cycle via `hit` (and ~ptw_active so a PTW preempt
+  //   doesn't raise data_valid_o for the LSU).
+  // - PTW hits respond in DC_PTW_LOOKUP via the state_q check.
+  // - Delayed responses (refill bypass, store_done, amo_done, NC) are
+  //   unchanged.
+  assign rsp_valid_int  = (hit & ~ptw_active)
+                        | (state_q == DC_PTW_LOOKUP)
+                        | bypass_valid_q | store_done_q | amo_done_q
                         | nc_rsp_valid_q | nc_b_done_q;
   assign rsp_rdata_int  = amo_done_q ? amo_old_val_q : load_data_full;
   assign sc_success_int = sc_success_q;
 
   // route the response to either LSU or PTW.
-  // - Same-cycle hits (state_q == DC_IDLE) are owned by the current arbiter
-  //   winner (ptw_active).
+  // - PTW hits land in DC_PTW_LOOKUP — owner is PTW.
+  // - Same-cycle LSU hits in DC_IDLE (with no PTW preempt) — owner is LSU.
   // - Delayed responses (bypass / store_done / amo_done / sc_success after
-  //   refill or RMW) are owned by the latched in_flight_is_ptw_q bit, since
-  //   ptw_active may have de-asserted by the time the response fires.
-  assign rsp_to_ptw = (state_q == DC_IDLE)
-                       ? ((nc_rsp_valid_q | nc_b_done_q) ? nc_is_ptw_q : ptw_active)
-                       : in_flight_is_ptw_q;
+  //   refill or RMW) are owned by the latched in_flight_is_ptw_q bit.
+  assign rsp_to_ptw = (state_q == DC_PTW_LOOKUP)
+                       ? 1'b1
+                       : (state_q == DC_IDLE)
+                          ? ((nc_rsp_valid_q | nc_b_done_q) ? nc_is_ptw_q : ptw_active)
+                          : in_flight_is_ptw_q;
 
   // LSU response: gate by ~rsp_to_ptw.
   assign data_valid_o = rsp_valid_int  & ~rsp_to_ptw;

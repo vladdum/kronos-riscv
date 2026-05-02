@@ -91,22 +91,28 @@ module tb_dcache_pma
   int errors = 0;
 
   // ---- DUT ----------------------------------------------------------------
+  // Pre-launch ports tied off — these tests exercise NC bypass / AMO trap
+  // paths that don't depend on the BRAM same-cycle hit timing.  Loads here
+  // simply stall an extra cycle on hit, which is fine for the assertions
+  // below (they look at AXI shape + post-completion state, not latency).
   kronos_dcache u_dcache (
-    .clk_i           (clk_i),
-    .rst_ni          (rst_ni),
-    .req_i           (req),
-    .addr_i          (addr),
-    .size_i          (size),
-    .we_i            (we),
-    .wdata_i         (wdata),
-    .amo_req_i       (amo_req),
-    .amo_op_i        (amo_op),
-    .rsrv_clear_i    (rsrv_clear),
-    .data_valid_o    (data_valid),
-    .rdata_o         (rdata),
-    .sc_success_o    (sc_success),
-    .stall_o         (stall),
-    .ptw_req_valid_i (ptw_req_valid),
+    .clk_i             (clk_i),
+    .rst_ni            (rst_ni),
+    .req_i             (req),
+    .addr_i            (addr),
+    .size_i            (size),
+    .we_i              (we),
+    .wdata_i           (wdata),
+    .amo_req_i         (amo_req),
+    .amo_op_i          (amo_op),
+    .rsrv_clear_i      (rsrv_clear),
+    .data_valid_o      (data_valid),
+    .rdata_o           (rdata),
+    .sc_success_o      (sc_success),
+    .stall_o           (stall),
+    .early_req_valid_i (1'b0),
+    .early_addr_i      (64'h0),
+    .ptw_req_valid_i   (ptw_req_valid),
     .ptw_req_addr_i  (ptw_req_addr),
     .ptw_req_we_i    (ptw_req_we),
     .ptw_req_wdata_i (ptw_req_wdata),
