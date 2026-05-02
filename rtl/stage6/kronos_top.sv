@@ -326,6 +326,11 @@ module kronos_top
   // trap_cause/mepc sourcing while id_ex_q still holds the offending op.
   logic        dcache_amo_nc_fault;
   logic        dcache_bus_err_fault;
+  // EX-stage pre-launch wires for the dcache BRAM read.  The dTLB
+  // produces the translated PA combinationally in EX; the dcache uses
+  // these to fire the BRAM read one cycle ahead of the MEM-stage req_i.
+  logic [63:0] dcache_early_addr;
+  logic        dcache_early_req_valid;
 
   // LSU FP response
   logic             lsu_fp_dest;
@@ -937,6 +942,18 @@ module kronos_top
   assign eff_fetch_pa = translate_fetch ? itlb_pa[31:0] : icache_fetch_addr;
   assign eff_data_pa  = translate_data  ? dtlb_pa[31:0] : alu_result[31:0];
 
+  // Dcache EX-stage pre-launch.  Drives the same PA the LSU will eventually
+  // present in MEM, so the dcache can launch its BRAM read one cycle early.
+  // Suppressed on PMP/PMA faults and dTLB miss so we don't pollute the read
+  // port with a soon-to-be-killed access.
+  assign dcache_early_addr = translate_data
+    ? {{(64-32){1'b0}}, dtlb_pa[31:0]}
+    : {{(64-32){1'b0}}, alu_result[31:0]};
+  assign dcache_early_req_valid =
+    id_ex_q.valid &
+    (id_ex_q.dec.is_load | id_ex_q.dec.is_store | id_ex_q.dec.is_amo) &
+    ~pmp_data_fault & ~dtlb_miss & ~ex_amo_nc_fault;
+
   // Aggregate page-fault flags (TLB perm-fail OR PTW page-fault on the matching
   // tlb_op_e).  cross_page_fault is treated as an instruction page-fault.
   // kronos_align gates cross_page_fault_o on translate_fetch_i, so this signal
@@ -1029,6 +1046,10 @@ module kronos_top
     .amo_req_i       (dcache_amo_req),
     .amo_op_i        (dcache_amo_op),
     .rsrv_clear_i    (trap_taken_pulse),
+    // EX-stage pre-launch — fires the BRAM read one cycle ahead of the
+    // MEM-stage req_i so ram_rdata is registered when MEM consumes it.
+    .early_req_valid_i (dcache_early_req_valid),
+    .early_addr_i      (dcache_early_addr),
     .data_valid_o    (dcache_data_valid),
     .rdata_o         (dcache_rdata),
     .sc_success_o    (dcache_sc_success),

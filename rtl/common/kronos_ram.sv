@@ -17,9 +17,26 @@
 
 module kronos_ram
 #(
-  parameter int unsigned DEPTH      = 64,
-  parameter int unsigned WIDTH      = 64,
-  parameter int unsigned BYTE_WIDTH = 8
+  parameter int unsigned DEPTH        = 64,
+  parameter int unsigned WIDTH        = 64,
+  parameter int unsigned BYTE_WIDTH   = 8,
+  // Port-B write-then-read collision behaviour. Forwarded to xpm.
+  //
+  // **Vivado SDP block-RAM limitation:** RAMB36/RAMB18 in Simple-Dual-Port
+  // mode only supports `"no_change"` (or `"read_first"`) on port B — XPM
+  // rejects `"write_first"` at synth with `[XPM_MEMORY 40-50] WRITE_MODE_B
+  // (0) specifies write-first mode, but Simple Dual port block RAM
+  // configurations must use read-first mode for port B`.
+  //
+  // Consumers that need write-first / RAW forwarding semantics must
+  // implement a same-cycle bypass mux outside the wrapper (the dcache
+  // does this with a 1-deep prev-write register; see kronos_dcache.sv).
+  //
+  // Parameter is intentionally untyped — xpm_memory_sdpram does mixed-
+  // type internal comparisons (`WRITE_MODE_B == 0 || WRITE_MODE_B ==
+  // "no_change"`) that Vivado synth rejects when the value is a strict
+  // `string` type.
+  parameter              WRITE_MODE_B = "no_change"
 ) (
   input  logic                                clk_i,
 
@@ -67,7 +84,7 @@ module kronos_ram
     .USE_MEM_INIT_MMI     (0),
     .WAKEUP_TIME          ("disable_sleep"),
     .WRITE_DATA_WIDTH_A   (WIDTH),
-    .WRITE_MODE_B         ("no_change"),
+    .WRITE_MODE_B         (WRITE_MODE_B),
     .WRITE_PROTECT        (1)
   ) u_xpm (
     .dbiterrb     (),
@@ -98,6 +115,10 @@ module kronos_ram
   logic [WIDTH-1:0] mem [DEPTH];
   logic [WIDTH-1:0] rdata_q;
 
+  // Behavioural SDP — matches the xpm `"no_change"` / `"read_first"`
+  // semantics: a same-cycle write+read at the same address makes port B
+  // hold the OLD value (or unchanged). Same-cycle store→load forwarding
+  // is the consumer's responsibility (see kronos_dcache.sv RAW bypass).
   always_ff @(posedge clk_i) begin
     if (we_i) begin
       for (int unsigned i = 0; i < NB; i++) begin
