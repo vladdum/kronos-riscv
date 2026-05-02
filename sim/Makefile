@@ -263,7 +263,7 @@ CRV_COV_MERGE := python3 ../tools/crv_cov_merge.py
 sim-crv-cov-build: $(TB_CRV_COV_FILES)
 	mkdir -p $(CRV_COV_DIR)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) \
-	  --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	  --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY --Wno-UNOPTFLAT \
 	  --top-module tb_crv_cov \
 	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \
 	  -Mdir $(CRV_COV_DIR) \
@@ -720,7 +720,8 @@ SIM_UNITS := sim-alu sim-regfile sim-decode \
              sim-fpu-fdiv-core sim-fpu-fsqrt-core sim-fpu-fcvt \
              sim-fpu-fadd sim-fpu-fmul sim-fpu-fma sim-fpu-fmisc \
              sim-fpu-iter sim-fpu-top sim-fpu-top-iter \
-             sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger
+             sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger \
+             sim-fetch-buffer sim-predecode sim-ifu
 # Stage 5f LSU is a thin adapter; coverage of the integrated LSU + dcache
 # path comes from sim-dcache, sim-s5, sim-crv-smoke, ACT4 (303 tests), and
 # sim-diff-s5.
@@ -820,7 +821,8 @@ SV_FILES_S5 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage1/kronos_hazard.sv \
                $(RTL_DIR)/stage5/kronos_muldiv.sv \
                $(RTL_DIR)/stage5/kronos_decompress.sv \
-               $(RTL_DIR)/stage3/kronos_align.sv \
+               $(RTL_DIR_COMMON)/kronos_predecode.sv \
+               $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
                $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR)/stage5/kronos_top.sv \
                sim_top.sv \
@@ -844,7 +846,7 @@ build-s5: $(SIM_BIN_S5)
 
 $(SIM_BIN_S5): $(SV_FILES_S5) $(abspath sim_main.cpp)
 	mkdir -p $(OBJ_DIR)/s5
-	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY --Wno-UNOPTFLAT \
 	  --trace --public-flat-rw \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S5) $(abspath sim_main.cpp) \
@@ -864,7 +866,7 @@ run-s5b-%: build-s5
 TB_CORE_FP_BASIC_FILES := $(SV_FILES_S5) \
                           $(TB_DIR)/stage5/tb_core_fp_basic.sv
 sim-core-fp-basic:
-	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-UNOPTFLAT \
 	  --top-module tb_core_fp_basic $(TB_CORE_FP_BASIC_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_basic
 	$(OBJ_DIR)/core_fp_basic/Vtb_core_fp_basic
@@ -872,7 +874,7 @@ sim-core-fp-basic:
 TB_CORE_FP_FORWARDING_FILES := $(SV_FILES_S5) \
                                 $(TB_DIR)/stage5/tb_core_fp_forwarding.sv
 sim-core-fp-forwarding:
-	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-UNOPTFLAT \
 	  --top-module tb_core_fp_forwarding $(TB_CORE_FP_FORWARDING_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_forwarding
 	$(OBJ_DIR)/core_fp_forwarding/Vtb_core_fp_forwarding
@@ -1033,7 +1035,8 @@ SV_FILES_S6 := $(AXI_PKG_SV) \
                $(RTL_DIR)/stage1/kronos_hazard.sv \
                $(RTL_DIR_S6)/kronos_muldiv.sv \
                $(RTL_DIR_S6)/kronos_decompress.sv \
-               $(RTL_DIR_S6)/kronos_align.sv \
+               $(RTL_DIR_COMMON)/kronos_predecode.sv \
+               $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
                $(RTL_DIR)/common/kronos_bpred.sv \
                $(RTL_DIR_S6)/kronos_top.sv \
                sim_top.sv \
@@ -1378,6 +1381,83 @@ sim-kronos-ram: | $(OBJ_DIR)
 	 fi
 
 .PHONY: sim-kronos-ram
+
+# ---------------------------------------------------------------------------
+# Stage 6f Phase B — kronos_fetch_buffer unit TB
+# ---------------------------------------------------------------------------
+TB_FETCH_BUFFER_FILES := $(AXI_PKG_SV) \
+                         $(RTL_DIR)/kronos_pkg.sv \
+                         $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
+                         $(TB_DIR)/common/tb_fetch_buffer.sv
+
+sim-fetch-buffer: | $(OBJ_DIR)
+	mkdir -p $(OBJ_DIR)/fetch_buffer
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	  --Wno-PROCASSINIT \
+	  --top-module tb_fetch_buffer $(TB_FETCH_BUFFER_FILES) \
+	  -Mdir $(OBJ_DIR)/fetch_buffer -o Vtb_fetch_buffer
+	@out=$$($(OBJ_DIR)/fetch_buffer/Vtb_fetch_buffer 2>&1); \
+	 echo "$$out" | tail -3; \
+	 if echo "$$out" | grep -q "tb_fetch_buffer: PASS"; then \
+	   echo "PASS  sim-fetch-buffer"; \
+	 else \
+	   echo "FAIL  sim-fetch-buffer"; exit 1; \
+	 fi
+
+.PHONY: sim-fetch-buffer
+
+# ---------------------------------------------------------------------------
+# Stage 6f Phase B — kronos_predecode unit TB
+# ---------------------------------------------------------------------------
+TB_PREDECODE_FILES := $(AXI_PKG_SV) \
+                      $(RTL_DIR)/kronos_pkg.sv \
+                      $(RTL_DIR)/stage6/kronos_decompress.sv \
+                      $(RTL_DIR_COMMON)/kronos_predecode.sv \
+                      $(TB_DIR)/common/tb_predecode.sv
+
+sim-predecode: | $(OBJ_DIR)
+	mkdir -p $(OBJ_DIR)/predecode
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	  --Wno-PROCASSINIT \
+	  --top-module tb_predecode $(TB_PREDECODE_FILES) \
+	  -Mdir $(OBJ_DIR)/predecode -o Vtb_predecode
+	@out=$$($(OBJ_DIR)/predecode/Vtb_predecode 2>&1); \
+	 echo "$$out" | tail -3; \
+	 if echo "$$out" | grep -q "tb_predecode: PASS"; then \
+	   echo "PASS  sim-predecode"; \
+	 else \
+	   echo "FAIL  sim-predecode"; exit 1; \
+	 fi
+
+.PHONY: sim-predecode
+
+# ---------------------------------------------------------------------------
+# Stage 6f Phase C — IFU integration TB (icache + FB + predecode + AXI mock)
+# ---------------------------------------------------------------------------
+TB_IFU_FILES := $(AXI_PKG_SV) \
+                $(RTL_DIR)/kronos_pkg.sv \
+                $(RTL_DIR_COMMON)/kronos_ram.sv \
+                $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
+                $(RTL_DIR)/stage6/kronos_decompress.sv \
+                $(RTL_DIR_COMMON)/kronos_predecode.sv \
+                $(RTL_DIR)/stage6/kronos_icache.sv \
+                $(TB_DIR)/common/tb_ifu.sv
+
+sim-ifu: | $(OBJ_DIR)
+	mkdir -p $(OBJ_DIR)/ifu
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) -Wall --Wno-UNUSED --Wno-TIMESCALEMOD \
+	  --Wno-PROCASSINIT \
+	  --top-module tb_ifu $(TB_IFU_FILES) \
+	  -Mdir $(OBJ_DIR)/ifu -o Vtb_ifu
+	@out=$$($(OBJ_DIR)/ifu/Vtb_ifu 2>&1); \
+	 echo "$$out" | tail -10; \
+	 if echo "$$out" | grep -q "tb_ifu: PASS"; then \
+	   echo "PASS  sim-ifu"; \
+	 else \
+	   echo "FAIL  sim-ifu"; exit 1; \
+	 fi
+
+.PHONY: sim-ifu
 
 TB_PMP_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                 $(RTL_DIR)/stage6/kronos_pmp.sv \

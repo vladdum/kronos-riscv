@@ -101,7 +101,8 @@ filesets:
       - rtl/stage0/kronos_regfile.sv
       - rtl/stage1/kronos_forward.sv
       - rtl/stage1/kronos_hazard.sv
-      - rtl/stage3/kronos_align.sv
+      - rtl/common/kronos_predecode.sv
+      - rtl/common/kronos_fetch_buffer.sv
       - rtl/common/kronos_bpred.sv
       - rtl/stage5/kronos_alu.sv
       - rtl/stage5/kronos_decode.sv
@@ -135,7 +136,8 @@ filesets:
       - rtl/stage0/kronos_regfile.sv
       - rtl/stage1/kronos_forward.sv
       - rtl/stage1/kronos_hazard.sv
-      - rtl/stage6/kronos_align.sv
+      - rtl/common/kronos_predecode.sv
+      - rtl/common/kronos_fetch_buffer.sv
       - rtl/common/kronos_bpred.sv
       - rtl/stage6/kronos_alu.sv
       - rtl/stage6/kronos_decode.sv

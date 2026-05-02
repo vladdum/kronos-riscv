@@ -124,15 +124,13 @@ module kronos_top
   logic        ex_mem_csr_q;
 
   // STAGE3: fetch control (icache replaces old FSM)
-  logic         fetch_flush;
   logic         instr_fetch_stall               /* verilator public_flat_rd */;
   logic         combined_stall                  /* verilator public_flat_rd */;
   logic         combined_stall_no_muldiv;
 
-  // I-cache interface signals
-  logic        icache_data_valid;
-  logic [31:0] icache_data;
-  logic        icache_stall;
+  // I-cache interface signals — BOOM-style v3 IFU.  The icache no longer
+  // exposes data_valid_o / data_o / stall_o; it pushes (pc,data) tuples into
+  // kronos_fetch_buffer via the s2_enq_* handshake.
   logic        icache_miss_pulse                 /* verilator public_flat_rd */;
   logic        fence_i_pulse;
   logic        fence_i_pulse_raw;
@@ -140,17 +138,56 @@ module kronos_top
   logic        dcache_flush_done;
   logic        dcache_dirty_pending;
 
-  // STAGE3: C extension — alignment unit signals
+  // IFU control (BOOM-style)
+  logic [31:0] s0_pc_q;                  // IFU's next-fetch PC
+  logic        s0_valid_to_icache;
+  logic        s0_ready_from_icache;
+  logic        s0_accept;
+  logic        s1_kill, s2_kill;
+  logic        redirect_load;
+  logic [31:0] redirect_target;
+  // icache miss-event resync (drives s0_pc_q rewind after a real S2 miss).
+  logic        icache_miss_event;
+  logic [31:0] icache_miss_resync_pc;
+
+  // icache <-> FB
+  logic        ic_to_fb_valid;
+  logic [31:0] ic_to_fb_pc;
+  logic [31:0] ic_to_fb_data;
+  logic        fb_enq_ready;
+
+  // FB <-> predecode
+  logic        fb_to_pd_valid;
+  logic [31:0] fb_to_pd_pc;
+  logic [31:0] fb_to_pd_data;
+  logic        fb_to_pd_ready;
+
+  // Predecode-emitted PC (architectural).  Drives if_id_q.pc, the bpred
+  // lookup, and pc_q.  In the BOOM-style model, the architectural PC at
+  // decode is whatever the FB head says (carried with the data), not a
+  // separately tracked sequential counter.
+  logic [31:0] predecode_instr_pc;
+
+  // Predecode -> IF/ID consumer-facing aliases (replace align_*).  Wired below.
   logic [31:0] align_instr                       /* verilator public_flat_rd */;
   logic        align_instr_valid                 /* verilator public_flat_rd */;
   logic        align_is_16b;
   logic        align_stall;
   logic        align_need_upper;
   logic        align_needs_fetch;
+  logic        cross_page_fault;
 
   // STAGE3: branch predictor
   logic        pred_taken;
   logic [31:0] pred_target;
+  // Registered prediction signals.  pred_taken is sampled at the cycle the
+  // branch is captured into IF/ID and replayed one cycle later to drive the
+  // IFU redirect.  Decoupling pred_taken from the combinational redirect_load
+  // breaks the long predecode_instr_pc → bpred → pred_taken → s2_kill →
+  // fb_flush → predecode_flush path and removes one full IFU+FB+predecode
+  // flush per predicted-taken branch from the critical loop.
+  logic        pred_taken_q;
+  logic [31:0] pred_target_q;
   logic        bpred_update_en;
   logic        actual_taken;
   logic        bpred_mispredict;
@@ -334,7 +371,13 @@ module kronos_top
   // the priority so a redirect flushes the wrong-path MUL without needing
   // muldiv_stall to fan in from ex_redirect/mem_redirect.
   assign muldiv_stall      = id_ex_q.valid & id_ex_q.dec.is_muldiv & ~muldiv_valid;
-  assign instr_fetch_stall = ~align_instr_valid | icache_stall;
+  // Per Stage 6f v3 spec: predecode "no instruction this cycle" is the only
+  // upstream input to instr_fetch_stall.  The icache no longer emits a stall
+  // wire; it back-pressures internally via valid/ready handshakes (FB-not-full
+  // upstream, FB-not-empty visible as ~align_instr_valid downstream).
+  // Suppress during a redirect — the pipeline must advance to drain the
+  // wrong-path branch/JAL out of EX while the IF/ID register flushes.
+  assign instr_fetch_stall = ~align_instr_valid & ~redirect_load;
 
   // FENCE.I detection from raw instruction bits (decoder doesn't surface it —
   // see commit 87aac14 for why we don't change the decoder).
@@ -702,55 +745,143 @@ module kronos_top
     end
   end
 
-  // I-cache instance: replaces the old 3-state fetch FSM.
-  // addr_i is 64-bit (PHYS_ADDR_W); pc_q is 32-bit — zero-extend.
-  // When align_need_upper=1 the alignment unit needs the NEXT sequential 32-bit
-  // word.  The current word containing pc_q is at {pc_q[31:2], 2'b00}; the next
-  // word is at {pc_q[31:2]+1, 2'b00}.  This correctly handles both the intra-
-  // block case (pc_q[2]=0, spanning instruction within the same 8-byte block)
-  // and the cross-block case (pc_q[2]=1).
-  logic [31:0] icache_fetch_addr;
-  assign icache_fetch_addr = align_need_upper
-                             ? {pc_q[31:2] + 30'd1, 2'b00}
-                             : pc_q;
+  // =========================================================================
+  // BOOM-style IFU: kronos_icache (s0/s1/s2) -> kronos_fetch_buffer ->
+  // kronos_predecode.  Replaces the old icache + kronos_align combo.  See
+  // docs/superpowers/specs/2026-05-02-stage6f-icache-boom-frontend-v3-design.md
+  // sections 5–7.
+  // =========================================================================
+
+  // Combinational redirect detection.  Drives s1_kill, s2_kill, FB flush,
+  // predecode flush, and the s0_pc_q reload mux.  Highest priority wins.
+  // pred_taken is consumed via pred_taken_q (one-cycle delayed) so the comb
+  // path through the predictor does not fan into the icache kill / FB flush
+  // signals.  By the time pred_taken_q fires, the branch is already in IF/ID
+  // (captured at the same edge that latched pred_taken_q), so this delay
+  // costs at most one extra wrong-path bubble per predicted-taken branch.
+  assign redirect_load   = mem_redirect | ex_redirect | pred_taken_q;
+  assign redirect_target = mem_redirect      ? ex_mem_q.pc_d
+                         : ex_redirect       ? ex_pc_d
+                         : pred_taken_q      ? pred_target_q
+                         :                     32'h0;
+
+  assign s1_kill = redirect_load;
+  assign s2_kill = redirect_load;
+
+  // Register pred_taken / pred_target.  We only latch when the branch was
+  // actually captured into IF/ID this cycle: predecode is emitting a valid
+  // instruction (align_instr_valid) AND if_id_en is asserted AND no higher-
+  // priority redirect is racing the same edge.  Without the align_instr_valid
+  // gate, pred_taken_q would fire whenever the held predecode_instr_pc happens
+  // to alias a BTB entry — even during refill stalls when no real branch is
+  // in-flight — and the resulting wrong-path s2_kill cascade would squash
+  // legitimate refill bypass pushes.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      pred_taken_q  <= 1'b0;
+      pred_target_q <= 32'h0;
+    end else begin
+      pred_taken_q  <= pred_taken & align_instr_valid & if_id_en &
+                       ~ex_redirect & ~mem_redirect;
+      pred_target_q <= pred_target;
+    end
+  end
+
+  // s0_pc_q advance — IFU-internal next-fetch PC.  Reloads on redirect, holds
+  // on FB back-pressure (s0_accept low), advances by 4 each accepted s0.
+  // On an icache miss-event, rewind to icache_miss_resync_pc (= miss_pc + 4)
+  // so the squashed S1/S2 entries are re-fetched after refill.  See the
+  // matching comment in stage 6's kronos_top for the full rationale.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      s0_pc_q <= 32'h0;
+    end else if (!boot_loaded_q) begin
+      s0_pc_q <= boot_addr_i;
+    end else if (redirect_load) begin
+      s0_pc_q <= redirect_target;
+    end else if (icache_miss_event) begin
+      s0_pc_q <= icache_miss_resync_pc;
+    end else if (s0_accept) begin
+      s0_pc_q <= s0_pc_q + 32'd4;
+    end
+  end
+
+  // Don't issue s0 during reset/boot or during a redirect (the redirect itself
+  // reloads s0_pc_q this cycle).
+  assign s0_valid_to_icache = boot_loaded_q & ~redirect_load;
+  assign s0_accept          = s0_valid_to_icache & s0_ready_from_icache;
 
   kronos_icache u_icache (
-    .clk_i        (clk_i),
-    .rst_ni       (rst_ni),
-    .req_i        (align_needs_fetch),
-    .addr_i       ({32'b0, icache_fetch_addr}),
-    .flush_i      (fence_i_pulse),
-    .data_valid_o (icache_data_valid),
-    .data_o       (icache_data),
-    .stall_o      (icache_stall),
-    .axi_req_o    (instr_axi_req_o),
-    .axi_rsp_i    (instr_axi_rsp_i),
-    .miss_pulse_o (icache_miss_pulse)
+    .clk_i          (clk_i),
+    .rst_ni         (rst_ni),
+    .s0_valid_i     (s0_valid_to_icache),
+    .s0_addr_i      ({32'h0, s0_pc_q}),
+    // Word-align the PC handed to the FB so subsequent fetches after a
+    // half-aligned redirect (e.g. 0x42, 0x7e) carry the WORD PC.  See the
+    // matching comment in stage 6's kronos_top for the full rationale.
+    .s0_pc_i        ({s0_pc_q[31:2], 2'b00}),
+    .s0_ready_o     (s0_ready_from_icache),
+    .s1_kill_i      (s1_kill),
+    .s2_kill_i      (s2_kill),
+    .confirmed_redirect_i (mem_redirect | ex_redirect),
+    .flush_i        (fence_i_pulse),
+    .s2_enq_valid_o   (ic_to_fb_valid),
+    .s2_enq_pc_o      (ic_to_fb_pc),
+    .s2_enq_data_o    (ic_to_fb_data),
+    .s2_enq_ready_i   (fb_enq_ready),
+    .miss_event_o     (icache_miss_event),
+    .miss_resync_pc_o (icache_miss_resync_pc),
+    .axi_req_o        (instr_axi_req_o),
+    .axi_rsp_i        (instr_axi_rsp_i),
+    .miss_pulse_o     (icache_miss_pulse)
   );
 
-  kronos_align u_align (
-    .clk_i               (clk_i),
-    .rst_ni              (rst_ni),
-    .rdata_i             (icache_data),
-    .rvalid_i            (icache_data_valid),
-    .stall_i             (align_instr_valid & ~if_id_en),
-    .flush_i             (fetch_flush),
-    .pc_offset_i         (mem_redirect ? ex_mem_q.pc_d[1]
-                        : ex_redirect  ? ex_pc_d[1]
-                        : pred_taken   ? pred_target[1]
-                        :                pc_q[1]),
-    .instr_o             (align_instr),
-    .instr_valid_o       (align_instr_valid),
-    .is_16b_o            (align_is_16b),
-    .align_stall_o       (align_stall),
-    .align_need_upper_o  (align_need_upper),
-    .align_needs_fetch_o (align_needs_fetch)
+  kronos_fetch_buffer #(
+    .DEPTH (4)
+  ) u_fb (
+    .clk_i       (clk_i),
+    .rst_ni      (rst_ni),
+    .flush_i     (redirect_load),
+    .enq_valid_i (ic_to_fb_valid),
+    .enq_pc_i    (ic_to_fb_pc),
+    .enq_data_i  (ic_to_fb_data),
+    .enq_ready_o (fb_enq_ready),
+    .deq_valid_o (fb_to_pd_valid),
+    .deq_pc_o    (fb_to_pd_pc),
+    .deq_data_o  (fb_to_pd_data),
+    .deq_ready_i (fb_to_pd_ready)
   );
+
+  kronos_predecode u_predecode (
+    .clk_i              (clk_i),
+    .rst_ni             (rst_ni),
+    .flush_i            (redirect_load),
+    .flush_pc_offset_i  (redirect_target[1]),
+    .word_valid_i       (fb_to_pd_valid),
+    .word_data_i        (fb_to_pd_data),
+    .word_pc_i          (fb_to_pd_pc),
+    .word_consume_o     (fb_to_pd_ready),
+    .instr_valid_o      (align_instr_valid),
+    .instr_o            (align_instr),
+    .instr_pc_o         (predecode_instr_pc),
+    .instr_is_16b_o     (align_is_16b),
+    .instr_ready_i      (if_id_en),
+    .cross_page_fault_o (cross_page_fault),
+    .translate_fetch_i  (1'b0)              // stage 5: no translation
+  );
+
+  // Tie off legacy align_* control signals.  Predecode handles spanning
+  // internally; FB back-pressure replaces the old align_needs_fetch / stall
+  // outputs.  Kept under their old names so downstream consumers (pc_d mux,
+  // bpred update gating, etc.) are unchanged.
+  assign align_need_upper  = 1'b0;
+  assign align_needs_fetch = 1'b1;
+  assign align_stall       = 1'b0;
 
   kronos_bpred u_bpred (
     .clk_i           (clk_i),
     .rst_ni          (rst_ni),
-    .pc_i            (pc_q),
+    .pc_i            (predecode_instr_pc),
     .pred_taken_o    (pred_taken),
     .pred_target_o   (pred_target),
     .upd_valid_i     (bpred_update_en),
@@ -763,14 +894,21 @@ module kronos_top
   // =========================================================================
   // PC register
   // =========================================================================
-  // Priority: mem_redirect before ex_redirect so that when both fire simultaneously
-  // (MEM-stage target mismatch + speculative instr in EX also generates a redirect),
-  // the pipeline returns to the architecturally correct target from the MEM branch.
-  assign pc_d = mem_redirect  ? ex_mem_q.pc_d
-                 : ex_redirect   ? ex_pc_d
-                 : pred_taken    ? pred_target
-                 : align_is_16b  ? pc_q + 32'd2
-                 :                 pc_q + 32'd4;
+  // pc_q now mirrors predecode's emitted PC.  This is BOOM's "the architectural
+  // PC is whatever the FB head says" model — the architectural PC is carried
+  // with the data through the FB, not tracked sequentially.  Redirects override
+  // predecode (the FB hasn't been flushed yet on the cycle a redirect first
+  // fires, so we don't trust predecode's PC that cycle).  pc_d is the next
+  // pc_q value if pc_en fires.
+  //
+  // Priority: mem_redirect before ex_redirect so that when both fire
+  // simultaneously, the pipeline returns to the architecturally correct
+  // target from the MEM branch.
+  assign pc_d = mem_redirect           ? ex_mem_q.pc_d
+              : ex_redirect            ? ex_pc_d
+              : pred_taken             ? pred_target
+              : align_instr_valid      ? predecode_instr_pc
+              :                          pc_q;
 
   // pc_q reset semantics:
   //   - Async reset to a constant 0 (FPGA FF primitives only support
@@ -800,10 +938,16 @@ module kronos_top
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       if_id_q <= '{default: '0};
-    end else if (if_id_flush) begin
+    end else if (if_id_flush | pred_taken_q) begin
+      // pred_taken_q fires the cycle AFTER the branch was captured into
+      // if_id_q.  The wrong-path fall-through that predecode is presenting
+      // this cycle must not propagate to ID — clear the IF/ID register so
+      // ID sees a bubble while the IFU resyncs to pred_target_q.  The branch
+      // itself was already captured the prior cycle and is now safely at
+      // if_id_q's output, so id_ex_en will still latch it into ID/EX.
       if_id_q <= '{default: '0};
     end else if (if_id_en) begin
-      if_id_q.pc          <= pc_q;
+      if_id_q.pc          <= predecode_instr_pc;
       if_id_q.instr       <= align_instr;
       if_id_q.valid       <= align_instr_valid;
       if_id_q.is_16b      <= align_is_16b;
@@ -1106,9 +1250,6 @@ module kronos_top
     ex_mem_q.pred_taken & (ex_mem_q.pred_target != ex_mem_q.pc_d);
   assign mem_redirect = bpred_mispredict_target;
 
-  // Any flush that redirects the fetch stream.
-  assign fetch_flush = if_id_flush | (pred_taken & pc_en & ~ex_redirect & ~mem_redirect);
-
   // =========================================================================
   // MEM stage — mem_done_q / lsu_rdata_latch handle pipeline stall bridging
   // =========================================================================
@@ -1286,8 +1427,12 @@ module kronos_top
   assign retire_trap_cause_o = trap_cause;
 
   // Stage-6a IRQ ports declared above are not consumed by the stage-5 CSR
-  // file; tie them into a dummy XOR to keep the linter quiet.
+  // file; tie them into a dummy XOR to keep the linter quiet.  Stage 5 also
+  // does not use the predecode cross-page-fault output (no translation).
   logic _unused_irq;
-  assign _unused_irq = ^{irq_msi_i, irq_mei_i, irq_ssi_i, irq_sti_i, irq_sei_i};
+  assign _unused_irq = ^{irq_msi_i, irq_mei_i, irq_ssi_i, irq_sti_i,
+                         irq_sei_i, cross_page_fault, align_stall,
+                         align_need_upper, align_needs_fetch,
+                         predecode_instr_pc};
 
 endmodule

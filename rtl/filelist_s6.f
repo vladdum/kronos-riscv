@@ -10,9 +10,15 @@ common/kronos_ram.sv
 stage0/kronos_regfile.sv
 stage1/kronos_forward.sv
 stage1/kronos_hazard.sv
-stage6/kronos_align.sv
+common/kronos_predecode.sv
+common/kronos_fetch_buffer.sv
 common/kronos_bpred.sv
 stage6/kronos_alu.sv
+stage6/kronos_decode_int.sv
+stage6/kronos_decode_fp.sv
+stage6/kronos_decode_mem.sv
+stage6/kronos_decode_ctrl.sv
+stage6/kronos_decode_sys.sv
 stage6/kronos_decode.sv
 stage6/kronos_regfile_fp.sv
 stage6/kronos_icache.sv
