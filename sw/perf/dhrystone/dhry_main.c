@@ -17,10 +17,15 @@
 extern int dhry_run(int Number_Of_Runs);
 
 #define NUMBER_OF_RUNS   1000U
-// captured 2026-04-28 on stage6c @ commit 2504dfc (dhrystone vendor) +
-// a3d6bac (csr SD-derive) — 1000 iterations of dhry_run, in-order pipeline,
-// no caches enabled. Update on any change that affects integer IPC.
-#define BASELINE_CYCLES  698761U
+// captured 2026-05-02 on stage6f branch @ commit 3734769 against the CI
+// toolchain (Ubuntu 24.04 apt gcc-riscv64-unknown-elf v13/14, the
+// reference for sim-perf-baseline-s6).  Local builds with a different
+// riscv64-unknown-elf-gcc version (e.g. v15.x) emit different dhry_run
+// code and may report a ~4 % higher cycle count — this is expected and
+// only the CI value is authoritative.  Re-bake on any RTL change that
+// affects integer IPC by setting BASELINE_CYCLES=0 (capture mode) and
+// reading x10 from the CI halt line.
+#define BASELINE_CYCLES  992151U
 #define TOLERANCE_PCT    2U
 
 // ---------------------------------------------------------------------------
