@@ -109,6 +109,13 @@ module kronos_top
   logic [63:0] alu_adder_out_unused;
   logic        alu_cmp_lt_unused;
   logic        alu_eq_unused;
+  // Submodule outputs that the stage-5 pipeline does not consume but that
+  // we must still name to satisfy Verilator's PINMISSING check after the
+  // PINCONNECTEMPTY waivers were dropped (issue #81).
+  logic        decode_illegal_unused;
+  logic        muldiv_busy_unused;
+  logic        csr_valid_unused;
+  logic        lsu_sc_success_unused;
   logic [63:0] ex_result;
   logic [31:0] ex_pc_d                        /* verilator public_flat_rd */;
   logic        ex_redirect                        /* verilator public_flat_rd */;
@@ -327,7 +334,7 @@ module kronos_top
     .instr_i        (if_id_q.instr),
     .frm_i          (frm),
     .decoded_o      (id_dec),
-    .illegal_insn_o ()               // mirrored into id_dec.illegal; unused here
+    .illegal_insn_o (decode_illegal_unused)   // mirrored into id_dec.illegal
   );
 
   kronos_regfile u_regfile (
@@ -521,7 +528,7 @@ module kronos_top
     .b_i       (fwd_rs2_data),
     .word_op_i (id_ex_q.dec.is_word_op),
     .result_o  (muldiv_result),
-    .busy_o    (),
+    .busy_o    (muldiv_busy_unused),  // pipeline tracks liveness via valid_o / idle_o
     .valid_o   (muldiv_valid),
     .idle_o    (muldiv_idle)
   );
@@ -539,7 +546,7 @@ module kronos_top
     .rs1_data_i    (fwd_rs1_data),
     .rs1_addr_i    (id_ex_q.dec.rs1),
     .rdata_o       (csr_rdata),
-    .valid_o       (),
+    .valid_o       (csr_valid_unused),       // pipeline does not consume CSR-side validity
     // Gate trap_i and mret_i with ~combined_stall: CSR must only update state
     // when the pipeline is actually advancing (see stage3 comment for details).
     .trap_i        (id_ex_q.valid & ~combined_stall &
@@ -614,7 +621,7 @@ module kronos_top
     .is_amo_i           (ex_mem_q.dec.is_amo),
     .amo_funct5_i       (ex_mem_q.dec.amo_funct5),
     .amo_src_i          (ex_mem_q.rs2_data),
-    .sc_success_o       (),
+    .sc_success_o       (lsu_sc_success_unused),  // SC result via dcache_sc_success_i below
     // D-cache interface
     .dcache_req_o       (dcache_req),
     .dcache_addr_o      (dcache_addr),

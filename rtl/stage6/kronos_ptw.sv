@@ -110,8 +110,16 @@ module kronos_ptw
   function automatic logic pte_g(input logic [63:0] p); return p[kronos_pkg::PTE_G_BIT]; endfunction
   function automatic logic pte_a(input logic [63:0] p); return p[kronos_pkg::PTE_A_BIT]; endfunction
   function automatic logic pte_d(input logic [63:0] p); return p[kronos_pkg::PTE_D_BIT]; endfunction
-  function automatic logic [43:0] pte_ppn(input logic [63:0] p); return p[53:10]; endfunction
-  function automatic logic pte_reserved_set(input logic [63:0] p); return |p[63:54]; endfunction
+  function automatic logic [43:0] pte_ppn(input logic [63:0] p);
+    logic _unused;
+    _unused = ^{p[63:54], p[9:0]};
+    return p[53:10];
+  endfunction
+  function automatic logic pte_reserved_set(input logic [63:0] p);
+    logic _unused;
+    _unused = ^p[53:0];
+    return |p[63:54];
+  endfunction
   function automatic logic pte_is_leaf(input logic [63:0] p);
     return pte_v(p) & (pte_r(p) | pte_x(p));
   endfunction
@@ -121,6 +129,8 @@ module kronos_ptw
 
   function automatic logic ppn_aligned(input logic [43:0] ppn,
                                         input logic [1:0]  level);
+    logic _unused;
+    _unused = ^ppn[43:27];
     unique case (level)
       2'b00: ppn_aligned = 1'b1;
       2'b01: ppn_aligned = (ppn[8:0]   == 9'd0);
@@ -144,6 +154,8 @@ module kronos_ptw
 
   function automatic logic [8:0] vpn_at_level(input logic [63:0] va,
                                                 input logic [1:0] level);
+    logic _unused;
+    _unused = ^{va[63:48], va[11:0]};
     unique case (level)
       2'b00: vpn_at_level = va[20:12];
       2'b01: vpn_at_level = va[29:21];

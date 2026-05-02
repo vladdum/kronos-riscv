@@ -22,26 +22,10 @@ module kronos_decode
 );
 
   // Constants — opcode encodings
-  localparam logic [6:0] OP         = 7'b011_0011; // R-type
-  localparam logic [6:0] OP_IMM     = 7'b001_0011; // I-type ALU
-  localparam logic [6:0] OP_IMM_32  = 7'b001_1011; // RV64 I-type ALU-W
-  localparam logic [6:0] OP_32      = 7'b011_1011; // RV64 R-type ALU-W
-  localparam logic [6:0] LOAD       = 7'b000_0011;
-  localparam logic [6:0] STORE      = 7'b010_0011;
-  localparam logic [6:0] LOAD_FP    = 7'b000_0111;
-  localparam logic [6:0] STORE_FP   = 7'b010_0111;
-  localparam logic [6:0] OP_FP      = 7'b101_0011;
-  localparam logic [6:0] FMADD_OP   = 7'b100_0011;
-  localparam logic [6:0] FMSUB_OP   = 7'b100_0111;
-  localparam logic [6:0] FNMSUB_OP  = 7'b100_1011;
-  localparam logic [6:0] FNMADD_OP  = 7'b100_1111;
-  localparam logic [6:0] BRANCH     = 7'b110_0011;
-  localparam logic [6:0] LUI        = 7'b011_0111;
-  localparam logic [6:0] AUIPC      = 7'b001_0111;
-  localparam logic [6:0] JAL        = 7'b110_1111;
-  localparam logic [6:0] JALR       = 7'b110_0111;
-  localparam logic [6:0] SYSTEM     = 7'b111_0011;
-  localparam logic [6:0] AMO        = 7'b010_1111;
+  // OP_IMM / OP_IMM_32 / OP_FP are sourced from kronos_pkg (imported via
+  // wildcard above) — local redefinitions would shadow the package
+  // constants and trigger VARHIDDEN. Other opcode literals remain local
+  // until hoisted.
 
   // Combinational signals — instruction fields
   logic [6:0] opcode;

@@ -200,6 +200,12 @@ module kronos_fpu_fcvt
   // Underflow flag intermediate (FP_FCVT_S_D normal-zero path)
   logic                           ds_nz_in;
 
+  // frac_bits is computed in the FP→INT shift stage but never feeds the
+  // final inexact-flag chain; sd_new_mant is sized to FP_D_MANT_W+1 so the
+  // pre-rounding renormalisation has a guard slot, but the final write
+  // slices off the high bit.
+  logic                           _unused;
+
   // ---------------------------------------------------------------------------
   // Stage-3 combinational: rounding adders + final assembly
   // ---------------------------------------------------------------------------
@@ -907,5 +913,7 @@ module kronos_fpu_fcvt
       end
     end
   end
+
+  assign _unused = ^{frac_bits, sd_new_mant[kronos_pkg::FP_D_MANT_W]};
 
 endmodule

@@ -82,6 +82,11 @@ module kronos_tlb
   logic [IDX_W-1:0]  refill_idx;
   logic              has_invalid;
 
+  // VA carries the full 64-bit virtual address; the TLB uses only VPN
+  // bits [47:12].  Bits [63:48] (Sv48 sign-extension) and the [11:0] page
+  // offset are intentionally dropped here.
+  logic              _unused;
+
   // 5. Submodule interface signals (none)
 
   // VPN comparison helper
@@ -279,5 +284,7 @@ module kronos_tlb
       end
     end
   end
+
+  assign _unused = ^{lookup_va_i[63:48], flush_va_i[63:48], flush_va_i[11:0]};
 
 endmodule

@@ -420,6 +420,35 @@ module kronos_top
   // -------------------------------------------------------------------------
   logic [31:0] pc_d                              /* verilator public_flat_rd */;
 
+  // -------------------------------------------------------------------------
+  // Submodule output sinks — ports we don't observe at this top.
+  // Named sinks (vs `()` empty connections) keep Verilator's PINCONNECTEMPTY
+  // happy; the OR-reduction at the bottom of the module hands them to a
+  // single _unused_pinconnect signal so UNUSEDSIGNAL stays clean too.
+  // -------------------------------------------------------------------------
+  logic        decode_illegal_unused;     // u_decode.illegal_insn_o (mirrored in id_dec.illegal)
+  logic        muldiv_busy_unused;        // u_muldiv.busy_o (top observes valid/idle)
+  logic        csr_valid_unused;          // u_csr.valid_o   (1-cycle internal ack)
+  // CSR sfence_*_o pins are pure passthroughs of the matching sfence_*_i
+  // inputs. The top wires the local sfence_* signals straight to both TLBs,
+  // so the CSR-side mirrors are unobserved.
+  logic                          sfence_vma_csr_unused;
+  logic [kronos_pkg::XLEN-1:0]   sfence_va_csr_unused;
+  logic [15:0]                   sfence_asid_csr_unused;
+  logic                          sfence_va_valid_csr_unused;
+  logic                          sfence_asid_valid_csr_unused;
+  logic        lsu_sc_success_unused;     // u_lsu.sc_success_o (also packed into rdata_o)
+
+  // -------------------------------------------------------------------------
+  // Aggregated UNUSED sinks.
+  // Submodule outputs that are "computed but not observed at this top"
+  // (legacy pre-stage-6 hooks, integrator-visible signals not yet wired)
+  // funnel through these OR-reductions.  Keeps every signal driven and
+  // consumed without forcing the integrator to disable UNUSEDSIGNAL.
+  // -------------------------------------------------------------------------
+  logic _unused_top_signals;
+  logic _unused_top_pinconnect;
+
   // =========================================================================
   // Submodule instantiations
   // =========================================================================
@@ -428,7 +457,8 @@ module kronos_top
     .instr_i        (if_id_q.instr),
     .frm_i          (frm),
     .decoded_o      (id_dec),
-    .illegal_insn_o ()               // mirrored into id_dec.illegal; unused here
+    // illegal_insn_o is mirrored into id_dec.illegal; tied to a named sink.
+    .illegal_insn_o (decode_illegal_unused)
   );
 
   kronos_regfile u_regfile (
@@ -648,7 +678,8 @@ module kronos_top
     .b_i       (fwd_rs2_data),
     .word_op_i (id_ex_q.dec.is_word_op),
     .result_o  (muldiv_result),
-    .busy_o    (),
+    // busy_o is internal hand-off only; the top observes muldiv_valid/idle.
+    .busy_o    (muldiv_busy_unused),
     .valid_o   (muldiv_valid),
     .idle_o    (muldiv_idle)
   );
@@ -666,7 +697,8 @@ module kronos_top
     .rs1_data_i    (fwd_rs1_data),
     .rs1_addr_i    (id_ex_q.dec.rs1),
     .rdata_o       (csr_rdata),
-    .valid_o       (),
+    // valid_o is the CSR's own one-cycle ack; the top tracks it via id_ex_q.
+    .valid_o       (csr_valid_unused),
     // Gate trap_i and mret_i with ~combined_stall: CSR must only update state
     // when the pipeline is actually advancing (see stage3 comment for details).
     .trap_i        ((id_ex_q.valid & ~combined_stall &
@@ -724,11 +756,16 @@ module kronos_top
     .sfence_asid_i       (sfence_asid),
     .sfence_va_valid_i   (sfence_va_valid),
     .sfence_asid_valid_i (sfence_asid_valid),
-    .sfence_vma_o        (),  // mirrored into local sfence_vma; unused here
-    .sfence_va_o         (),
-    .sfence_asid_o       (),
-    .sfence_va_valid_o   (),
-    .sfence_asid_valid_o (),
+    // sfence_*_o pins are loop-back of sfence_*_i. The top wires the local
+    // signals (sfence_vma, sfence_va, sfence_asid, sfence_va_valid,
+    // sfence_asid_valid) directly to both TLBs below, so the CSR-side
+    // mirrors are intentionally unused. Sink each into a named wire to
+    // satisfy lint without breaking PINMISSING.
+    .sfence_vma_o        (sfence_vma_csr_unused),
+    .sfence_va_o         (sfence_va_csr_unused),
+    .sfence_asid_o       (sfence_asid_csr_unused),
+    .sfence_va_valid_o   (sfence_va_valid_csr_unused),
+    .sfence_asid_valid_o (sfence_asid_valid_csr_unused),
     // satp fields broken out for the address-translation engine.
     .satp_mode_o         (satp_mode),
     .satp_asid_o         (satp_asid),
@@ -1006,7 +1043,9 @@ module kronos_top
     .is_amo_i           (ex_mem_q.dec.is_amo),
     .amo_funct5_i       (ex_mem_q.dec.amo_funct5),
     .amo_src_i          (ex_mem_q.rs2_data),
-    .sc_success_o       (),
+    // sc_success_o is just dcache_sc_success_i echoed back; the LSU also
+    // packs it into rdata_o (~success) so the standalone output is unused.
+    .sc_success_o       (lsu_sc_success_unused),
     // D-cache interface
     .dcache_req_o       (dcache_req),
     .dcache_addr_o      (dcache_addr),
@@ -2025,17 +2064,20 @@ module kronos_top
                             instr_page_fault | load_page_fault | store_page_fault;
 
   assign event_bus[ 0]    = 1'b0;
-  assign event_bus[ 1]    = retire_advance & mem_wb_q.dec.is_branch;
-  assign event_bus[ 2]    = bpred_mispredict_pulse;
-  assign event_bus[ 3]    = retire_advance & mem_wb_q.dec.is_load;
-  assign event_bus[ 4]    = retire_advance & mem_wb_q.dec.is_store;
-  assign event_bus[ 5]    = mem_stall;
+  assign event_bus[kronos_pkg::EVT_BRANCH_RETIRE]       =
+      retire_advance & mem_wb_q.dec.is_branch;
+  assign event_bus[kronos_pkg::EVT_BRANCH_MISPREDICT_P] = bpred_mispredict_pulse;
+  assign event_bus[kronos_pkg::EVT_LOAD_RETIRE]         =
+      retire_advance & mem_wb_q.dec.is_load;
+  assign event_bus[kronos_pkg::EVT_STORE_RETIRE]        =
+      retire_advance & mem_wb_q.dec.is_store;
+  assign event_bus[kronos_pkg::EVT_MEM_STALL]           = mem_stall;
   assign event_bus[ 6]    = muldiv_stall;
   assign event_bus[ 7]    = fpu_busy_any;
-  assign event_bus[ 8]    = trap_taken_pulse;
+  assign event_bus[kronos_pkg::EVT_TRAP_TAKEN]          = trap_taken_pulse;
   assign event_bus[15:9]  = 7'b0;
-  assign event_bus[16]    = icache_miss_pulse;  // event ID 0x10 = I$ miss
-  assign event_bus[17]    = dcache_miss_pulse;  // event ID 0x11 = D$ miss
+  assign event_bus[kronos_pkg::EVT_ICACHE_MISS]         = icache_miss_pulse;
+  assign event_bus[kronos_pkg::EVT_DCACHE_MISS]         = dcache_miss_pulse;
   // Stage 5h taxonomy — fine-grained stall causes (IDs 0x14..0x1F).
   // Some IDs alias pre-existing low bits (muldiv=0x1B↔0x06, fpu=0x1C↔0x07,
   // mispredict=0x1E↔0x02) so the consolidated taxonomy table is contiguous.
@@ -2086,5 +2128,54 @@ module kronos_top
   assign retire_csr_wdata_o  = mem_wb_csr_new_val_q;
   assign retire_trap_taken_o = trap_taken_pulse;
   assign retire_trap_cause_o = trap_cause;
+
+  // -------------------------------------------------------------------------
+  // UNUSED sinks.
+  //
+  // 1) Submodule-output signals that are computed but never consumed at this
+  //    top.  Most are upper-half slices of 64-bit signals that the stage-6
+  //    32-bit-PC datapath only reads as [31:0]; a few are integrator-visible
+  //    PTW / trigger / LSU outputs that are not yet wired to a top-level
+  //    port (see issue #81).
+  //
+  // 2) PINCONNECTEMPTY sinks: submodule outputs we deliberately drop.
+  //    The CSR sfence_*_o pins are pure passthroughs of the matching _i
+  //    inputs (the top wires the local sfence_* signals straight to both
+  //    TLBs), so we sink them here.
+  //
+  // OR-reduction over `^{...}` keeps the sinks free of synthesis side
+  // effects while satisfying lint.
+  // -------------------------------------------------------------------------
+  assign _unused_top_signals = ^{
+    alu_adder_out,
+    trap_vector[63:32], mepc[63:32], sepc[63:32],
+    jalr_target_64[63:32],
+    mstatus[63:23], mstatus[16:13], mstatus[10:0],
+    pmp_fetch_fault_addr[55:32],
+    pmp_data_fault_addr[55:32],
+    itlb_a_zero, itlb_d_zero,
+    itlb_pa[55:32],
+    dtlb_pa[55:32],
+    ptw_busy,
+    ptw_pf_cause,
+    ptw_pf_tval,
+    ptw_dc_req_size,
+    align_stall, align_need_upper,
+    lsu_fp_dest,
+    trig_hit_pc,
+    mem_wb_q.csr_wdata
+  };
+
+  assign _unused_top_pinconnect = ^{
+    decode_illegal_unused,
+    muldiv_busy_unused,
+    csr_valid_unused,
+    sfence_vma_csr_unused,
+    sfence_va_csr_unused,
+    sfence_asid_csr_unused,
+    sfence_va_valid_csr_unused,
+    sfence_asid_valid_csr_unused,
+    lsu_sc_success_unused
+  };
 
 endmodule

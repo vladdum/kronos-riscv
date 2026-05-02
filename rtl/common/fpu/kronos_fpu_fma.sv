@@ -56,31 +56,40 @@ module kronos_fpu_fma
   localparam int unsigned SUM_W  = PROD_W + PAD_W;      // 160
 
   // ---------------------------------------------------------------------------
-  // Helpers: classification
+  // Helpers: classification.  All ignore the sign bit (and the QNaN payload);
+  // helper sinks on `x` keep lint quiet without changing the predicate.
   // ---------------------------------------------------------------------------
   function automatic logic is_snan_s(logic [kronos_pkg::FP_S_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == kronos_pkg::FP_S_EXP_MAX) && (x[22] == 1'b0) && (x[21:0] != 22'd0);
   endfunction
   function automatic logic is_qnan_s(logic [kronos_pkg::FP_S_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == kronos_pkg::FP_S_EXP_MAX) && (x[22] == 1'b1);
   endfunction
   function automatic logic is_inf_s(logic [kronos_pkg::FP_S_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == kronos_pkg::FP_S_EXP_MAX) && (x[22:0] == 23'd0);
   endfunction
   function automatic logic is_zero_s(logic [kronos_pkg::FP_S_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:0] == 31'd0);
   endfunction
 
   function automatic logic is_snan_d(logic [kronos_pkg::FP_D_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == kronos_pkg::FP_D_EXP_MAX) && (x[51] == 1'b0) && (x[50:0] != 51'd0);
   endfunction
   function automatic logic is_qnan_d(logic [kronos_pkg::FP_D_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == kronos_pkg::FP_D_EXP_MAX) && (x[51] == 1'b1);
   endfunction
   function automatic logic is_inf_d(logic [kronos_pkg::FP_D_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == kronos_pkg::FP_D_EXP_MAX) && (x[51:0] == 52'd0);
   endfunction
   function automatic logic is_zero_d(logic [kronos_pkg::FP_D_TOTAL_W-1:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:0] == 63'd0);
   endfunction
 
@@ -89,6 +98,13 @@ module kronos_fpu_fma
   // ---------------------------------------------------------------------------
   logic [kronos_pkg::FP_S_TOTAL_W-1:0] a_s, b_s, c_s;
   logic [kronos_pkg::FP_D_TOTAL_W-1:0] a_d, b_d, c_d;
+
+  // Lint sink for pipeline-stage scratch fields that the next stage reads
+  // through narrower projections (s3a_sh's low byte, s4_sum_comb without
+  // the carry-out bit, s5*_pre_mag truncated to the rounded mantissa
+  // window).  s3b_c_zero_flag and s5*_bias survive on the wave for debug
+  // but never gate the result chain.
+  logic                                _unused;
 
   // Common signal shape per operand
   logic               s1_a_sign, s1_b_sign, s1_c_sign;
@@ -1294,5 +1310,9 @@ module kronos_fpu_fma
       tag_o       <= s5b_tag;
     end
   end
+
+  assign _unused = ^{s3a_sh[31:8], s3b_c_zero_flag, s4_sum_comb[SUM_W],
+                     s5_bias, s5_pre_mag[SUM_W-1:53],
+                     s5b_bias, s5b_pre_mag_n[SUM_W-1:53]};
 
 endmodule

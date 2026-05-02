@@ -47,6 +47,9 @@ module kronos_pmp
   logic [N-1:0][54:0]  pmp_xor;
   logic [N-1:0][53:0]  pmp_mask;
   logic [55:0]         pmp_addr_plus;  // not loop-dependent — single value
+  // pmp_addr_plus[1:0] are byte-offset bits that PMP comparisons drop (the
+  // architectural granule is 4 B); only [55:2] feed the per-region match.
+  logic                _unused;
 
   // Active = matched AND not OFF.
   logic [N-1:0] active;
@@ -163,5 +166,7 @@ module kronos_pmp
                        : no_match_pass );
 
   assign fault_addr_o = addr_i;
+
+  assign _unused = ^pmp_addr_plus[1:0];
 
 endmodule

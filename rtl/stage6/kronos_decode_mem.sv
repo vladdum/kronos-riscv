@@ -22,6 +22,10 @@ module kronos_decode_mem
   logic [6:0] funct7;
   logic       illegal;
 
+  // funct7[1:0] are AMO aq/rl bits; AMO decoding lives in kronos_decode_int
+  // (this sub-decoder only handles plain LOAD/STORE), so the bits are dropped.
+  logic       _unused;
+
   assign opcode = instr_i[6:0];
   assign rd     = instr_i[11:7];
   assign rs1    = instr_i[19:15];
@@ -131,5 +135,7 @@ module kronos_decode_mem
 
     illegal_o = illegal;
   end
+
+  assign _unused = ^funct7[1:0];
 
 endmodule

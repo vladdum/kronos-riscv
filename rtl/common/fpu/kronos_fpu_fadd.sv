@@ -47,16 +47,22 @@ module kronos_fpu_fadd
   // ---------------------------------------------------------------------------
   // Helper functions
   // ---------------------------------------------------------------------------
+  // NaN classifiers ignore the sign bit (and the payload for QNaN);
+  // helper sinks on `x` keep lint quiet without changing the predicate.
   function automatic logic is_snan_s(input logic [31:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == 8'hFF) && (x[22] == 1'b0) && (x[21:0] != 22'd0);
   endfunction
   function automatic logic is_qnan_s(input logic [31:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == 8'hFF) && (x[22] == 1'b1);
   endfunction
   function automatic logic is_snan_d(input logic [63:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == 11'h7FF) && (x[51] == 1'b0) && (x[50:0] != 51'd0);
   endfunction
   function automatic logic is_qnan_d(input logic [63:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == 11'h7FF) && (x[51] == 1'b1);
   endfunction
 
@@ -201,6 +207,12 @@ module kronos_fpu_fadd
   s3_t  s3_q;
   s3b_t s3b_q;
   s4_t  s4_q;
+
+  // Lint sinks for fields of the pipeline pack-structs that the next stage
+  // reads only via narrower projections (s5 mantissa-width selector,
+  // bias offsets), and bias values that fed the now-removed pre-rounding
+  // path.  Driven by an OR-reduction at the bottom of the module.
+  logic _unused;
 
   // ---------------------------------------------------------------------------
   // Combinational signals (Stage 1: decompose / classify)
@@ -922,5 +934,9 @@ module kronos_fpu_fadd
       tag_o       <= s4_q.tag;
     end
   end
+
+  // OR-reduce dropped pipeline-register slices and the s5_mant_w mux selector
+  // (the per-format width is folded into the s5_out_*_d/s widths instead).
+  assign _unused = ^{s1_q, s2_q, s5_mant_w};
 
 endmodule

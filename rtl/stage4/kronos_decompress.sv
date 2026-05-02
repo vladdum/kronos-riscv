@@ -5,14 +5,18 @@
 // kronos_decompress.sv — RV32C 16-bit instruction expander.
 // Purely combinational. Returns the 32-bit canonical RV32I equivalent.
 // Sets illegal_o=1 for reserved or undefined encodings.
-module kronos_decompress (
+module kronos_decompress
+  import kronos_pkg::*;
+(
   input  logic [15:0] instr16_i,
   output logic [31:0] instr32_o,
   output logic        illegal_o
 );
 
   // 1. Constants — opcode encodings
-  localparam logic [6:0] OP_IMM    = 7'b001_0011;
+  // OP_IMM / OP_IMM_32 are sourced from kronos_pkg (imported via wildcard
+  // above) — local redefinitions would shadow the package constants and
+  // trigger VARHIDDEN. Other opcode literals remain local until hoisted.
   localparam logic [6:0] OP_LUI    = 7'b011_0111;
   localparam logic [6:0] OP_JAL    = 7'b110_1111;
   localparam logic [6:0] OP_JALR   = 7'b110_0111;
@@ -20,7 +24,6 @@ module kronos_decompress (
   localparam logic [6:0] OP_STORE  = 7'b010_0011;
   localparam logic [6:0] OP_BRNCH  = 7'b110_0011;
   localparam logic [6:0] OP_REG    = 7'b011_0011;
-  localparam logic [6:0] OP_IMM_32 = 7'b001_1011;  // RV64 OP-IMM-32 (ADDIW/SLLIW/etc.)
 
   // 4. Combinational signals — instruction fields
   logic [2:0]  funct3;

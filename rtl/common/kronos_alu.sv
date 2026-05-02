@@ -52,6 +52,10 @@ module kronos_alu
   // Result mux
   logic [kronos_pkg::XLEN-1:0]   result_pre;
 
+  // Adder carry-out and shifter sign-fill bit are intentionally dropped at the
+  // module boundary (consumed by an OR-reduction sink at the bottom).
+  logic                          _unused;
+
   // ---- Word-op pre-mask -----------------------------------------------------
   // For word ops, run the 64-bit datapath on operands shaped to look like a
   // word. SRAW needs sign-extended low 32 so the shifter sees the right MSB;
@@ -138,5 +142,7 @@ module kronos_alu
   assign adder_out_o = adder_out;
   assign cmp_lt_o    = cmp_lt;
   assign eq_o        = cmp_eq;
+
+  assign _unused = ^{adder_full[kronos_pkg::XLEN], shout_ext[kronos_pkg::XLEN]};
 
 endmodule
