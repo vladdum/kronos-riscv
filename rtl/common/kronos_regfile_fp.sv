@@ -7,6 +7,11 @@
 // - Read ports are asynchronous (combinatorial), matching the integer regfile.
 //   Read-before-write: a write and read of the same address in the same cycle
 //   returns the old value; the EX-bypass network handles this case.
+// - The `ram_style` attribute directs Vivado to pack the array as LUTRAM
+//   (distributed RAM) rather than inferring per-bit flops, mirroring the
+//   integer regfile. Initial contents are X / don't-care; the FP scoreboard
+//   prevents architectural reads of un-written registers, so the lack of a
+//   reset loop is not visible.
 module kronos_regfile_fp (
   input  logic        clk_i,
   input  logic        rst_ni,
@@ -20,14 +25,14 @@ module kronos_regfile_fp (
   input  logic [63:0] wd_i,
   input  logic        we_i
 );
-  logic [63:0] rf [32];
+  (* ram_style = "distributed" *) logic [63:0] rf [32];
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      for (int i = 0; i < 32; i++) rf[i] <= {64{1'b0}};
-    end else begin
-      if (we_i) rf[wa_i] <= wd_i;
-    end
+  // rst_ni is intentionally unused (LUTRAM cannot be reset).
+  logic _unused_rst;
+  assign _unused_rst = rst_ni;
+
+  always_ff @(posedge clk_i) begin
+    if (we_i) rf[wa_i] <= wd_i;
   end
 
   assign rd1_o = rf[ra1_i];

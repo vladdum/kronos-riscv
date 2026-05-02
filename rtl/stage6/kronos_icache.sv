@@ -102,8 +102,10 @@ module kronos_icache
     ICACHE_REFILL_R   = 2'b10
   } icache_state_e;
 
-  // ---- Tag / valid / PLRU arrays (FF — same as v2) -------------------------
-  logic [TAG_W-1:0]              tag_q   [NUM_SETS][NUM_WAYS];
+  // ---- Tag / valid / PLRU arrays -------------------------------------------
+  // Tag arrays are wrapped in per-way kronos_ram instances (see gen_tag_ram
+  // below).  valid_q stays in flops to preserve the single-cycle FENCE.I
+  // flash-clear; PLRU stays in flops because it is rewritten every hit.
   logic                          valid_q [NUM_SETS][NUM_WAYS];
   logic [2:0]                    plru_q  [NUM_SETS];
 
@@ -208,6 +210,31 @@ module kronos_icache
   logic [kronos_pkg::INST_W-1:0] ram_wdata;
   logic [kronos_pkg::INST_W-1:0] ram_rdata [NUM_WAYS];
 
+  // ---- Per-way TAG-RAM interface signals (driven combinationally) ----------
+  // TAG_W = 52, padded to a multiple of BYTE_WIDTH (8) so xpm_memory_sdpram
+  // accepts the byte-write geometry.  The 4 unused MSBs are tied to zero on
+  // write and stripped on read.
+  localparam int unsigned TAG_RAM_W = ((TAG_W + 7) / 8) * 8;   // 56
+
+  logic [NUM_WAYS-1:0]           tag_we;
+  logic [SET_IDX_W-1:0]          tag_waddr;
+  logic [TAG_RAM_W-1:0]          tag_wdata;
+  logic                          tag_re;
+  logic [SET_IDX_W-1:0]          tag_raddr;
+  logic [TAG_RAM_W-1:0]          tag_rdata        [NUM_WAYS];
+  logic [TAG_W-1:0]              tag_rdata_eff_s1 [NUM_WAYS];   // S1, post-bypass
+  logic [TAG_W-1:0]              s2_tag_data_q    [NUM_WAYS];   // S2 holdover
+
+  // 1-deep RAW bypass for refill→read collision (BRAM port-B is "no_change",
+  // so a load reading the just-written tag would otherwise see stale data).
+  logic                          prev_tag_write_q;
+  logic [SET_IDX_W-1:0]          prev_tag_set_q;
+  logic [NUM_WAYS-1:0]           prev_tag_way_oh_q;
+  logic [TAG_W-1:0]              prev_tag_data_q;
+
+  // One-cycle pulse: refill commit cycle (replaces the in-FSM tag_q write).
+  logic                          refill_tag_write_fire;
+
   // Lint suppression
   logic                          _unused;
 
@@ -246,7 +273,7 @@ module kronos_icache
     hit_way_oh_s1 = {NUM_WAYS{1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
       hit_way_oh_s1[w] = s1_valid_q & valid_q[s1_set_idx][w] &
-                         (tag_q[s1_set_idx][w] == s1_tag);
+                         (tag_rdata_eff_s1[w] == s1_tag);
     end
     hit_s1 = |hit_way_oh_s1;
   end
@@ -265,7 +292,7 @@ module kronos_icache
     hit_way_s2    = {$clog2(NUM_WAYS){1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
       hit_way_oh_s2[w] = s2_valid_q & valid_q[s2_set_idx][w] &
-                         (tag_q[s2_set_idx][w] == s2_tag);
+                         (s2_tag_data_q[w] == s2_tag);
     end
     for (int w = 0; w < NUM_WAYS; w++) begin
       if (hit_way_oh_s2[w]) hit_way_s2 = w[$clog2(NUM_WAYS)-1:0];
@@ -421,7 +448,6 @@ module kronos_icache
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
           valid_q[s][w] <= 1'b0;
-          tag_q[s][w]   <= {TAG_W{1'b0}};
         end
       end
     end else begin
@@ -471,7 +497,7 @@ module kronos_icache
             refill_phase_q <= 1'b0;
             beat_cnt_q     <= beat_cnt_q + BEAT_CNT_W'(1);
             if (refill_last_done) begin
-              tag_q[miss_set_q][victim_q]   <= miss_tag_q;
+              // Tag write is handled by refill_tag_write_fire → tag RAM port.
               valid_q[miss_set_q][victim_q] <= 1'b1;
               plru_q[miss_set_q]            <= plru_update(plru_q[miss_set_q], victim_q);
               refill_squashed_q             <= 1'b0;
@@ -548,6 +574,105 @@ module kronos_icache
       );
     end
   endgenerate
+
+  // ==========================================================================
+  // Tag RAM — one kronos_ram per way (port-A write, port-B read).
+  // Per-way DEPTH=NUM_SETS, WIDTH=TAG_RAM_W (TAG_W zero-padded to 8b multiple).
+  // WRITE_MODE_B="no_change" matches the data RAM; refill→read same-set
+  // collision handled by the 1-deep prev_tag_*_q bypass.
+  // ==========================================================================
+  generate
+    for (genvar gi = 0; gi < NUM_WAYS; gi++) begin : gen_tag_ram
+      kronos_ram #(
+        .DEPTH        (NUM_SETS),
+        .WIDTH        (TAG_RAM_W),
+        .BYTE_WIDTH   (8),
+        .WRITE_MODE_B ("no_change")
+      ) u_tag_ram (
+        .clk_i   (clk_i),
+        .we_i    (tag_we[gi]),
+        .waddr_i (tag_waddr),
+        .wdata_i (tag_wdata),
+        .wmask_i ({(TAG_RAM_W/8){1'b1}}),
+        .re_i    (tag_re),
+        .raddr_i (tag_raddr),
+        .rdata_o (tag_rdata[gi])
+      );
+    end
+  endgenerate
+
+  // ---- Tag RAM read mux ----------------------------------------------------
+  // Tag read launches at S0 alongside the data-RAM read; output lands at S1
+  // for the hit comparator.  Holds across S1 stalls because s0_ready_o gates
+  // s0_accept (no new launch ⇒ BRAM port-B holds the previous output).
+  always_comb begin
+    tag_re    = s0_accept;
+    tag_raddr = s0_set_idx;
+  end
+
+  // ---- Tag RAM write side --------------------------------------------------
+  // Write fires for exactly one cycle on the refill-complete edge — same
+  // predicate that previously drove `tag_q[miss_set_q][victim_q] <= miss_tag_q`
+  // inside the FSM.
+  assign refill_tag_write_fire = (state_q == ICACHE_REFILL_R) & refill_last_done;
+
+  always_comb begin
+    tag_we    = {NUM_WAYS{1'b0}};
+    tag_waddr = miss_set_q;
+    tag_wdata = {{(TAG_RAM_W - TAG_W){1'b0}}, miss_tag_q};
+
+    if (refill_tag_write_fire) begin
+      for (int w = 0; w < NUM_WAYS; w++) begin
+        if (w == int'(victim_q)) tag_we[w] = 1'b1;
+      end
+    end
+  end
+
+  // ---- 1-deep RAW-bypass register ------------------------------------------
+  // After a refill writes the tag at cycle N, an S0 read launched at cycle N
+  // (same set) would see the OLD tag at S1 because port-B is "no_change".
+  // The bypass tracks the most recent tag write and overrides the per-way
+  // S1 tag compare.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      prev_tag_write_q  <= 1'b0;
+      prev_tag_set_q    <= {SET_IDX_W{1'b0}};
+      prev_tag_way_oh_q <= {NUM_WAYS{1'b0}};
+      prev_tag_data_q   <= {TAG_W{1'b0}};
+    end else begin
+      prev_tag_write_q <= refill_tag_write_fire;
+      if (refill_tag_write_fire) begin
+        prev_tag_set_q    <= miss_set_q;
+        prev_tag_way_oh_q <= {NUM_WAYS{1'b0}};
+        for (int w = 0; w < NUM_WAYS; w++) begin
+          if (w == int'(victim_q)) prev_tag_way_oh_q[w] <= 1'b1;
+        end
+        prev_tag_data_q <= miss_tag_q;
+      end
+    end
+  end
+
+  // ---- S1 effective tag (post-RAW-bypass) ----------------------------------
+  always_comb begin
+    for (int w = 0; w < NUM_WAYS; w++) begin
+      tag_rdata_eff_s1[w] = tag_rdata[w][TAG_W-1:0];
+      if (prev_tag_write_q & (s1_set_idx == prev_tag_set_q) &
+          prev_tag_way_oh_q[w]) begin
+        tag_rdata_eff_s1[w] = prev_tag_data_q;
+      end
+    end
+  end
+
+  // ---- S1 → S2 tag holdover register ---------------------------------------
+  // S2 hit detection runs against the registered tag.  Latched on s1_advance
+  // (the same predicate that promotes the rest of the S1 entry into S2).
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      for (int w = 0; w < NUM_WAYS; w++) s2_tag_data_q[w] <= {TAG_W{1'b0}};
+    end else if (s1_advance) begin
+      for (int w = 0; w < NUM_WAYS; w++) s2_tag_data_q[w] <= tag_rdata_eff_s1[w];
+    end
+  end
 
   // ---- Bypass holding register ---------------------------------------------
   // bypass_drive presents the bypass tuple to the FB whenever a fresh

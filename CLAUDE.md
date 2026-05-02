@@ -27,6 +27,7 @@ Development follows a staged learning progression:
 | 6e    | PMA layer for MMIO bypass (parameterised non-cacheable regions in `kronos_dcache`) | RV64IMAFDC | AXI4 | Complete |
 | 6f    | BOOM-style frontend rewrite + icache `data_q` BRAM-back | RV64IMAFDC | AXI4 | Complete |
 | 6g    | Dcache `data_q` BRAM-back (4 × `kronos_ram`, EX-stage pre-launch) | RV64IMAFDC | AXI4 | Complete |
+| 6h    | Cache tag arrays + FP regfile in BRAM/LUTRAM (closes #79)        | RV64IMAFDC | AXI4 | Complete |
 | 7     | Out-of-order execution (BOOM style)             | RV64IMAFDС       | AXI4 | Planned  |
 
 All five completed stages pass the full `riscv-arch-test` (ACT4) compliance
