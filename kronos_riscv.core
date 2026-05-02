@@ -104,26 +104,26 @@ filesets:
       - rtl/common/kronos_predecode.sv
       - rtl/common/kronos_fetch_buffer.sv
       - rtl/common/kronos_bpred.sv
-      - rtl/stage5/kronos_alu.sv
+      - rtl/common/kronos_alu.sv
       - rtl/stage5/kronos_decode.sv
-      - rtl/stage5/kronos_regfile_fp.sv
+      - rtl/common/kronos_regfile_fp.sv
       - rtl/stage5/kronos_icache.sv
       - rtl/stage5/kronos_csr.sv
-      - rtl/stage5/kronos_trigger.sv
+      - rtl/common/kronos_trigger.sv
       - rtl/stage5/kronos_lsu.sv
       - rtl/stage5/kronos_dcache.sv
-      - rtl/stage5/kronos_muldiv.sv
-      - rtl/stage5/kronos_decompress.sv
-      - rtl/stage5/fpu/kronos_fpu_scoreboard.sv
-      - rtl/stage5/fpu/kronos_fpu_fmisc.sv
-      - rtl/stage5/fpu/kronos_fpu_fcvt.sv
-      - rtl/stage5/fpu/kronos_fpu_fadd.sv
-      - rtl/stage5/fpu/kronos_fpu_fmul.sv
-      - rtl/stage5/fpu/kronos_fpu_fma.sv
-      - rtl/stage5/fpu/kronos_fpu_fdiv_core.sv
-      - rtl/stage5/fpu/kronos_fpu_fsqrt_core.sv
-      - rtl/stage5/fpu/kronos_fpu_iter.sv
-      - rtl/stage5/fpu/kronos_fpu_top.sv
+      - rtl/common/kronos_muldiv.sv
+      - rtl/common/kronos_decompress.sv
+      - rtl/common/fpu/kronos_fpu_scoreboard.sv
+      - rtl/common/fpu/kronos_fpu_fmisc.sv
+      - rtl/common/fpu/kronos_fpu_fcvt.sv
+      - rtl/common/fpu/kronos_fpu_fadd.sv
+      - rtl/common/fpu/kronos_fpu_fmul.sv
+      - rtl/common/fpu/kronos_fpu_fma.sv
+      - rtl/common/fpu/kronos_fpu_fdiv_core.sv
+      - rtl/common/fpu/kronos_fpu_fsqrt_core.sv
+      - rtl/common/fpu/kronos_fpu_iter.sv
+      - rtl/common/fpu/kronos_fpu_top.sv
       - rtl/stage5/kronos_top.sv
     file_type: systemVerilogSource
 
@@ -139,34 +139,34 @@ filesets:
       - rtl/common/kronos_predecode.sv
       - rtl/common/kronos_fetch_buffer.sv
       - rtl/common/kronos_bpred.sv
-      - rtl/stage6/kronos_alu.sv
+      - rtl/common/kronos_alu.sv
       - rtl/stage6/kronos_decode.sv
       - rtl/stage6/kronos_decode_ctrl.sv
       - rtl/stage6/kronos_decode_sys.sv
       - rtl/stage6/kronos_decode_mem.sv
       - rtl/stage6/kronos_decode_int.sv
       - rtl/stage6/kronos_decode_fp.sv
-      - rtl/stage6/kronos_regfile_fp.sv
+      - rtl/common/kronos_regfile_fp.sv
       - rtl/stage6/kronos_icache.sv
       - rtl/stage6/kronos_csr.sv
       - rtl/stage6/kronos_pmp.sv
       - rtl/stage6/kronos_tlb.sv
       - rtl/stage6/kronos_ptw.sv
-      - rtl/stage6/kronos_trigger.sv
+      - rtl/common/kronos_trigger.sv
       - rtl/stage6/kronos_lsu.sv
       - rtl/stage6/kronos_dcache.sv
-      - rtl/stage6/kronos_muldiv.sv
-      - rtl/stage6/kronos_decompress.sv
-      - rtl/stage6/fpu/kronos_fpu_scoreboard.sv
-      - rtl/stage6/fpu/kronos_fpu_fmisc.sv
-      - rtl/stage6/fpu/kronos_fpu_fcvt.sv
-      - rtl/stage6/fpu/kronos_fpu_fadd.sv
-      - rtl/stage6/fpu/kronos_fpu_fmul.sv
-      - rtl/stage6/fpu/kronos_fpu_fma.sv
-      - rtl/stage6/fpu/kronos_fpu_fdiv_core.sv
-      - rtl/stage6/fpu/kronos_fpu_fsqrt_core.sv
-      - rtl/stage6/fpu/kronos_fpu_iter.sv
-      - rtl/stage6/fpu/kronos_fpu_top.sv
+      - rtl/common/kronos_muldiv.sv
+      - rtl/common/kronos_decompress.sv
+      - rtl/common/fpu/kronos_fpu_scoreboard.sv
+      - rtl/common/fpu/kronos_fpu_fmisc.sv
+      - rtl/common/fpu/kronos_fpu_fcvt.sv
+      - rtl/common/fpu/kronos_fpu_fadd.sv
+      - rtl/common/fpu/kronos_fpu_fmul.sv
+      - rtl/common/fpu/kronos_fpu_fma.sv
+      - rtl/common/fpu/kronos_fpu_fdiv_core.sv
+      - rtl/common/fpu/kronos_fpu_fsqrt_core.sv
+      - rtl/common/fpu/kronos_fpu_iter.sv
+      - rtl/common/fpu/kronos_fpu_top.sv
       - rtl/stage6/kronos_top.sv
     file_type: systemVerilogSource
 
