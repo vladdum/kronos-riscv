@@ -1,6 +1,6 @@
 # kronos-riscv Architecture Reference
 
-**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 6d
+**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 6h
 
 kronos-riscv is a 5-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. Instructions flow through Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). The IF stage includes an alignment unit that handles variable-width compressed instructions and a bimodal branch predictor that speculatively redirects fetch before branch resolution. The EX stage contains the 64-bit ALU, a multi-cycle 64-bit multiply/divide unit, branch resolution logic, and the CSR unit. The MEM stage drives an AXI4 load/store unit supporting atomic operations (LR/SC, AMO) and floating-point loads/stores. A separate FPU with six pipelined units handles the F and D extensions; the FPU uses a scoreboard rather than the integer forwarding network for hazard management. Hazard and forwarding control modules sit outside the pipeline stages and manage stalls, flushes, and operand forwarding.
 
@@ -58,7 +58,27 @@ kronos_top  (rtl/stage5/kronos_top.sv)
 
 ---
 
-## 3. IF Stage — Fetch, Alignment, Decompression, Branch Prediction
+## 3. Memory Subsystem
+
+Cache and register-file storage that maps to BRAM/LUTRAM goes through `rtl/common/kronos_ram.sv`, a parameterised SDP RAM wrapper with two backends behind the `KRONOS_RAM_FPGA` define:
+
+- **FPGA backend** — `xpm_memory_sdpram` (Xilinx Parameterized Macros). Vivado infers RAMB36/RAMB18 deterministically. Read latency is 1 cycle; same-cycle write+read collision returns the OLD value (`WRITE_MODE_B = "no_change"` — RAMB36/RAMB18 SDP only supports `"no_change"` / `"read_first"` on port B).
+- **ASIC / Verilator default** — behavioural SDP that synthesises as flops on tools without XPM. Same 1-cycle read, same byte-write semantics. Marked as a stub for vendor SRAM-compiler replacement at tape-out.
+
+Consumers handle same-cycle write→read forwarding externally:
+
+| Consumer | Wrapper instances | Per-instance geometry | Bypass strategy |
+|---|---|---|---|
+| `kronos_icache` data | 4 (one per way) | `64 sets × 16 words × 32 b` | refill→read 1-deep prev-write bypass |
+| `kronos_icache` tag  | 4 | `64 sets × 56 b` (tag zero-padded to 8 b multiple) | refill→read 1-deep prev-tag-write bypass + S1→S2 tag holdover |
+| `kronos_dcache` data | 4 | `64 sets × 8 beats × 64 b` | store-hit / last-refill-beat / load 1-deep prev-write bypass |
+| `kronos_dcache` tag  | 4 | `64 sets × 56 b` | refill→read 1-deep prev-tag-write bypass |
+
+Smaller storage stays in flops or LUTRAM — iTLB/dTLB CAMs (8 entries each), branch predictor PHT/BTB (64+16 entries), integer regfile (`rtl/stage0/kronos_regfile.sv`, LUTRAM), FP regfile (`rtl/common/kronos_regfile_fp.sv`, LUTRAM). The wrapper is not used for these because their geometry (CAMs, very small register banks) does not match BRAM SDP.
+
+---
+
+## 4. IF Stage — Fetch, Alignment, Decompression, Branch Prediction
 
 ### 3a. Fetch FSM
 
@@ -117,7 +137,7 @@ The branch predictor combines a **bimodal pattern history table (PHT)** with a *
 
 ---
 
-## 4. ID Stage — Decode and Register Read
+## 5. ID Stage — Decode and Register Read
 
 ![ID stage block diagram](diagrams/svg/id-stage.svg)
 
@@ -131,7 +151,7 @@ A WB→ID bypass mux sits between the integer register file read ports and the I
 
 ---
 
-## 5. EX Stage — Execute, Branch Resolution, Muldiv
+## 6. EX Stage — Execute, Branch Resolution, Muldiv
 
 ![EX stage block diagram](diagrams/svg/ex-stage.svg)
 
@@ -167,7 +187,7 @@ In addition to `result_o`, the ALU exposes `adder_out_o` (raw adder output, befo
 
 ---
 
-## 6. FPU
+## 7. FPU
 
 The FPU handles all F and D extension instructions. It is logically separate from the integer pipeline: FP instructions are dispatched from EX to `kronos_fpu_top`, which routes them to one of six pipelined units. Results are written directly to `kronos_regfile_fp` through the FPU's dedicated writeback interface, bypassing the integer WB mux.
 
@@ -205,7 +225,7 @@ All units implement IEEE 754-2019 rounding and exception flag generation. The re
 
 ---
 
-## 7. MEM Stage — AXI4 Load/Store Unit
+## 8. MEM Stage — AXI4 Load/Store Unit
 
 ![LSU FSM](diagrams/svg/mem-lsu-fsm.svg)
 
@@ -235,7 +255,7 @@ In STORE_SEND the FSM asserts both `awvalid` and `wvalid` simultaneously. Two fl
 
 ---
 
-## 8. WB Stage — Writeback
+## 9. WB Stage — Writeback
 
 ![Writeback mux](diagrams/svg/wb-mux.svg)
 
@@ -254,7 +274,7 @@ FP writeback is a separate path from `kronos_fpu_top` directly to `kronos_regfil
 
 ---
 
-## 9. Hazard and Forwarding Control
+## 10. Hazard and Forwarding Control
 
 ![Hazard and forwarding control plane](diagrams/svg/hazard-forward.svg)
 
@@ -285,7 +305,7 @@ FP hazards are managed entirely by the scoreboard. `kronos_forward` and `kronos_
 
 ---
 
-## 10. Timing Table
+## 11. Timing Table
 
 Cycles measured from the instruction entering EX to its result being available in WB (or to the first valid instruction after a redirect for branches and traps). FPU latencies are measured from dispatch (EX) to writeback.
 
@@ -316,7 +336,7 @@ Cycles measured from the instruction entering EX to its result being available i
 
 ---
 
-## 11. CSR Register Map
+## 12. CSR Register Map
 
 | Address | Name | Description |
 |---------|------|-------------|
@@ -343,7 +363,7 @@ Cycles measured from the instruction entering EX to its result being available i
 
 ---
 
-## 12. Performance counters (Zicntr + partial Zihpm)
+## 13. Performance counters (Zicntr + partial Zihpm)
 
 Stage 5c adds architectural performance counters so subsequent
 microarchitectural changes (caches, MMU, OOO) can be measured

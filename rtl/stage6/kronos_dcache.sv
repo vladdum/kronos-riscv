@@ -112,8 +112,9 @@ module kronos_dcache
   } dcache_state_e;
 
   // ---- State registers (driven by always_ff) -------------------------------
-  // Storage arrays (data_q is now in 4 x kronos_ram, see gen_data_ram below)
-  logic [TAG_W-1:0] tag_q   [NUM_SETS][NUM_WAYS];
+  // Storage arrays. data_q lives in 4 x kronos_ram (gen_data_ram below) and
+  // tag_q lives in 4 x kronos_ram (gen_tag_ram below); valid/dirty/PLRU stay
+  // in flops to preserve single-cycle FENCE.I and store-hit dirty updates.
   logic             valid_q [NUM_SETS][NUM_WAYS];
   logic             dirty_q [NUM_SETS][NUM_WAYS];
   logic [2:0]       plru_q  [NUM_SETS];
@@ -176,6 +177,11 @@ module kronos_dcache
   logic [SET_IDX_W-1:0]              flush_set_q;
   logic [$clog2(NUM_WAYS)-1:0]       flush_way_q;
   logic                              flush_done_q;
+  // flush_tag_settled_q: 1 iff tag_rdata_eff currently reflects flush_set_q.
+  // Cleared on every entry to DC_FLUSH_SCAN and on every flush_set_q change;
+  // set on the next cycle, after the BRAM read launched at flush_set_q has
+  // landed. Used to stall the FLUSH_SCAN body for one bubble cycle per set.
+  logic                              flush_tag_settled_q;
 
   // track which port owns the in-flight (multi-cycle) request so
   // responses produced after the request cycle (refill bypass, store_done,
@@ -284,6 +290,32 @@ module kronos_dcache
   logic                                      ram_re;
   logic [RAM_ADDR_W-1:0]                     ram_raddr;
   logic [kronos_pkg::XLEN-1:0]               ram_rdata [NUM_WAYS];
+
+  // ---- Per-way TAG-RAM interface signals (driven combinationally) ----------
+  // TAG_RAM_W is TAG_W zero-padded up to a byte multiple so kronos_ram's
+  // BYTE_WIDTH=8 byte-write geometry is satisfied.
+  localparam int unsigned TAG_RAM_W = ((TAG_W + 7) / 8) * 8;
+
+  logic [NUM_WAYS-1:0]               tag_we;
+  logic [SET_IDX_W-1:0]              tag_waddr;
+  logic [TAG_RAM_W-1:0]              tag_wdata;
+  logic                              tag_re;
+  logic [SET_IDX_W-1:0]              tag_raddr;
+  logic [TAG_RAM_W-1:0]              tag_rdata     [NUM_WAYS];
+  logic [TAG_W-1:0]                  tag_rdata_eff [NUM_WAYS];   // post-RAW-bypass
+
+  // 1-deep RAW bypass for refill-tag-write -> same-set read collision.
+  // kronos_ram port-B "no_change" mode leaves rdata stale on a same-cycle
+  // write+read at the same address; this register catches the just-written
+  // tag for one cycle so the post-refill tag-compare sees the new value.
+  logic                              prev_tag_write_q;
+  logic [SET_IDX_W-1:0]              prev_tag_set_q;
+  logic [NUM_WAYS-1:0]               prev_tag_way_oh_q;
+  logic [TAG_W-1:0]                  prev_tag_data_q;
+
+  // True for exactly one cycle on the refill-completion edge: the cycle on
+  // which the new tag/valid/dirty bookkeeping commits.
+  logic refill_complete_fire;
 
   // Refill beat-in-burst pointer (CWF wrap inside the line).
   logic [BEAT_IDX_W-1:0] refill_beat_in_burst;
@@ -459,7 +491,7 @@ module kronos_dcache
   always_comb begin
     hit_way_oh = {NUM_WAYS{1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
-      hit_way_oh[w] = eff_req_valid & valid_q[set_idx][w] & (tag_q[set_idx][w] == tag_in);
+      hit_way_oh[w] = eff_req_valid & valid_q[set_idx][w] & (tag_rdata_eff[w] == tag_in);
     end
     hit = |hit_way_oh;
   end
@@ -554,6 +586,93 @@ module kronos_dcache
       );
     end
   endgenerate
+
+  // ==========================================================================
+  // BRAM tag array (one kronos_ram per way)
+  // ==========================================================================
+  // Set-indexed tag store. Same WRITE_MODE_B="no_change" as the data RAM —
+  // the refill→read collision is covered by the prev_tag_*_q 1-deep bypass.
+  generate
+    for (genvar gi = 0; gi < NUM_WAYS; gi++) begin : gen_tag_ram
+      kronos_ram #(
+        .DEPTH        (NUM_SETS),
+        .WIDTH        (TAG_RAM_W),
+        .BYTE_WIDTH   (8),
+        .WRITE_MODE_B ("no_change")
+      ) u_tag_ram (
+        .clk_i   (clk_i),
+        .we_i    (tag_we[gi]),
+        .waddr_i (tag_waddr),
+        .wdata_i (tag_wdata),
+        .wmask_i ({(TAG_RAM_W/8){1'b1}}),
+        .re_i    (tag_re),
+        .raddr_i (tag_raddr),
+        .rdata_o (tag_rdata[gi])
+      );
+    end
+  endgenerate
+
+  // tag_rdata_eff: strip the zero-pad and apply the 1-deep RAW bypass for
+  // refill→same-set read collisions.
+  always_comb begin
+    for (int w = 0; w < NUM_WAYS; w++) begin
+      tag_rdata_eff[w] = tag_rdata[w][TAG_W-1:0];
+      if (prev_tag_write_q & (set_idx == prev_tag_set_q) & prev_tag_way_oh_q[w]) begin
+        tag_rdata_eff[w] = prev_tag_data_q;
+      end
+    end
+  end
+
+  // True for one cycle: the refill-bookkeeping commit (last R beat accepted).
+  // Drives the tag RAM write-enable and the prev_tag_*_q capture.
+  assign refill_complete_fire = (state_q == DC_REFILL_R)
+                              & axi_req_o.r_ready
+                              & axi_rsp_i.r_valid
+                              & axi_rsp_i.r.last;
+
+  // Tag-RAM write side. Target way is victim_q on refill complete.
+  always_comb begin
+    tag_we    = {NUM_WAYS{1'b0}};
+    tag_waddr = miss_set_q;
+    tag_wdata = {{(TAG_RAM_W - TAG_W){1'b0}}, miss_tag_q};
+
+    if (refill_complete_fire) begin
+      for (int w = 0; w < NUM_WAYS; w++) begin
+        if (w == int'(victim_q)) tag_we[w] = 1'b1;
+      end
+    end
+  end
+
+  // Tag-RAM read mux. Mirrors the data-RAM read priority chain but with
+  // set-only addressing (no beat field). Default = LSU pre-launch from
+  // EX-stage dTLB PA. Flush-walk states drive flush_set_q so the
+  // FLUSH_SCAN body can capture evict_tag_q from tag_rdata_eff[flush_way_q].
+  always_comb begin
+    tag_re    = early_req_valid_i;
+    tag_raddr = early_addr_i[OFFSET_W + SET_IDX_W - 1 : OFFSET_W];
+
+    if ((state_q == DC_REFILL_R) | (state_q == DC_REFILL_AR)
+        | (state_q == DC_AMO_RMW)) begin
+      tag_re    = 1'b1;
+      tag_raddr = eff_req_addr[OFFSET_W + SET_IDX_W - 1 : OFFSET_W];
+    end else if ((state_q == DC_IDLE) & ptw_active) begin
+      tag_re    = 1'b1;
+      tag_raddr = eff_req_addr[OFFSET_W + SET_IDX_W - 1 : OFFSET_W];
+    end else if (state_q == DC_FLUSH_SCAN) begin
+      // Drive the tag read for the flush walk's current set; the FLUSH_SCAN
+      // body captures evict_tag_q <= tag_rdata_eff[flush_way_q] one cycle
+      // after the set was last changed (gated by flush_tag_settled_q).
+      tag_re    = 1'b1;
+      tag_raddr = flush_set_q;
+    end else if ((state_q == DC_WB_AW) | (state_q == DC_WB_W)
+               | (state_q == DC_FLUSH_AW) | (state_q == DC_FLUSH_W)) begin
+      // Writeback walk: tag was already captured into evict_tag_q
+      // (in IDLE for normal miss, in FLUSH_SCAN for flush walk); the tag
+      // RAM is idle here. Keep tag_re low.
+      tag_re    = 1'b0;
+      tag_raddr = miss_set_q;
+    end
+  end
 
   // ==========================================================================
   // BRAM port-A: per-way write enables / write data / mask
@@ -734,6 +853,7 @@ module kronos_dcache
       flush_set_q          <= {SET_IDX_W{1'b0}};
       flush_way_q          <= {$clog2(NUM_WAYS){1'b0}};
       flush_done_q         <= 1'b0;
+      flush_tag_settled_q  <= 1'b0;
       in_flight_is_ptw_q   <= 1'b0;
       nc_addr_q            <= {PHYS_ADDR_W{1'b0}};
       nc_size_q            <= 3'b0;
@@ -751,16 +871,19 @@ module kronos_dcache
       prev_write_data_q    <= {kronos_pkg::XLEN{1'b0}};
       prev_write_mask_q    <= {kronos_pkg::XLEN_BYTES{1'b0}};
       prev_write_active_q  <= 1'b0;
+      prev_tag_write_q     <= 1'b0;
+      prev_tag_set_q       <= {SET_IDX_W{1'b0}};
+      prev_tag_way_oh_q    <= {NUM_WAYS{1'b0}};
+      prev_tag_data_q      <= {TAG_W{1'b0}};
       for (int s = 0; s < NUM_SETS; s++) begin
         plru_q[s] <= 3'b0;
         for (int w = 0; w < NUM_WAYS; w++) begin
           valid_q[s][w] <= 1'b0;
           dirty_q[s][w] <= 1'b0;
-          tag_q[s][w]   <= {TAG_W{1'b0}};
         end
       end
-      // No data_q reset — BRAM contents are don't-care at reset; valid_q
-      // is the source of truth for "is this address readable".
+      // No data_q / tag_q reset — BRAM contents are don't-care at reset;
+      // valid_q is the source of truth for "is this address readable".
     end else begin
       miss_pulse_q   <= miss_event;
       bypass_valid_q <= 1'b0;
@@ -777,6 +900,18 @@ module kronos_dcache
       prev_write_addr_q   <= ram_waddr;
       prev_write_data_q   <= ram_wdata;
       prev_write_mask_q   <= ram_wmask;
+      // 1-deep RAW bypass for the tag RAM: capture the tag write that fires
+      // this cycle so the next cycle's tag-compare sees the new value
+      // (xpm SDP "no_change" returns the OLD tag on a same-cycle write+read).
+      prev_tag_write_q <= refill_complete_fire;
+      if (refill_complete_fire) begin
+        prev_tag_set_q    <= miss_set_q;
+        prev_tag_way_oh_q <= {NUM_WAYS{1'b0}};
+        for (int w = 0; w < NUM_WAYS; w++) begin
+          if (w == int'(victim_q)) prev_tag_way_oh_q[w] <= 1'b1;
+        end
+        prev_tag_data_q <= miss_tag_q;
+      end
       // NC response/completion pulses — default-clear each cycle.
       nc_rsp_valid_q <= 1'b0;
       nc_b_done_q    <= 1'b0;
@@ -816,9 +951,10 @@ module kronos_dcache
           // request so we don't restart a second flush walk.
           if (flush_i & ~flush_done_q) begin
             // FENCE.I full writeback + invalidate walk.
-            flush_set_q <= {SET_IDX_W{1'b0}};
-            flush_way_q <= {$clog2(NUM_WAYS){1'b0}};
-            state_q     <= DC_FLUSH_SCAN;
+            flush_set_q         <= {SET_IDX_W{1'b0}};
+            flush_way_q         <= {$clog2(NUM_WAYS){1'b0}};
+            flush_tag_settled_q <= 1'b0;   // bubble cycle for first BRAM read
+            state_q             <= DC_FLUSH_SCAN;
           end else if (eff_req_valid & is_uncacheable) begin
             // PMA bypass — non-cacheable address; single-beat AXI.
             // Important: this arm fully owns the request when is_uncacheable
@@ -880,7 +1016,7 @@ module kronos_dcache
                                                            eff_req_wdata);
                 miss_store_strobes_q <= store_strobes(eff_req_size, eff_req_addr[2:0]);
                 miss_store_off_q     <= eff_req_addr[2:0];
-                evict_tag_q          <= tag_q[set_idx][victim_pick];
+                evict_tag_q          <= tag_rdata_eff[victim_pick];
                 wb_beat_cnt_q        <= 4'd0;
                 sc_success_q         <= 1'b1;
                 if (valid_q[set_idx][victim_pick] & dirty_q[set_idx][victim_pick]) begin
@@ -904,7 +1040,7 @@ module kronos_dcache
                 miss_beat_q    <= beat_idx;
                 victim_q       <= victim_pick;
                 beat_cnt_q     <= 4'd0;
-                evict_tag_q    <= tag_q[set_idx][victim_pick];
+                evict_tag_q    <= tag_rdata_eff[victim_pick];
                 wb_beat_cnt_q  <= 4'd0;
                 if (valid_q[set_idx][victim_pick] & dirty_q[set_idx][victim_pick]) begin
                   state_q <= DC_WB_AW;
@@ -943,7 +1079,7 @@ module kronos_dcache
                 amo_src_q      <= eff_req_wdata;
                 amo_is_word_q  <= (eff_req_size == 3'd2);
                 amo_addr_off_q <= eff_req_addr[2:0];
-                evict_tag_q    <= tag_q[set_idx][victim_pick];
+                evict_tag_q    <= tag_rdata_eff[victim_pick];
                 wb_beat_cnt_q  <= 4'd0;
                 if (valid_q[set_idx][victim_pick] & dirty_q[set_idx][victim_pick]) begin
                   state_q <= DC_WB_AW;
@@ -979,7 +1115,7 @@ module kronos_dcache
                                                          eff_req_wdata);
               miss_store_strobes_q <= store_strobes(eff_req_size, eff_req_addr[2:0]);
               miss_store_off_q     <= eff_req_addr[2:0];
-              evict_tag_q          <= tag_q[set_idx][victim_pick];
+              evict_tag_q          <= tag_rdata_eff[victim_pick];
               wb_beat_cnt_q        <= 4'd0;
               if (valid_q[set_idx][victim_pick] & dirty_q[set_idx][victim_pick]) begin
                 state_q <= DC_WB_AW;
@@ -1008,7 +1144,7 @@ module kronos_dcache
             end
             beat_cnt_q <= beat_cnt_q + 4'd1;
             if (axi_rsp_i.r.last) begin
-              tag_q[miss_set_q][victim_q]   <= miss_tag_q;
+              // tag write fires combinationally via tag_we (refill_complete_fire)
               valid_q[miss_set_q][victim_q] <= 1'b1;
               dirty_q[miss_set_q][victim_q] <= miss_was_store_q;
               plru_q[miss_set_q]            <= plru_update(plru_q[miss_set_q], victim_q);
@@ -1047,29 +1183,42 @@ module kronos_dcache
           // Walk (set, way).  Dirty → writeback path; clean → just
           // invalidate and advance.  When the walk completes, pulse
           // flush_done_q for one cycle and return to DC_IDLE.
-          if (valid_q[flush_set_q][flush_way_q] &
-              dirty_q[flush_set_q][flush_way_q]) begin
-            // Reuse the writeback registers — no other transaction is
-            // active during a flush walk.
-            miss_set_q    <= flush_set_q;
-            victim_q      <= flush_way_q;
-            evict_tag_q   <= tag_q[flush_set_q][flush_way_q];
-            wb_beat_cnt_q <= 4'd0;
-            state_q       <= DC_FLUSH_AW;
-          end else begin
-            // Clean or invalid line: just invalidate and advance.
-            valid_q[flush_set_q][flush_way_q] <= 1'b0;
-            if (flush_way_q == ($clog2(NUM_WAYS))'(NUM_WAYS - 1)) begin
-              flush_way_q <= {$clog2(NUM_WAYS){1'b0}};
-              if (flush_set_q == SET_IDX_W'(NUM_SETS - 1)) begin
-                flush_done_q <= 1'b1;
-                state_q      <= DC_IDLE;
-              end else begin
-                flush_set_q <= flush_set_q + 1'b1;
-              end
+          //
+          // Tag arrays are BRAM-back: tag_rdata_eff[flush_way_q] is only
+          // valid one cycle after flush_set_q became the tag_raddr.
+          // flush_tag_settled_q gates the body — when low, stall this cycle
+          // (do nothing else) so the BRAM read can settle. The flag is
+          // re-armed below on every flush_set_q change.
+          if (flush_tag_settled_q) begin
+            if (valid_q[flush_set_q][flush_way_q] &
+                dirty_q[flush_set_q][flush_way_q]) begin
+              // Dirty line: capture the tag (from BRAM via tag_rdata_eff)
+              // and start the writeback. Reuse the WB registers — no
+              // other transaction is active during a flush walk.
+              miss_set_q    <= flush_set_q;
+              victim_q      <= flush_way_q;
+              evict_tag_q   <= tag_rdata_eff[flush_way_q];
+              wb_beat_cnt_q <= 4'd0;
+              state_q       <= DC_FLUSH_AW;
             end else begin
-              flush_way_q <= flush_way_q + 1'b1;
+              // Clean or invalid line: just invalidate and advance.
+              valid_q[flush_set_q][flush_way_q] <= 1'b0;
+              if (flush_way_q == ($clog2(NUM_WAYS))'(NUM_WAYS - 1)) begin
+                flush_way_q <= {$clog2(NUM_WAYS){1'b0}};
+                if (flush_set_q == SET_IDX_W'(NUM_SETS - 1)) begin
+                  flush_done_q <= 1'b1;
+                  state_q      <= DC_IDLE;
+                end else begin
+                  flush_set_q         <= flush_set_q + 1'b1;
+                  flush_tag_settled_q <= 1'b0;
+                end
+              end else begin
+                flush_way_q <= flush_way_q + 1'b1;
+              end
             end
+          end else begin
+            // Bubble cycle: BRAM read in flight, latch settled for next.
+            flush_tag_settled_q <= 1'b1;
           end
         end
         DC_FLUSH_AW: begin
@@ -1089,8 +1238,9 @@ module kronos_dcache
                   flush_done_q <= 1'b1;
                   state_q      <= DC_IDLE;
                 end else begin
-                  flush_set_q <= flush_set_q + 1'b1;
-                  state_q     <= DC_FLUSH_SCAN;
+                  flush_set_q         <= flush_set_q + 1'b1;
+                  flush_tag_settled_q <= 1'b0;   // new set: need a bubble
+                  state_q             <= DC_FLUSH_SCAN;
                 end
               end else begin
                 flush_way_q <= flush_way_q + 1'b1;
@@ -1167,6 +1317,11 @@ module kronos_dcache
     // Write channel: dirty-eviction AW/W/B (line-aligned address)
     // TAG_W + SET_IDX_W + OFFSET_W == PHYS_ADDR_W by construction, so no
     // upper-pad concat is needed (Synth 8-693 zero-replication).
+    //
+    // evict_tag_q is captured in DC_IDLE for normal misses (from
+    // tag_rdata_eff[victim_pick]) and in DC_FLUSH_SCAN for the flush walk
+    // (from tag_rdata_eff[flush_way_q]); in both cases the tag is read
+    // from BRAM and held in evict_tag_q across the multi-cycle WB burst.
     axi_req_o.aw.addr  = {evict_tag_q, miss_set_q, {OFFSET_W{1'b0}}};
     axi_req_o.aw.size  = 3'b011;
     axi_req_o.aw.len   = 8'd7;
