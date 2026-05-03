@@ -58,15 +58,42 @@ jobs:
       - name: Run unit tests
         run: PYTHONPATH=. pytest tools/crv/tests/ tools/tests/ tools/trace/tests/ -v
 
+  # Verilator lint with UNOPTFLAT enabled.  Catches RTL combinational loops
+  # at the lint stage rather than at Vivado synth time (closes the detection
+  # gap that allowed #89 to slip through to KV260 bitgen).  See sim/Makefile
+  # `lint-rtl-s*` and tracking issue #90.
+  lint-rtl:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [s0, s1, s2, s3, s4, s5, s6]
+    name: lint-rtl-${{ matrix.stage }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run lint-rtl-${{ matrix.stage }}
+        run: make -C sim lint-rtl-${{ matrix.stage }} PULP_AXI_ROOT=/tmp/pulp_axi
+
   sim-all:
     runs-on: ubuntu-latest
-    needs: [sim-units, pytest]
+    needs: [sim-units, pytest, lint-rtl]
     if: always()
     steps:
       - run: |
-          result="${{ needs.sim-units.result }}"
-          if [ "$result" != "success" ]; then
-            echo "sim-units result: $result"
+          if [ "${{ needs.sim-units.result }}" != "success" ] || \
+             [ "${{ needs.pytest.result }}"    != "success" ] || \
+             [ "${{ needs['lint-rtl'].result }}" != "success" ]; then
+            echo "sim-units=${{ needs.sim-units.result }}"
+            echo "pytest=${{ needs.pytest.result }}"
+            echo "lint-rtl=${{ needs['lint-rtl'].result }}"
             exit 1
           fi
 

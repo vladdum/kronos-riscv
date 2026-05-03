@@ -133,10 +133,27 @@ module kronos_top
   logic [55:0]       pmp_fetch_fault_addr;
   logic              pmp_data_fault;
   logic [55:0]       pmp_data_fault_addr;
+  // Registered fetch-fault s1 stage.  pmp_fetch_fault_raw and itlb_perm_fail
+  // both fan into ex_redirect → redirect_load → align_needs_fetch, which
+  // gates the very fault inputs that produced them.  Flopping the gated
+  // outputs (with a redirect_load sync-clear) breaks both back-edges; the
+  // address snapshot keeps trap_tval pointing at the offending fetch VA.
+  logic              pmp_s1_fetch_fault_q;
+  logic [55:0]       pmp_s1_fetch_fault_addr_q;
+  logic              itlb_s1_perm_fail_q;
+  // pc_q snapshot taken alongside itlb_s1_perm_fail_q so trap_tval for the
+  // registered iTLB perm-fail arm reads the same pc_q value the pre-flop
+  // (combinational) trap would have seen.  Without this, pc_q can advance
+  // during the new 1-cycle fault window if predecode emits at cycle N.
+  logic [31:0]       itlb_s1_pc_q;
   logic [15:0][7:0]  pmpcfg;
   logic [15:0][53:0] pmpaddr;
   logic [31:0]       trap_tval;
   logic              csr_illegal;
+  // Raw csr_illegal_o from u_csr (computed unconditionally on addr/priv);
+  // csr_illegal below is the externally gated form on registered id_ex_q
+  // fields, kept off the comb cone driven by combined_stall (closes #89).
+  logic              csr_illegal_raw;
   // priv-checked control transfers (mret/sret) and TVM/TW gates.
   logic              mret_priv_fail;
   logic              sret_priv_fail;
@@ -722,7 +739,7 @@ module kronos_top
     .sepc_o        (sepc),
     .priv_o        (priv_q),
     .mstatus_o     (mstatus),
-    .csr_illegal_o (csr_illegal),
+    .csr_illegal_o (csr_illegal_raw),
     .pmpcfg_o      (pmpcfg),
     .pmpaddr_o     (pmpaddr),
     .irq_timer_i   (irq_timer_i),
@@ -772,6 +789,27 @@ module kronos_top
     .satp_ppn_o          (satp_ppn)
   );
 
+  // External gate on csr_illegal_raw.  u_csr now computes the priv/counter
+  // predicates unconditionally so csr_illegal_o doesn't depend on req_i (and
+  // therefore doesn't drag combined_stall into the cone of ex_redirect).
+  // The gate uses only registered id_ex_q fields, breaking the cycle:
+  //   combined_stall -> csr.req_i -> csr_illegal -> ex_redirect ->
+  //   redirect_load -> s0_valid_to_icache -> ... -> combined_stall.
+  assign csr_illegal = id_ex_q.valid & id_ex_q.dec.is_csr & csr_illegal_raw;
+
+  // ex_valid_i is intentionally NOT gated by ~combined_stall.  Closing
+  // ~combined_stall here would form a comb loop:
+  //   combined_stall -> trigger.ex_valid_i -> trigger.match_vec -> trig_hit
+  //                  -> ex_redirect -> redirect_load -> s0_valid_to_icache
+  //                  -> u_itlb -> ptw -> dcache -> lsu_mem_stall -> mem_stall
+  //                  -> combined_stall.
+  // The actual breakpoint trap is gated by ~combined_stall in u_csr (trap_i,
+  // mret_i, sret_i are all `& ~combined_stall`-qualified), so the trap still
+  // fires in the cycle the stall releases.  Widening trig_hit to the full
+  // duration of a stall is benign: triggers_q[i].hit is sticky-set, so the
+  // redundant assertions are idempotent, and ex_redirect was already free to
+  // hold during stalls via other contributors (irq_pending, csr_illegal,
+  // pmp/page faults).
   kronos_trigger u_trigger (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
@@ -781,7 +819,7 @@ module kronos_top
     .csr_wdata_i   (trig_csr_wdata),
     .csr_rdata_o   (trig_csr_rdata),
     .csr_match_o   (trig_csr_match),
-    .ex_valid_i    (id_ex_q.valid & ~combined_stall),
+    .ex_valid_i    (id_ex_q.valid),
     .ex_pc_i       (id_ex_q.pc),
     .ex_is_load_i  (id_ex_q.dec.is_load),
     .ex_is_store_i (id_ex_q.dec.is_store),
@@ -849,8 +887,26 @@ module kronos_top
     .fault_addr_o (pmp_fetch_fault_addr_raw)
   );
 
-  assign pmp_fetch_fault      = pmp_fetch_fault_raw & pmp_any_active;
-  assign pmp_fetch_fault_addr = pmp_fetch_fault_addr_raw;
+  // pmp_fetch_fault back-edge cut.  pmp_fetch_fault_raw is gated by
+  // u_pmp_fetch.valid_i = align_needs_fetch = s0_valid_to_icache.  Driving
+  // ex_redirect / redirect_load directly off it closes a comb loop back to
+  // s0_valid_to_icache (synth flagged as the 92-LUT LUTLP-1 cycle).  Flop
+  // the gated fault and address; redirect_load sync-clears the flag so a
+  // mem_redirect that wins the cycle discards any in-flight fetch fault.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      pmp_s1_fetch_fault_q      <= 1'b0;
+      pmp_s1_fetch_fault_addr_q <= 56'h0;
+    end else if (redirect_load) begin
+      pmp_s1_fetch_fault_q      <= 1'b0;
+    end else begin
+      pmp_s1_fetch_fault_q      <= pmp_fetch_fault_raw & pmp_any_active;
+      pmp_s1_fetch_fault_addr_q <= pmp_fetch_fault_addr_raw;
+    end
+  end
+
+  assign pmp_fetch_fault      = pmp_s1_fetch_fault_q;
+  assign pmp_fetch_fault_addr = pmp_s1_fetch_fault_addr_q;
 
   kronos_pmp #(.N(16)) u_pmp_data (
     .pmpcfg_i     (pmpcfg),
@@ -947,8 +1003,13 @@ module kronos_top
   assign sfence_va_valid    = (id_ex_q.dec.rs1 != 5'd0);
   assign sfence_asid_valid  = (id_ex_q.dec.rs2 != 5'd0);
 
+  // wfi_priv_fail is intentionally NOT gated by ~combined_stall (closes #89).
+  // The comb cone of ex_redirect must stay free of combined_stall.  The
+  // actual trap is gated by ~combined_stall in u_csr.trap_i and the perf
+  // counter trap_taken_pulse, so widening the predicate during stalls does
+  // not double-fire the trap or skew event counts.
   assign wfi_priv_fail    = id_ex_q.valid & id_ex_q.dec.is_wfi &
-                              (priv_q != PRIV_M) & mstatus[21] /*TW*/ & ~combined_stall;
+                              (priv_q != PRIV_M) & mstatus[21] /*TW*/;
 
   // -------------------------------------------------------------------------
   // TLB-miss qualifiers.
@@ -991,12 +1052,36 @@ module kronos_top
     (id_ex_q.dec.is_load | id_ex_q.dec.is_store | id_ex_q.dec.is_amo) &
     ~pmp_data_fault & ~dtlb_miss & ~ex_amo_nc_fault;
 
+  // itlb_perm_fail back-edge cut.  itlb_perm_fail is gated inside u_itlb by
+  // lookup_valid_i = translate_fetch & align_needs_fetch, and the latter is
+  // s0_valid_to_icache — the same node ex_redirect / redirect_load drives.
+  // Flopping the perm-fail signal (with redirect_load sync-clear) breaks the
+  // loop without shifting the icache datapath, which still consumes itlb_pa
+  // combinationally for s0 BRAM indexing.  trap_tval for instr_page_fault
+  // continues to use pc_q (predecode-emitted PC) so existing tval semantics
+  // are preserved; ACT4-s6-priv is the correctness gate.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)            itlb_s1_perm_fail_q <= 1'b0;
+    else if (redirect_load) itlb_s1_perm_fail_q <= 1'b0;
+    else                    itlb_s1_perm_fail_q <= itlb_perm_fail;
+  end
+
+  // Free-running pc_q snapshot — sampled every cycle so itlb_s1_pc_q at
+  // cycle N+1 equals pc_q at cycle N.  trap_tval reads it only when the
+  // registered iTLB perm-fail arm of instr_page_fault is the cause; the
+  // ptw_pf and cross_page_fault arms continue to use live pc_q (their own
+  // semantics are unchanged from the pre-flop design).
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) itlb_s1_pc_q <= 32'h0;
+    else         itlb_s1_pc_q <= pc_q;
+  end
+
   // Aggregate page-fault flags (TLB perm-fail OR PTW page-fault on the matching
   // tlb_op_e).  cross_page_fault is treated as an instruction page-fault.
   // kronos_align gates cross_page_fault_o on translate_fetch_i, so this signal
   // is automatically zero in M-mode / Bare and only fires under active
   // translation.
-  assign instr_page_fault = itlb_perm_fail |
+  assign instr_page_fault = itlb_s1_perm_fail_q |
                             (ptw_pf & (ptw_pf_which == TLB_FETCH)) |
                             cross_page_fault;
   assign load_page_fault  = (dtlb_perm_fail | (ptw_pf & (ptw_pf_which == TLB_LOAD))) &
@@ -1813,7 +1898,12 @@ module kronos_top
   // instruction word for illegal-instruction (priv-spec § 3.1.16), and 0
   // otherwise.  Page-fault tval matches the spec: the faulting VA.
   always_comb begin
-    if      (instr_page_fault) trap_tval = pc_q;
+    // For instr_page_fault driven by the registered iTLB perm-fail arm,
+    // read the pc_q snapshot taken alongside itlb_s1_perm_fail_q to preserve
+    // the exact tval the pre-flop design would have produced.  ptw_pf and
+    // cross_page_fault arms keep their live pc_q semantics.
+    if      (itlb_s1_perm_fail_q) trap_tval = itlb_s1_pc_q;
+    else if (instr_page_fault) trap_tval = pc_q;
     else if (pmp_fetch_fault)  trap_tval = pmp_fetch_fault_addr[31:0];
     else if (load_page_fault | store_page_fault)
                                trap_tval = alu_result[31:0];

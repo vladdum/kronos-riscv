@@ -189,32 +189,21 @@ module kronos_ptw
 
   assign start_level = (satp_mode_i == kronos_pkg::SATP_MODE_SV48) ? 2'd3 : 2'd2;
 
+  // Next-state logic.  Reads dcache_rsp_valid_i / dcache_rsp_sc_ok_i — these
+  // come back combinationally from the dcache on a same-cycle tag hit, so
+  // state_d shares an always_comb with them.  Per-state dcache request /
+  // refill / page-fault outputs are factored out as continuous assigns from
+  // state_q (a flop), so Verilator's coarse-grained always_comb dependency
+  // analysis cannot tie a request output to a response input through this
+  // block (closes #89 PTW↔dcache false UNOPTFLAT).
   always_comb begin
-    state_d             = state_q;
-    dcache_req_valid_o  = 1'b0;
-    dcache_req_addr_o   = walk_addr_q;
-    dcache_req_we_o     = 1'b0;
-    dcache_req_wdata_o  = {kronos_pkg::XLEN{1'b0}};
-    dcache_req_size_o   = 3'd3;
-    dcache_req_is_lr_o  = 1'b0;
-    dcache_req_is_sc_o  = 1'b0;
-
-    itlb_refill_valid_o = 1'b0;
-    dtlb_refill_valid_o = 1'b0;
-    page_fault_o        = 1'b0;
-    page_fault_cause_o  = 5'd0;
-    page_fault_tval_o   = 64'd0;
-    page_fault_which_o  = TLB_NONE;
-    busy_o              = (state_q != S_IDLE);
-
+    state_d = state_q;
     unique case (state_q)
       S_IDLE: begin
         if (accept_req & (satp_mode_i != kronos_pkg::SATP_MODE_BARE)) state_d = S_FETCH_REQ;
       end
 
       S_FETCH_REQ: begin
-        dcache_req_valid_o = 1'b1;
-        dcache_req_addr_o  = walk_addr_q;
         if (dcache_rsp_valid_i) state_d = S_FETCH_WAIT;
       end
 
@@ -241,9 +230,6 @@ module kronos_ptw
       end
 
       S_AD_LR_REQ: begin
-        dcache_req_valid_o = 1'b1;
-        dcache_req_addr_o  = walk_addr_q;
-        dcache_req_is_lr_o = 1'b1;
         if (dcache_rsp_valid_i) state_d = S_AD_LR_WAIT;
       end
 
@@ -253,14 +239,6 @@ module kronos_ptw
       end
 
       S_AD_SC_REQ: begin
-        dcache_req_valid_o = 1'b1;
-        dcache_req_addr_o  = walk_addr_q;
-        dcache_req_we_o    = 1'b1;
-        dcache_req_is_sc_o = 1'b1;
-        // Bit 6 = A, bit 7 = D
-        dcache_req_wdata_o = cur_pte_q
-                              | (needs_a_q ? PTE_A_MASK : kronos_pkg::XLEN'(0))
-                              | (needs_d_q ? PTE_D_MASK : kronos_pkg::XLEN'(0));
         if (dcache_rsp_valid_i) state_d = S_AD_SC_WAIT;
       end
 
@@ -269,25 +247,41 @@ module kronos_ptw
         else                    state_d = S_IDLE;
       end
 
-      S_REFILL: begin
-        if (walk_which_q == TLB_FETCH) itlb_refill_valid_o = 1'b1;
-        else                            dtlb_refill_valid_o = 1'b1;
-        state_d = S_IDLE;
-      end
-
-      S_PAGE_FAULT: begin
-        page_fault_o       = 1'b1;
-        page_fault_cause_o = (walk_which_q == TLB_FETCH) ? kronos_pkg::CAUSE_INSTR_PAGE_FAULT
-                            : (walk_which_q == TLB_LOAD)  ? kronos_pkg::CAUSE_LOAD_PAGE_FAULT
-                                                          : kronos_pkg::CAUSE_STORE_PAGE_FAULT;
-        page_fault_tval_o  = walk_va_q;
-        page_fault_which_o = walk_which_q;
-        state_d = S_IDLE;
-      end
-
-      default: state_d = S_IDLE;
+      S_REFILL:     state_d = S_IDLE;
+      S_PAGE_FAULT: state_d = S_IDLE;
+      default:      state_d = S_IDLE;
     endcase
   end
+
+  // Per-state outputs derived from state_q (FF) only.  Keeping these out of
+  // the always_comb above guarantees no comb path from dcache_rsp_valid_i to
+  // dcache_req_valid_o.
+  assign dcache_req_valid_o  = (state_q == S_FETCH_REQ)
+                              | (state_q == S_AD_LR_REQ)
+                              | (state_q == S_AD_SC_REQ);
+  assign dcache_req_addr_o   = walk_addr_q;
+  assign dcache_req_we_o     = (state_q == S_AD_SC_REQ);
+  assign dcache_req_size_o   = 3'd3;
+  assign dcache_req_is_lr_o  = (state_q == S_AD_LR_REQ);
+  assign dcache_req_is_sc_o  = (state_q == S_AD_SC_REQ);
+  assign dcache_req_wdata_o  = (state_q == S_AD_SC_REQ)
+                                ? (cur_pte_q
+                                   | (needs_a_q ? PTE_A_MASK : {kronos_pkg::XLEN{1'b0}})
+                                   | (needs_d_q ? PTE_D_MASK : {kronos_pkg::XLEN{1'b0}}))
+                                : {kronos_pkg::XLEN{1'b0}};
+
+  assign itlb_refill_valid_o = (state_q == S_REFILL) & (walk_which_q == TLB_FETCH);
+  assign dtlb_refill_valid_o = (state_q == S_REFILL) & (walk_which_q != TLB_FETCH);
+
+  assign page_fault_o        = (state_q == S_PAGE_FAULT);
+  assign page_fault_cause_o  = (state_q != S_PAGE_FAULT) ? 5'd0
+                              : (walk_which_q == TLB_FETCH) ? kronos_pkg::CAUSE_INSTR_PAGE_FAULT
+                              : (walk_which_q == TLB_LOAD)  ? kronos_pkg::CAUSE_LOAD_PAGE_FAULT
+                                                             : kronos_pkg::CAUSE_STORE_PAGE_FAULT;
+  assign page_fault_tval_o   = (state_q == S_PAGE_FAULT) ? walk_va_q : 64'd0;
+  assign page_fault_which_o  = (state_q == S_PAGE_FAULT) ? walk_which_q : TLB_NONE;
+
+  assign busy_o              = (state_q != S_IDLE);
 
   // Refill outputs
   assign refill_size_o   = walk_level_q;

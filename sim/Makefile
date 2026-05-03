@@ -309,7 +309,7 @@ CRV_COV_MERGE := python3 ../tools/crv_cov_merge.py
 sim-crv-cov-build: $(TB_CRV_COV_FILES)
 	mkdir -p $(CRV_COV_DIR)
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) \
-	  --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY --Wno-UNOPTFLAT \
+	  --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --top-module tb_crv_cov \
 	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU" \
 	  -Mdir $(CRV_COV_DIR) \
@@ -892,7 +892,7 @@ build-s5: $(SIM_BIN_S5)
 
 $(SIM_BIN_S5): $(SV_FILES_S5) $(abspath sim_main.cpp)
 	mkdir -p $(OBJ_DIR)/s5
-	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY --Wno-UNOPTFLAT \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --trace --public-flat-rw \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S5) $(abspath sim_main.cpp) \
@@ -912,7 +912,7 @@ run-s5b-%: build-s5
 TB_CORE_FP_BASIC_FILES := $(SV_FILES_S5) \
                           $(TB_DIR)/stage5/tb_core_fp_basic.sv
 sim-core-fp-basic:
-	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-UNOPTFLAT \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
 	  --top-module tb_core_fp_basic $(TB_CORE_FP_BASIC_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_basic
 	$(OBJ_DIR)/core_fp_basic/Vtb_core_fp_basic
@@ -920,7 +920,7 @@ sim-core-fp-basic:
 TB_CORE_FP_FORWARDING_FILES := $(SV_FILES_S5) \
                                 $(TB_DIR)/stage5/tb_core_fp_forwarding.sv
 sim-core-fp-forwarding:
-	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED --Wno-UNOPTFLAT \
+	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD --Wno-UNUSED \
 	  --top-module tb_core_fp_forwarding $(TB_CORE_FP_FORWARDING_FILES) \
 	  $(PULP_AXI_INC) -Mdir $(OBJ_DIR)/core_fp_forwarding
 	$(OBJ_DIR)/core_fp_forwarding/Vtb_core_fp_forwarding
@@ -1103,7 +1103,7 @@ build-s6: $(SIM_BIN_S6)
 
 $(SIM_BIN_S6): $(SV_FILES_S6) $(abspath sim_main.cpp)
 	mkdir -p $(OBJ_DIR)/s6
-	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY --Wno-UNOPTFLAT \
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
 	  --trace --public-flat-rw \
 	  --top-module $(TOP_S5) \
 	  $(SV_FILES_S6) $(abspath sim_main.cpp) \
@@ -1111,6 +1111,49 @@ $(SIM_BIN_S6): $(SV_FILES_S6) $(abspath sim_main.cpp)
 	  -Mdir $(OBJ_DIR)/s6 \
 	  $(PULP_AXI_INC) \
 	  -o V$(TOP_S5)
+
+# ── Lint: kronos RTL only, with UNOPTFLAT enabled. ────────────────────────────
+# Detects RTL combinational loops (closes #89 detection gap).  Lints the
+# kronos top directly — sim_top.sv (Verilator wrapper for stages 3-6) and the
+# PULP AXI library are excluded so the gate stays focused on kronos sources.
+# UNOPTFLAT is NOT masked; --Wall promotes any new comb-loop warning to a
+# build failure.  See also: fusesoc lint-* targets in kronos_riscv.core are
+# silently broken on PULP axi_test.sv (tracked in #90); these Makefile
+# targets are the canonical lint flow.
+SV_FILES_S0_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES))
+SV_FILES_S1_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S1))
+SV_FILES_S2_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S2))
+SV_FILES_S3_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S3))
+SV_FILES_S4_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S4))
+SV_FILES_S5_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S5))
+SV_FILES_S6_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S6))
+
+LINT_FLAGS := -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY
+
+.PHONY: lint-rtl-s0 lint-rtl-s1 lint-rtl-s2 lint-rtl-s3 lint-rtl-s4 lint-rtl-s5 lint-rtl-s6 lint-rtl-all
+
+lint-rtl-s0:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S0_LINT) $(PULP_AXI_INC)
+
+lint-rtl-s1:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S1_LINT) $(PULP_AXI_INC)
+
+lint-rtl-s2:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S2_LINT) $(PULP_AXI_INC)
+
+lint-rtl-s3:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S3_LINT) $(PULP_AXI_INC)
+
+lint-rtl-s4:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S4_LINT) $(PULP_AXI_INC)
+
+lint-rtl-s5:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S5_LINT) $(PULP_AXI_INC)
+
+lint-rtl-s6:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S6_LINT) $(PULP_AXI_INC)
+
+lint-rtl-all: lint-rtl-s0 lint-rtl-s1 lint-rtl-s2 lint-rtl-s3 lint-rtl-s4 lint-rtl-s5 lint-rtl-s6
 
 run-s6-%: build-s6
 	./$(SIM_BIN_S6) $(SW_DIR_S6)/build/$*.hex
@@ -1628,6 +1671,7 @@ ci-local:
 	  echo "FAIL  ci-local: /usr/bin/riscv64-unknown-elf-gcc not installed (apt install gcc-riscv64-unknown-elf)"; exit 1; \
 	fi
 	@echo "[ci-local] Using $$(/usr/bin/riscv64-unknown-elf-gcc --version | head -1)"
+	@$(MAKE) lint-rtl-all || { echo "FAIL  ci-local: lint-rtl-all"; exit 1; }
 	@PATH=/usr/bin:$$PATH $(MAKE) sim-cosim-smoke || { echo "FAIL  ci-local: sim-cosim-smoke"; exit 1; }
 	@PATH=/usr/bin:$$PATH $(MAKE) sim-crv-smoke-s6 || { echo "FAIL  ci-local: sim-crv-smoke-s6"; exit 1; }
 	@$(MAKE) sim-dcache-s6-stress || { echo "FAIL  ci-local: sim-dcache-s6-stress"; exit 1; }
