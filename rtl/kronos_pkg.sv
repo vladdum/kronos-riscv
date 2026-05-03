@@ -75,7 +75,6 @@ package kronos_pkg;
   localparam logic [FP_D_EXP_W-1:0] FP_D_EXP_PENULT = 11'h7FE;
   // Minimum normal unbiased exponents (1 - bias)
   localparam int FP_S_EMIN_NORM = -126;
-  localparam int FP_D_EMIN_NORM = -1022;
   // Extended signed exponent width used by internal FPU datapath
   // (wide enough to hold +/-2*BIAS plus shift margin)
   localparam int unsigned FP_EXP_EXT_W = 13;
@@ -428,12 +427,27 @@ package kronos_pkg;
   localparam logic [11:0] CSR_MEDELEG    = 12'h302;
   localparam logic [11:0] CSR_MIDELEG    = 12'h303;
   localparam logic [11:0] CSR_MCOUNTEREN = 12'h306;
-  // PMP cfg + addr (8 active regions; pmpcfg2 + pmpaddr8..15 hardwired 0)
+  // PMP cfg + addr (8 active regions; pmpcfg2 + pmpaddr8..15 hardwired 0).
+  // The full 0..15 set is defined here so kronos_csr.sv can address every
+  // entry by symbolic name (avoids the half-named / half-literal mix that
+  // surfaced in #81 when only the boundary indices were in the package).
   localparam logic [11:0] CSR_PMPCFG0    = 12'h3A0;
   localparam logic [11:0] CSR_PMPCFG2    = 12'h3A2;
   localparam logic [11:0] CSR_PMPADDR0   = 12'h3B0;
+  localparam logic [11:0] CSR_PMPADDR1   = 12'h3B1;
+  localparam logic [11:0] CSR_PMPADDR2   = 12'h3B2;
+  localparam logic [11:0] CSR_PMPADDR3   = 12'h3B3;
+  localparam logic [11:0] CSR_PMPADDR4   = 12'h3B4;
+  localparam logic [11:0] CSR_PMPADDR5   = 12'h3B5;
+  localparam logic [11:0] CSR_PMPADDR6   = 12'h3B6;
   localparam logic [11:0] CSR_PMPADDR7   = 12'h3B7;
   localparam logic [11:0] CSR_PMPADDR8   = 12'h3B8;
+  localparam logic [11:0] CSR_PMPADDR9   = 12'h3B9;
+  localparam logic [11:0] CSR_PMPADDR10  = 12'h3BA;
+  localparam logic [11:0] CSR_PMPADDR11  = 12'h3BB;
+  localparam logic [11:0] CSR_PMPADDR12  = 12'h3BC;
+  localparam logic [11:0] CSR_PMPADDR13  = 12'h3BD;
+  localparam logic [11:0] CSR_PMPADDR14  = 12'h3BE;
   localparam logic [11:0] CSR_PMPADDR15  = 12'h3BF;
 
   // -------------------------------------------------------------------------

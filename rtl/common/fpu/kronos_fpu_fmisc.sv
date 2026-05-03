@@ -90,6 +90,10 @@ module kronos_fpu_fmisc
   // FCLASS bits (10-bit one-hot, see FCLASS_* in kronos_pkg)
   logic [9:0] fclass_bits;
 
+  // FMISC ops (FCLASS / FSGNJ / FMV / FMIN-FMAX / FEQ-FLT-FLE) are exact
+  // — they do not consult the dynamic rounding mode.
+  logic _unused;
+
   // -------------------------------------------------------------------------
   // NaN-unboxing for single-precision operands
   // If upper 32 bits != 0xFFFF_FFFF, replace with canonical single qNaN.
@@ -461,5 +465,7 @@ module kronos_fpu_fmisc
       tag_o       <= tag_i;
     end
   end
+
+  assign _unused = ^rm_i;
 
 endmodule

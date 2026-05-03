@@ -15,7 +15,9 @@ module kronos_decompress
   // ---------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------
-  localparam logic [6:0] OP_IMM      = 7'b001_0011;
+  // OP_IMM and OP_IMM_32 are sourced from kronos_pkg (referenced via the
+  // explicit kronos_pkg:: scope at use sites). The remaining opcode literals
+  // are not yet hoisted to the package and stay local.
   localparam logic [6:0] OP_LUI      = 7'b011_0111;
   localparam logic [6:0] OP_JAL      = 7'b110_1111;
   localparam logic [6:0] OP_JALR     = 7'b110_0111;
@@ -23,7 +25,6 @@ module kronos_decompress
   localparam logic [6:0] OP_STORE    = 7'b010_0011;
   localparam logic [6:0] OP_BRNCH    = 7'b110_0011;
   localparam logic [6:0] OP_REG      = 7'b011_0011;
-  localparam logic [6:0] OP_IMM_32   = 7'b001_1011;  // RV64 OP-IMM-32 (ADDIW/SLLIW/etc.)
   localparam logic [6:0] OP_REG_32   = 7'b011_1011;  // RV64 OP-32 (ADDW/SUBW/etc.)
   localparam logic [6:0] OP_LOAD_FP  = 7'b000_0111;  // FLD / FLW
   localparam logic [6:0] OP_STORE_FP = 7'b010_0111;  // FSD / FSW
@@ -46,6 +47,10 @@ module kronos_decompress
   logic [kronos_pkg::INST_W-1:0]  imm;
   logic [kronos_pkg::INST_W-1:0]  off;
   logic [5:0]         shamt;
+
+  // imm/off are sized to INST_W (32) for convenience but only the J-/B-type
+  // immediate windows are actually sliced into the emitted 32b instruction.
+  logic _unused;
 
   // ---------------------------------------------------------------
   // Field extraction
@@ -87,7 +92,7 @@ module kronos_decompress
             uimm = {2'b0, instr16_i[10:7], instr16_i[12:11],
                     instr16_i[5], instr16_i[6], 2'b0};
             if (uimm == {12{1'b0}}) illegal_o = 1'b1;
-            else instr32_o = {uimm, REG_X2, 3'b000, rd_full, OP_IMM};
+            else instr32_o = {uimm, REG_X2, 3'b000, rd_full, kronos_pkg::OP_IMM};
           end
 
           3'b001: begin  // RV64C: C.FLD → FLD fd', uimm(rs1')
@@ -135,18 +140,18 @@ module kronos_decompress
 
           3'b000: begin  // C.NOP / C.ADDI → ADDI rd, rd, nzimm
             nzimm = {{27{instr16_i[12]}}, instr16_i[6:2]};
-            instr32_o = {nzimm[11:0], rd, 3'b000, rd, OP_IMM};
+            instr32_o = {nzimm[11:0], rd, 3'b000, rd, kronos_pkg::OP_IMM};
           end
 
           3'b001: begin  // RV64C: C.ADDIW → ADDIW rd, rd, imm  (C.JAL removed in RV64)
             imm = {{27{instr16_i[12]}}, instr16_i[6:2]};
             if (rd == REG_X0) illegal_o = 1'b1;
-            else instr32_o = {imm[11:0], rd, 3'b000, rd, OP_IMM_32};
+            else instr32_o = {imm[11:0], rd, 3'b000, rd, kronos_pkg::OP_IMM_32};
           end
 
           3'b010: begin  // C.LI → ADDI rd, x0, imm
             imm = {{27{instr16_i[12]}}, instr16_i[6:2]};
-            instr32_o = {imm[11:0], REG_X0, 3'b000, rd, OP_IMM};
+            instr32_o = {imm[11:0], REG_X0, 3'b000, rd, kronos_pkg::OP_IMM};
           end
 
           3'b011: begin  // C.LUI / C.ADDI16SP
@@ -154,7 +159,7 @@ module kronos_decompress
               nzimm = {{23{instr16_i[12]}}, instr16_i[4:3], instr16_i[5],
                        instr16_i[2], instr16_i[6], 4'b0};
               if (nzimm == {kronos_pkg::INST_W{1'b0}}) illegal_o = 1'b1;
-              else instr32_o = {nzimm[11:0], REG_X2, 3'b000, REG_X2, OP_IMM};
+              else instr32_o = {nzimm[11:0], REG_X2, 3'b000, REG_X2, kronos_pkg::OP_IMM};
             end else begin  // C.LUI → LUI rd, nzimm
               nzimm = {{15{instr16_i[12]}}, instr16_i[6:2], 12'b0};
               if (nzimm == {kronos_pkg::INST_W{1'b0}}) illegal_o = 1'b1;
@@ -169,18 +174,18 @@ module kronos_decompress
               2'b00: begin  // C.SRLI → SRLI rs1', rs1', shamt
                 if (shamt == 6'd0) illegal_o = 1'b1;
                 else instr32_o = {6'b000_000, shamt, rs1_full,
-                                  3'b101, rs1_full, OP_IMM};
+                                  3'b101, rs1_full, kronos_pkg::OP_IMM};
               end
 
               2'b01: begin  // C.SRAI → SRAI rs1', rs1', shamt
                 if (shamt == 6'd0) illegal_o = 1'b1;
                 else instr32_o = {6'b010_000, shamt, rs1_full,
-                                  3'b101, rs1_full, OP_IMM};
+                                  3'b101, rs1_full, kronos_pkg::OP_IMM};
               end
 
               2'b10: begin  // C.ANDI → ANDI rs1', rs1', imm
                 imm = {{27{instr16_i[12]}}, instr16_i[6:2]};
-                instr32_o = {imm[11:0], rs1_full, 3'b111, rs1_full, OP_IMM};
+                instr32_o = {imm[11:0], rs1_full, 3'b111, rs1_full, kronos_pkg::OP_IMM};
               end
 
               2'b11: begin
@@ -248,7 +253,7 @@ module kronos_decompress
           3'b000: begin  // C.SLLI → SLLI rd, rd, shamt
             shamt = {instr16_i[12], instr16_i[6:2]};
             if (shamt == 6'd0 || rd == REG_X0) illegal_o = 1'b1;
-            else instr32_o = {6'b000_000, shamt, rd, 3'b001, rd, OP_IMM};
+            else instr32_o = {6'b000_000, shamt, rd, 3'b001, rd, kronos_pkg::OP_IMM};
           end
 
           3'b001: begin  // RV64C: C.FLDSP → FLD fd, uimm(x2)
@@ -316,5 +321,7 @@ module kronos_decompress
 
     endcase
   end
+
+  assign _unused = ^{imm[31:21], off[31:13], off[0]};
 
 endmodule

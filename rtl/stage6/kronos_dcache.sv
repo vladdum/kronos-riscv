@@ -353,6 +353,10 @@ module kronos_dcache
     input logic [kronos_pkg::XLEN-1:0] data
   );
     logic [kronos_pkg::XLEN-1:0] r;
+    logic _unused_off;
+    // store_strobes() consumes off; store_data_aligned() replicates the
+    // payload across all byte lanes so the strobes select the right one.
+    _unused_off = ^off;
     case (sz)
       3'd0: r = {8{data[7:0]}};
       3'd1: r = {4{data[15:0]}};
@@ -1491,6 +1495,15 @@ module kronos_dcache
   // Pulses high for one cycle, same shape as amo_nc_fault_o.
   assign bus_err_fault_o = nc_rsp_err_q | nc_b_err_q;
 
-  assign _unused = ^{miss_store_off_q};
+  // early_addr_i is the full PA from the dTLB; only the set-index slice
+  // [OFFSET_W + SET_IDX_W - 1 : 3] gates the BRAM read.  The byte-offset
+  // [2:0] and high address bits [63:12] arrive again in the MEM-stage
+  // lookup_addr_i and are intentionally dropped on the early launch.
+  // nc_we_q is captured from eff_req_we for parity with the rest of the
+  // NC bypass register set, but the AW/W issue chain reads eff_req_we
+  // directly and never re-reads the latched copy.
+  assign _unused = ^{miss_store_off_q,
+                     early_addr_i[PHYS_ADDR_W-1:12], early_addr_i[2:0],
+                     nc_we_q};
 
 endmodule

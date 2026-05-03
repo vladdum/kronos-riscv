@@ -62,37 +62,46 @@ module kronos_fpu_fmul
   localparam int unsigned PP_HI_W   = SIG_W + HALF_HI_W;    // 79
 
   // -------------------------------------------------------------------------
-  // Classification helpers
+  // Classification helpers.  All ignore the sign bit (and the QNaN payload);
+  // helper sinks on `x` keep lint quiet without changing the predicate.
   // -------------------------------------------------------------------------
   function automatic logic is_snan_s(logic [31:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == kronos_pkg::FP_S_EXP_MAX) && (x[22] == 1'b0) && (x[21:0] != 22'd0);
   endfunction
   function automatic logic is_qnan_s(logic [31:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == kronos_pkg::FP_S_EXP_MAX) && (x[22] == 1'b1);
   endfunction
   function automatic logic is_nan_s(logic [31:0] x);
     return is_snan_s(x) || is_qnan_s(x);
   endfunction
   function automatic logic is_inf_s(logic [31:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:23] == kronos_pkg::FP_S_EXP_MAX) && (x[22:0] == 23'd0);
   endfunction
   function automatic logic is_zero_s(logic [31:0] x);
+    logic _unused; _unused = ^x;
     return (x[30:0] == 31'd0);
   endfunction
 
   function automatic logic is_snan_d(logic [63:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == kronos_pkg::FP_D_EXP_MAX) && (x[51] == 1'b0) && (x[50:0] != 51'd0);
   endfunction
   function automatic logic is_qnan_d(logic [63:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == kronos_pkg::FP_D_EXP_MAX) && (x[51] == 1'b1);
   endfunction
   function automatic logic is_nan_d(logic [63:0] x);
     return is_snan_d(x) || is_qnan_d(x);
   endfunction
   function automatic logic is_inf_d(logic [63:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:52] == kronos_pkg::FP_D_EXP_MAX) && (x[51:0] == 52'd0);
   endfunction
   function automatic logic is_zero_d(logic [63:0] x);
+    logic _unused; _unused = ^x;
     return (x[62:0] == 63'd0);
   endfunction
 
@@ -286,6 +295,12 @@ module kronos_fpu_fmul
   // S1 combinational
   logic [31:0]                 a_s_unb;
   logic [31:0]                 b_s_unb;
+  // Lint sink: a_s_unb / b_s_unb capture the NaN-unboxed single-precision
+  // operands for waveform debug; the multiplier datapath consumes them
+  // through s1_a_s_l / s1_b_s_l directly.  s3b_exp_d is the s3 exponent
+  // forwarded into the s4 register; the s4_exp_d combinational path uses
+  // s3_exp_norm_q directly so the alias is dropped.
+  logic                        _unused;
   logic                        s1_valid_d;
   logic                        s1_fmt_d_d;
   logic [2:0]                  s1_rm_d;
@@ -1083,5 +1098,7 @@ module kronos_fpu_fmul
       tag_o       <= s4_tag_q;
     end
   end
+
+  assign _unused = ^{a_s_unb, b_s_unb, s3b_exp_d};
 
 endmodule

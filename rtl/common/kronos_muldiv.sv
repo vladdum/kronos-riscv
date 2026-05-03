@@ -96,6 +96,13 @@ module kronos_muldiv
   logic                  is_rem_q;     // 1 = REM/REMU, 0 = DIV/DIVU
   logic                  word_op_q;    // latch of word_op_i for this operation
 
+  // mul_product_q is 130 bits to absorb sign-extension carry from the 65×65
+  // partial-product sum; the top two bits never feed mul_sel.  remainder_q
+  // is 65 bits to hold the borrow-out; bit 64 is consumed inside the FSM but
+  // is dropped at the architectural boundary.  quotient_q[63] is the shift-
+  // in slot already covered by final_quot.
+  logic                  _unused;
+
   // -------------------------------------------------------------------------
   // 4. Combinational signals
   // -------------------------------------------------------------------------
@@ -379,5 +386,8 @@ module kronos_muldiv
       endcase
     end
   end
+
+  assign _unused = ^{mul_product_q[129:128], remainder_q[kronos_pkg::XLEN],
+                     quotient_q[kronos_pkg::XLEN-1]};
 
 endmodule

@@ -54,9 +54,12 @@ module kronos_trigger
   logic       load_match  [0:3];
   logic       store_match [0:3];
 
-  // Build a tdata1 view from per-trigger fields.
+  // Build a tdata1 view from per-trigger fields.  Only the fields that
+  // round-trip through the architectural mcontrol6 view are read here; the
+  // rest of `t` (action, address comparators) is intentionally dropped.
   function automatic logic [kronos_pkg::XLEN-1:0] pack_tdata1(input trigger_t t);
     logic [kronos_pkg::XLEN-1:0] v;
+    logic _unused_t;
     v          = {kronos_pkg::XLEN{1'b0}};
     v[63:60]   = 4'h6;       // type=mcontrol6
     v[59]      = 1'b0;       // dmode=0
@@ -65,6 +68,7 @@ module kronos_trigger
     v[3]       = t.execute;
     v[2]       = t.store;
     v[1]       = t.load;
+    _unused_t  = ^t;
     return v;
   endfunction
 

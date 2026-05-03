@@ -112,6 +112,15 @@ module kronos_ram
   // TODO: replace with vendor SRAM compiler macro (e.g., sram_64x4096_1r1w)
   // for ASIC tape-out. Behavioural model exists for build-survival only.
   // ----------------------------------------------------------------------
+  // ADDR_W and WRITE_MODE_B only feed the FPGA xpm instance above; reference
+  // them in the ASIC path so lint does not flag them as dead.  WRITE_MODE_B
+  // is intentionally untyped (see comment on the parameter) so the sink
+  // wraps a tag-only string compare.
+  // verilator lint_off UNUSED
+  localparam int unsigned _UNUSED_RAM_ADDR_W = ADDR_W;
+  localparam int          _UNUSED_RAM_WRMODE = (WRITE_MODE_B == "no_change") ? 0 : 1;
+  // verilator lint_on UNUSED
+
   logic [WIDTH-1:0] mem [DEPTH];
   logic [WIDTH-1:0] rdata_q;
 

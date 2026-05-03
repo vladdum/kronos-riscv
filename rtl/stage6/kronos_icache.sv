@@ -722,7 +722,16 @@ module kronos_icache
   assign miss_event_o     = miss_event;
   assign miss_resync_pc_o = s2_pc_q + 32'd4;
 
-  // Stash unused bit-slice tags so lint stays clean.
-  assign _unused = ^{s1_word_idx, s2_word_idx};
+  // Stash unused bit-slice tags so lint stays clean.  s2_addr_q[1:0] are
+  // word-internal byte offsets (the cache feeds 32-bit words to predecode).
+  // miss_word_q[0] is the doubleword-pair LSB; the AXI refill burst uses
+  // miss_word_q[WORD_IDX_W-1:1] to address beats, so the LSB does not
+  // gate the FSM.  The AXI response struct carries b_resp/r_user/r.id/etc.
+  // that the read-only icache leg ignores; the OR-reduce over the whole
+  // resp catches every dropped bit.
+  assign _unused = ^{s1_word_idx, s2_word_idx,
+                     s2_addr_q[1:0],
+                     miss_word_q[0],
+                     axi_rsp_i};
 
 endmodule

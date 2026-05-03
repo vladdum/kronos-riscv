@@ -95,6 +95,11 @@ module kronos_predecode
   logic state_advance;                // would advance state ignoring ready
   logic do_advance;                   // gated on instr_ready_i / fault
 
+  // RVC-illegal flags from each decompressor: kronos_decode raises an
+  // illegal-instruction trap on the same opcode pattern when it lands in ID,
+  // so the upstream signal is intentionally dropped here.
+  logic _unused;
+
   // -------------------------------------------------------------------------
   // Decompressor instances (combinational)
   // -------------------------------------------------------------------------
@@ -237,5 +242,7 @@ module kronos_predecode
       // case_rvc_upper and case_32b_nonspan: defaults already correct.
     end
   end
+
+  assign _unused = ^{decomp_lower_ill_d, decomp_upper_ill_d};
 
 endmodule

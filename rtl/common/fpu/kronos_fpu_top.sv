@@ -56,7 +56,11 @@ module kronos_fpu_top
 
   // Scoreboard
   logic       grant_comb;
+  // grant is the registered acknowledge from the scoreboard; the dispatch
+  // chain only uses grant_comb (the same-cycle grant pulse), so the
+  // registered version is captured but otherwise unused at this top.
   logic       grant;
+  logic       _unused_grant;
   logic       iter_late_req;
   logic       iter_late_fp_dest;
   logic       iter_late_grant;
@@ -337,5 +341,7 @@ module kronos_fpu_top
     end
   end
 `endif
+
+  assign _unused_grant = grant;
 
 endmodule

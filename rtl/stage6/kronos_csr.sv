@@ -206,8 +206,14 @@ module kronos_csr
   // trap delegation routing.  When priv != M and the cause's
   // medeleg/mideleg bit is set, the trap is taken to S-mode (stvec) instead
   // of M-mode (mtvec).  M-mode traps NEVER delegate.
-  logic       delegate_to_s;
-  logic [4:0] cause_idx;
+  logic        delegate_to_s;
+  logic [4:0]  cause_idx;
+  // Low-32-bit views of medeleg/mideleg used for cause-indexed delegation
+  // lookup. Upper 32 bits are hardwired 0 (MEDELEG_MASK = 16'hB7FF; the
+  // mideleg WARL mask only allows the SSIE/STIE/SEIE bits), so the 5-bit
+  // cause index is sufficient and matches the source width here.
+  logic [31:0] medeleg_lo;
+  logic [31:0] mideleg_lo;
 
   // interrupt-priority encoder outputs (see always_comb below).
   logic [kronos_pkg::XLEN-1:0] irq_eff;
@@ -221,6 +227,12 @@ module kronos_csr
   // from previously-`automatic` locals inside the priv-check always_comb).
   logic [1:0] required_priv;
   priv_e      min_priv;
+
+  // funct3_i[2] selects CSRRW vs CSRRWI; the choice is already conveyed by
+  // use_imm_i, so the bit is not consulted here.  irq_eff carries the full
+  // 64-bit MIE/MIP intersection but only the standard 1/3/5/7/9/11 lanes
+  // gate trap entry; everything else is dropped.
+  logic _unused;
 
   // MISA: MXL=10 (64-bit) in bits [63:62], extension bits from parameter
   assign misa = {2'b10, 36'b0, MISA_EXT};
@@ -326,11 +338,17 @@ module kronos_csr
   // synchronous delegation decision (exceptions vs interrupts).
   // Bit 31 of mcause distinguishes interrupts from exceptions.
   always_comb begin
-    cause_idx     = trap_cause_i[4:0];
+    cause_idx  = trap_cause_i[4:0];
+    // medeleg/mideleg are XLEN-wide CSRs but only the low 16 bits are
+    // architecturally meaningful here (MEDELEG_MASK = 16'hB7FF, interrupt
+    // causes max at 11). Use the low-32-bit views so the 5-bit cause index
+    // matches the source width and Verilator does not flag WIDTHEXPAND.
+    medeleg_lo = medeleg[31:0];
+    mideleg_lo = mideleg[31:0];
     delegate_to_s = trap_i &
                     (priv_q != PRIV_M) &
-                    ( (~trap_cause_i[31] & medeleg[cause_idx]) |
-                      ( trap_cause_i[31] & mideleg[cause_idx]) );
+                    ( (~trap_cause_i[31] & medeleg_lo[cause_idx]) |
+                      ( trap_cause_i[31] & mideleg_lo[cause_idx]) );
   end
 
   // -------------------------------------------------------------------------
@@ -370,22 +388,22 @@ module kronos_csr
                               pmpcfg_q[3], pmpcfg_q[2], pmpcfg_q[1], pmpcfg_q[0]};
       kronos_pkg::CSR_PMPCFG2: rdata_o = {pmpcfg_q[15], pmpcfg_q[14], pmpcfg_q[13], pmpcfg_q[12],
                               pmpcfg_q[11], pmpcfg_q[10], pmpcfg_q[9],  pmpcfg_q[8]};
-      12'h3B0: rdata_o = {10'd0, pmpaddr_q[0]};
-      12'h3B1: rdata_o = {10'd0, pmpaddr_q[1]};
-      12'h3B2: rdata_o = {10'd0, pmpaddr_q[2]};
-      12'h3B3: rdata_o = {10'd0, pmpaddr_q[3]};
-      12'h3B4: rdata_o = {10'd0, pmpaddr_q[4]};
-      12'h3B5: rdata_o = {10'd0, pmpaddr_q[5]};
-      12'h3B6: rdata_o = {10'd0, pmpaddr_q[6]};
-      12'h3B7: rdata_o = {10'd0, pmpaddr_q[7]};
-      12'h3B8: rdata_o = {10'd0, pmpaddr_q[8]};
-      12'h3B9: rdata_o = {10'd0, pmpaddr_q[9]};
-      12'h3BA: rdata_o = {10'd0, pmpaddr_q[10]};
-      12'h3BB: rdata_o = {10'd0, pmpaddr_q[11]};
-      12'h3BC: rdata_o = {10'd0, pmpaddr_q[12]};
-      12'h3BD: rdata_o = {10'd0, pmpaddr_q[13]};
-      12'h3BE: rdata_o = {10'd0, pmpaddr_q[14]};
-      12'h3BF: rdata_o = {10'd0, pmpaddr_q[15]};
+      kronos_pkg::CSR_PMPADDR0:  rdata_o = {10'd0, pmpaddr_q[0]};
+      kronos_pkg::CSR_PMPADDR1:  rdata_o = {10'd0, pmpaddr_q[1]};
+      kronos_pkg::CSR_PMPADDR2:  rdata_o = {10'd0, pmpaddr_q[2]};
+      kronos_pkg::CSR_PMPADDR3:  rdata_o = {10'd0, pmpaddr_q[3]};
+      kronos_pkg::CSR_PMPADDR4:  rdata_o = {10'd0, pmpaddr_q[4]};
+      kronos_pkg::CSR_PMPADDR5:  rdata_o = {10'd0, pmpaddr_q[5]};
+      kronos_pkg::CSR_PMPADDR6:  rdata_o = {10'd0, pmpaddr_q[6]};
+      kronos_pkg::CSR_PMPADDR7:  rdata_o = {10'd0, pmpaddr_q[7]};
+      kronos_pkg::CSR_PMPADDR8:  rdata_o = {10'd0, pmpaddr_q[8]};
+      kronos_pkg::CSR_PMPADDR9:  rdata_o = {10'd0, pmpaddr_q[9]};
+      kronos_pkg::CSR_PMPADDR10: rdata_o = {10'd0, pmpaddr_q[10]};
+      kronos_pkg::CSR_PMPADDR11: rdata_o = {10'd0, pmpaddr_q[11]};
+      kronos_pkg::CSR_PMPADDR12: rdata_o = {10'd0, pmpaddr_q[12]};
+      kronos_pkg::CSR_PMPADDR13: rdata_o = {10'd0, pmpaddr_q[13]};
+      kronos_pkg::CSR_PMPADDR14: rdata_o = {10'd0, pmpaddr_q[14]};
+      kronos_pkg::CSR_PMPADDR15: rdata_o = {10'd0, pmpaddr_q[15]};
       // Zicntr (U-mode read-only views) + M-mode aliases
       12'hC00, 12'hB00: rdata_o = mcycle;                     // cycle / mcycle
       12'hC01:          rdata_o = mcycle;                     // time (mirror cycle)
@@ -654,22 +672,22 @@ module kronos_csr
             end
           end
           // pmpaddr0..15: 54-bit PA[55:2]; lock-aware.
-          12'h3B0: if (~pmpcfg_q[0][7]) pmpaddr_q[0] <= csr_new_val[53:0];
-          12'h3B1: if (~pmpcfg_q[1][7]) pmpaddr_q[1] <= csr_new_val[53:0];
-          12'h3B2: if (~pmpcfg_q[2][7]) pmpaddr_q[2] <= csr_new_val[53:0];
-          12'h3B3: if (~pmpcfg_q[3][7]) pmpaddr_q[3] <= csr_new_val[53:0];
-          12'h3B4: if (~pmpcfg_q[4][7]) pmpaddr_q[4] <= csr_new_val[53:0];
-          12'h3B5: if (~pmpcfg_q[5][7]) pmpaddr_q[5] <= csr_new_val[53:0];
-          12'h3B6: if (~pmpcfg_q[6][7]) pmpaddr_q[6] <= csr_new_val[53:0];
-          12'h3B7: if (~pmpcfg_q[7][7]) pmpaddr_q[7] <= csr_new_val[53:0];
-          12'h3B8: if (~pmpcfg_q[8][7])  pmpaddr_q[8]  <= csr_new_val[53:0];
-          12'h3B9: if (~pmpcfg_q[9][7])  pmpaddr_q[9]  <= csr_new_val[53:0];
-          12'h3BA: if (~pmpcfg_q[10][7]) pmpaddr_q[10] <= csr_new_val[53:0];
-          12'h3BB: if (~pmpcfg_q[11][7]) pmpaddr_q[11] <= csr_new_val[53:0];
-          12'h3BC: if (~pmpcfg_q[12][7]) pmpaddr_q[12] <= csr_new_val[53:0];
-          12'h3BD: if (~pmpcfg_q[13][7]) pmpaddr_q[13] <= csr_new_val[53:0];
-          12'h3BE: if (~pmpcfg_q[14][7]) pmpaddr_q[14] <= csr_new_val[53:0];
-          12'h3BF: if (~pmpcfg_q[15][7]) pmpaddr_q[15] <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR0:  if (~pmpcfg_q[0][7])  pmpaddr_q[0]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR1:  if (~pmpcfg_q[1][7])  pmpaddr_q[1]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR2:  if (~pmpcfg_q[2][7])  pmpaddr_q[2]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR3:  if (~pmpcfg_q[3][7])  pmpaddr_q[3]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR4:  if (~pmpcfg_q[4][7])  pmpaddr_q[4]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR5:  if (~pmpcfg_q[5][7])  pmpaddr_q[5]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR6:  if (~pmpcfg_q[6][7])  pmpaddr_q[6]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR7:  if (~pmpcfg_q[7][7])  pmpaddr_q[7]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR8:  if (~pmpcfg_q[8][7])  pmpaddr_q[8]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR9:  if (~pmpcfg_q[9][7])  pmpaddr_q[9]  <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR10: if (~pmpcfg_q[10][7]) pmpaddr_q[10] <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR11: if (~pmpcfg_q[11][7]) pmpaddr_q[11] <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR12: if (~pmpcfg_q[12][7]) pmpaddr_q[12] <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR13: if (~pmpcfg_q[13][7]) pmpaddr_q[13] <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR14: if (~pmpcfg_q[14][7]) pmpaddr_q[14] <= csr_new_val[53:0];
+          kronos_pkg::CSR_PMPADDR15: if (~pmpcfg_q[15][7]) pmpaddr_q[15] <= csr_new_val[53:0];
           // Counter writes — SW-write-wins precedence over default increment
           12'hB00: mcycle        <= csr_new_val;
           12'hB02: minstret      <= csr_new_val;
@@ -728,5 +746,9 @@ module kronos_csr
       end
     end
   end
+
+  assign _unused = ^{funct3_i[2],
+                     irq_eff[63:12], irq_eff[10], irq_eff[8], irq_eff[6],
+                     irq_eff[4], irq_eff[2], irq_eff[0]};
 
 endmodule

@@ -80,6 +80,10 @@ module kronos_bpred
   // BTB lookup result
   logic btb_hit;
 
+  // pc_i[1:0] / upd_pc_q[1:0] are always 0 on aligned RV32 fetches; the bpred
+  // indexes start at bit 2 so the low two PC bits are intentionally dropped.
+  logic _unused;
+
   assign lookup_idx     = pc_i[BPRED_BITS+1:2];
   assign lookup_btb_idx = pc_i[BTB_BITS+1:2];
   assign lookup_tag     = pc_i[31:BTB_BITS+2];
@@ -143,5 +147,7 @@ module kronos_bpred
       end
     end
   end
+
+  assign _unused = ^{pc_i[1:0], upd_pc_q[1:0]};
 
 endmodule

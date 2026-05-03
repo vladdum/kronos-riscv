@@ -244,6 +244,11 @@ module kronos_fpu_iter
   logic signed [kronos_pkg::FP_EXP_EXT_W-1:0] rnd_exp_pack;
   logic [52:0]        rnd_mant_pack;
 
+  // Lint sink for the implicit-1 / sign-bit pads of registered fp_class_t
+  // operands (only the classification flag bundle is consulted by the FSM)
+  // and the post-shift overflow slots of the rounding shifter.
+  logic               _unused;
+
   // Overflow
   logic               rnd_overflow;
   logic               rnd_overflow_to_inf;
@@ -1017,5 +1022,10 @@ module kronos_fpu_iter
   // next cycle.
   assign sb_late_req_o     = (state_q == ROUND2);
   assign sb_late_fp_dest_o = tag_q.fp_dest;
+
+  assign _unused = ^{a_class_q, b_class_q,
+                     rnd_combined_shifted_d[55],
+                     rnd_combined_shifted_s[26],
+                     rnd_mant_pack[52]};
 
 endmodule

@@ -17,15 +17,6 @@
 `verilator_config
 
 // ---------------------------------------------------------------------------
-// PINCONNECTEMPTY — intentionally unconnected output ports in kronos_top.
-// These ports are reserved for future use or are not needed at this stage.
-// ---------------------------------------------------------------------------
-lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'illegal_insn_o'*"
-lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'busy_o'*"
-lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'valid_o'*"
-lint_off -rule PINCONNECTEMPTY -file "*/rtl/stage5/kronos_top.sv" -match "Instance pin connected by name with empty reference: 'sc_success_o'*"
-
-// ---------------------------------------------------------------------------
 // WIDTHEXPAND — external PULP AXI library (axi_pkg.sv).
 // Upstream bug in strobe alignment function; cannot fix in our tree.
 // ---------------------------------------------------------------------------
@@ -52,21 +43,6 @@ lint_off -rule BLKSEQ -file "*/tb/*"
 // ---------------------------------------------------------------------------
 lint_off -rule DECLFILENAME -file "*/vendor/hardfloat/*"
 
-// ---------------------------------------------------------------------------
-// VARHIDDEN — per-stage decoders and decompress modules shadowed by kronos_pkg
-// opcode constants. The 20 RV64IMAFDC opcode localparams (OP, OP_IMM, BRANCH,
-// LOAD, ...) added to kronos_pkg for the stage-6 decoder split are also defined
-// module-locally in the legacy decoders (stages 0/2/4/5) and in every
-// decompress module (stages 3/4/5/6, which build expanded 32-bit encodings
-// from RVC). Values agree (they are the same RISC-V opcode encodings), so the
-// shadowing is a false alarm. Older stages are frozen; the decompress modules
-// could later be refactored to use pkg constants but are out of scope here.
-// ---------------------------------------------------------------------------
-lint_off -rule VARHIDDEN -file "*/rtl/stage0/kronos_decode.sv"
-lint_off -rule VARHIDDEN -file "*/rtl/stage2/kronos_decode.sv"
-lint_off -rule VARHIDDEN -file "*/rtl/stage4/kronos_decode.sv"
-lint_off -rule VARHIDDEN -file "*/rtl/stage5/kronos_decode.sv"
-lint_off -rule VARHIDDEN -file "*/rtl/stage3/kronos_decompress.sv"
-lint_off -rule VARHIDDEN -file "*/rtl/stage4/kronos_decompress.sv"
-// Stage 5 and Stage 6 now share the unified module under rtl/common/.
-lint_off -rule VARHIDDEN -file "*/rtl/common/kronos_decompress.sv"
+// VARHIDDEN waivers for the per-stage decoders and decompress modules were
+// removed when the local OP_IMM / OP_IMM_32 / OP_FP shadowing was dropped in
+// favour of the kronos_pkg constants (closes the VARHIDDEN portion of #81).
