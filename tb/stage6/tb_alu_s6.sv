@@ -12,6 +12,11 @@ module tb_alu_s6;
   alu_op_e     op;
   logic        word_op;
 
+  // Random-vector phase locals (hoisted to module scope; no `automatic`).
+  alu_op_e     rop;
+  logic [63:0] ra, rb;
+  logic        rw;
+
   kronos_alu dut (
     .op_i        (op),
     .a_i         (a),
@@ -173,11 +178,11 @@ module tb_alu_s6;
     // Random vectors: 1k iterations per op, cross-check `result_o`
     // -------------------------------------------------------------------
     for (int op_idx = 0; op_idx < 11; op_idx++) begin
-      automatic alu_op_e rop = alu_op_e'(op_idx);
+      rop = alu_op_e'(op_idx);
       for (int it = 0; it < 1000; it++) begin
-        automatic logic [63:0] ra = {$urandom(), $urandom()};
-        automatic logic [63:0] rb = {$urandom(), $urandom()};
-        automatic logic        rw = $urandom_range(0, 1) != 0;
+        ra = {$urandom(), $urandom()};
+        rb = {$urandom(), $urandom()};
+        rw = $urandom_range(0, 1) != 0;
         // SLT/SLTU have no W variant — force word_op=0 for them
         if (rop == ALU_SLT || rop == ALU_SLTU) rw = 1'b0;
         a = ra; b = rb; op = rop; word_op = rw; #1;

@@ -125,6 +125,243 @@ module kronos_fpu_fma
   logic [kronos_pkg::FLEN-1:0]    s1_special_result;
   logic [4:0]         s1_special_flags;
 
+  // Stage 1 -> Stage 2 register
+  logic               s2_valid;
+  logic               s2_special;
+  logic [kronos_pkg::FLEN-1:0]    s2_special_result;
+  logic [4:0]         s2_special_flags;
+  logic               s2_fmt_d;
+  logic [2:0]         s2_rm;
+  logic               s2_prod_sign;
+  logic               s2_addend_sign;
+  logic signed [12:0] s2_prod_exp;
+  logic signed [12:0] s2_c_exp;
+  logic [SIG_W-1:0]   s2_a_sig;
+  logic [SIG_W-1:0]   s2_b_sig;
+  logic [SIG_W-1:0]   s2_c_sig;
+  logic               s2_prod_zero;
+  logic               s2_c_zero;
+  fpu_tag_t           s2_tag;
+
+  // Stage 2 -> Stage 2b register (re-latch for DSP retiming)
+  logic               s2b_valid;
+  logic               s2b_special;
+  logic [kronos_pkg::FLEN-1:0]    s2b_special_result;
+  logic [4:0]         s2b_special_flags;
+  logic               s2b_fmt_d;
+  logic [2:0]         s2b_rm;
+  logic               s2b_prod_sign;
+  logic               s2b_addend_sign;
+  logic signed [12:0] s2b_prod_exp;
+  logic signed [12:0] s2b_c_exp;
+  logic [SIG_W-1:0]   s2b_a_sig;
+  logic [SIG_W-1:0]   s2b_b_sig;
+  logic [SIG_W-1:0]   s2b_c_sig;
+  logic               s2b_prod_zero;
+  logic               s2b_c_zero;
+  fpu_tag_t           s2b_tag;
+
+  // Stage 2b multiply output (combinational, drives S3 register)
+  logic [PROD_W-1:0]  s2_product_comb;
+
+  // Stage 2b -> Stage 3 register
+  logic               s3_valid;
+  logic               s3_special;
+  logic [kronos_pkg::FLEN-1:0]    s3_special_result;
+  logic [4:0]         s3_special_flags;
+  logic               s3_fmt_d;
+  logic [2:0]         s3_rm;
+  logic               s3_prod_sign;
+  logic               s3_addend_sign;
+  logic signed [12:0] s3_prod_exp;
+  logic signed [12:0] s3_c_exp;
+  logic [PROD_W-1:0]  s3_product;
+  logic [SIG_W-1:0]   s3_c_sig;
+  logic               s3_prod_zero;
+  logic               s3_c_zero;
+  fpu_tag_t           s3_tag;
+
+  // Stage 3 align: pre-shift outputs (written in S3 comb, read by proc_s3b_regs).
+  logic signed [12:0] s3a_base_exp_comb;
+  logic               s3a_eff_sub_comb;
+  logic [7:0]         s3a_sh_comb;          // clamped shift amount (0..159)
+  logic [SUM_W-1:0]   s3a_shift_src_comb;   // operand to be shifted right
+  logic [SUM_W-1:0]   s3a_passthrough_comb; // operand to pass through unshifted
+  // s3a_shift_is_c_comb=1 -> s3_c_lane = shifted, s3_prod_lane = passthrough.
+  // s3a_shift_is_c_comb=0 -> s3_c_lane = passthrough, s3_prod_lane = shifted.
+  logic               s3a_shift_is_c_comb;
+  logic               s3a_zero_shift_comb;  // 1 when one side is zero
+  logic               s3a_prod_zero_comb;   // 1 -> output s3_prod_lane forced to 0
+  logic               s3a_c_zero_comb;      // 1 -> output s3_c_lane forced to 0
+
+  // Stage 3 align comb scratch
+  logic signed [13:0] s3a_exp_diff;
+  logic signed [13:0] s3a_shift_amt;
+  logic [SUM_W-1:0]   s3a_c_extended;
+  logic [SUM_W-1:0]   s3a_p_extended;
+  int unsigned        s3a_sh;
+
+  // Stage 3 -> Stage 3b register
+  logic               s3b_valid;
+  logic               s3b_special;
+  logic [kronos_pkg::FLEN-1:0]    s3b_special_result;
+  logic [4:0]         s3b_special_flags;
+  logic               s3b_fmt_d;
+  logic [2:0]         s3b_rm;
+  logic               s3b_prod_sign;
+  logic               s3b_addend_sign;
+  logic signed [12:0] s3b_base_exp;
+  logic               s3b_eff_sub;
+  logic [7:0]         s3b_sh;
+  logic [SUM_W-1:0]   s3b_shift_src;
+  logic [SUM_W-1:0]   s3b_passthrough;
+  logic               s3b_shift_is_c;
+  logic               s3b_zero_shift;
+  logic               s3b_prod_zero_flag;
+  logic               s3b_c_zero_flag;
+  fpu_tag_t           s3b_tag;
+
+  // Stage 3b combinational outputs
+  logic [SUM_W-1:0]   s3b_prod_lane_comb;
+  logic [SUM_W-1:0]   s3b_c_lane_comb;
+  logic signed [12:0] s3b_base_exp_out_comb;
+  logic               s3b_eff_sub_out_comb;
+
+  // Stage 3b shift scratch
+  logic [SUM_W-1:0]   s3b_shifted;
+  logic               s3b_sticky;
+  int unsigned        s3b_sh_int;
+
+  // Stage 3b -> Stage 4 register
+  logic               s4_valid;
+  logic               s4_special;
+  logic [kronos_pkg::FLEN-1:0]    s4_special_result;
+  logic [4:0]         s4_special_flags;
+  logic               s4_fmt_d;
+  logic [2:0]         s4_rm;
+  logic               s4_prod_sign;
+  logic               s4_addend_sign;
+  logic signed [12:0] s4_base_exp;
+  logic [SUM_W-1:0]   s4_prod_lane;
+  logic [SUM_W-1:0]   s4_c_lane;
+  logic               s4_eff_sub;
+  fpu_tag_t           s4_tag;
+
+  // Stage 4 -> Stage 4b register (after 160-bit add, before LZC)
+  logic               s4b_valid;
+  logic               s4b_special;
+  logic [kronos_pkg::FLEN-1:0]    s4b_special_result;
+  logic [4:0]         s4b_special_flags;
+  logic               s4b_fmt_d;
+  logic [2:0]         s4b_rm;
+  logic               s4b_res_sign;
+  logic               s4b_zero;
+  logic signed [12:0] s4b_base_exp;
+  logic [SUM_W-1:0]   s4b_mag;
+  logic               s4b_eff_sub;
+  logic               s4b_prod_sign;
+  fpu_tag_t           s4b_tag;
+
+  // Stage 4 combinational outputs
+  logic [SUM_W:0]     s4_sum_comb;
+  logic               s4_res_sign_comb;
+  logic               s4_zero_comb;
+  logic [SUM_W-1:0]   s4_mag_comb;
+  logic [SUM_W-1:0]   s4_diff;
+
+  // Stage 4b LZC outputs
+  logic [8:0]         s4b_msb_pos_comb;
+  logic signed [12:0] s4b_norm_exp_comb;
+  // Stage 4b LZC scratch
+  int                 s4b_lzc_m;
+  logic signed [12:0] s4b_ref_pos_s;
+
+  // Stage 4b -> Stage 5 register
+  logic               s5_valid;
+  logic               s5_special;
+  logic [kronos_pkg::FLEN-1:0]    s5_special_result;
+  logic [4:0]         s5_special_flags;
+  logic               s5_fmt_d;
+  logic [2:0]         s5_rm;
+  logic               s5_res_sign;
+  logic               s5_zero;
+  logic signed [12:0] s5_norm_exp;
+  logic [SUM_W-1:0]   s5_norm_mag;
+  logic               s5_eff_sub;
+  logic               s5_prod_sign;
+  logic [8:0]         s5_msb_pos;
+  fpu_tag_t           s5_tag;
+
+  // Stage 5 combinational outputs (barrel shift + GRS)
+  logic [SIG_W-1:0]   s5_raw_sig_comb;
+  logic               s5_guard_comb;
+  logic               s5_round_b_comb;
+  logic               s5_sticky_comb;
+  logic signed [12:0] s5_exp_comb;
+  logic signed [12:0] s5_exp_pre_tiny_comb;
+  logic               s5_tiny_comb;
+  logic [31:0]        s5_normal_shift_comb;
+
+  // Stage 5 scratch
+  int unsigned        s5_frac_w;
+  int signed          s5_bias;
+  logic signed [12:0] s5_emin;
+  logic [SUM_W-1:0]   s5_mag;
+  logic signed [12:0] s5_exp;
+  logic signed [12:0] s5_exp_pre_tiny;
+  logic               s5_tiny;
+  int unsigned        s5_shift_right_amt;
+  int unsigned        s5_normal_shift;
+  logic [SUM_W-1:0]   s5_pre_mag;
+
+  // Stage 5 -> 5b register (after barrel shift, before round)
+  logic               s5b_valid;
+  logic               s5b_special;
+  logic [kronos_pkg::FLEN-1:0]    s5b_special_result;
+  logic [4:0]         s5b_special_flags;
+  logic               s5b_fmt_d;
+  logic [2:0]         s5b_rm;
+  logic               s5b_res_sign;
+  logic               s5b_zero;
+  logic               s5b_eff_sub;
+  logic               s5b_prod_sign;
+  logic signed [12:0] s5b_exp;
+  logic signed [12:0] s5b_exp_pre_tiny;
+  logic [SIG_W-1:0]   s5b_raw_sig;
+  logic               s5b_guard;
+  logic               s5b_round_b;
+  logic               s5b_sticky;
+  logic               s5b_tiny;
+  logic [SUM_W-1:0]   s5b_mag;
+  logic [31:0]        s5b_normal_shift;
+  fpu_tag_t           s5b_tag;
+
+  // Stage 5b combinational outputs (round, pack)
+  logic [kronos_pkg::FLEN-1:0]    s5b_result_comb;
+  logic [4:0]         s5b_flags_comb;
+
+  // Stage 5b scratch
+  int unsigned                s5b_frac_w;
+  int signed                  s5b_bias;
+  logic signed [12:0]         s5b_emin;
+  logic signed [12:0]         s5b_emax;
+  logic [SIG_W:0]             s5b_rounded_sig;
+  logic                       s5b_inexact;
+  logic                       s5b_overflow_ovf;
+  logic                       s5b_round_up;
+  logic signed [12:0]         s5b_final_exp;
+  logic [SIG_W-1:0]           s5b_final_sig;
+  logic [kronos_pkg::FP_D_EXP_W-1:0]      s5b_exp_field_d;
+  logic [kronos_pkg::FP_S_EXP_W-1:0]      s5b_exp_field_s;
+  // Tininess-after-rounding scratch ("_n" here = "narrow" per file convention).
+  logic [SIG_W-1:0]           s5b_raw_sig_n;
+  logic                       s5b_guard_n, s5b_round_n, s5b_sticky_n;
+  logic                       s5b_round_up_n;
+  logic                       s5b_carry_n;
+  logic [SUM_W-1:0]           s5b_pre_mag_n;
+  int unsigned                s5b_normal_shift_local;
+  int unsigned                s5b_lzc_i;
+
   always_comb begin
     // NaN-unbox single operands
     a_s = (a_i[63:32] == kronos_pkg::FP_NANBOX_UPPER) ? a_i[31:0] : kronos_pkg::FP_CANON_QNAN_S;
@@ -253,23 +490,6 @@ module kronos_fpu_fma
   // ---------------------------------------------------------------------------
   // Stage 1 -> Stage 2 register
   // ---------------------------------------------------------------------------
-  logic               s2_valid;
-  logic               s2_special;
-  logic [kronos_pkg::FLEN-1:0]    s2_special_result;
-  logic [4:0]         s2_special_flags;
-  logic               s2_fmt_d;
-  logic [2:0]         s2_rm;
-  logic               s2_prod_sign;
-  logic               s2_addend_sign;
-  logic signed [12:0] s2_prod_exp;
-  logic signed [12:0] s2_c_exp;
-  logic [SIG_W-1:0]   s2_a_sig;
-  logic [SIG_W-1:0]   s2_b_sig;
-  logic [SIG_W-1:0]   s2_c_sig;
-  logic               s2_prod_zero;
-  logic               s2_c_zero;
-  fpu_tag_t           s2_tag;
-
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s2_regs
     if (!rst_ni) begin
       s2_valid          <= 1'b0;
@@ -313,23 +533,6 @@ module kronos_fpu_fma
   // gives Vivado retiming room inside the 53x53 DSP cascade. No new functional
   // content.
   // ---------------------------------------------------------------------------
-  logic               s2b_valid;
-  logic               s2b_special;
-  logic [kronos_pkg::FLEN-1:0]    s2b_special_result;
-  logic [4:0]         s2b_special_flags;
-  logic               s2b_fmt_d;
-  logic [2:0]         s2b_rm;
-  logic               s2b_prod_sign;
-  logic               s2b_addend_sign;
-  logic signed [12:0] s2b_prod_exp;
-  logic signed [12:0] s2b_c_exp;
-  logic [SIG_W-1:0]   s2b_a_sig;
-  logic [SIG_W-1:0]   s2b_b_sig;
-  logic [SIG_W-1:0]   s2b_c_sig;
-  logic               s2b_prod_zero;
-  logic               s2b_c_zero;
-  fpu_tag_t           s2b_tag;
-
   always_ff @(posedge clk_i or negedge rst_ni) begin : proc_s2b_regs
     if (!rst_ni) begin
       s2b_valid          <= 1'b0;
@@ -370,219 +573,6 @@ module kronos_fpu_fma
 
   // ---------------------------------------------------------------------------
   // multiply significands (reads from s2b to break DSP cascade path)
-  // ---------------------------------------------------------------------------
-  logic [PROD_W-1:0]  s2_product_comb;
-
-  // Stage 2b -> Stage 3 register
-  logic               s3_valid;
-  logic               s3_special;
-  logic [kronos_pkg::FLEN-1:0]    s3_special_result;
-  logic [4:0]         s3_special_flags;
-  logic               s3_fmt_d;
-  logic [2:0]         s3_rm;
-  logic               s3_prod_sign;
-  logic               s3_addend_sign;
-  logic signed [12:0] s3_prod_exp;
-  logic signed [12:0] s3_c_exp;
-  logic [PROD_W-1:0]  s3_product;
-  logic [SIG_W-1:0]   s3_c_sig;
-  logic               s3_prod_zero;
-  logic               s3_c_zero;
-  fpu_tag_t           s3_tag;
-
-  // Pre-shift outputs (written in S3 comb, read by proc_s3b_regs).
-  logic signed [12:0] s3a_base_exp_comb;
-  logic               s3a_eff_sub_comb;
-  logic [7:0]         s3a_sh_comb;          // clamped shift amount (0..159)
-  logic [SUM_W-1:0]   s3a_shift_src_comb;   // operand to be shifted right
-  logic [SUM_W-1:0]   s3a_passthrough_comb; // operand to pass through unshifted
-  // s3a_shift_is_c_comb=1 -> s3_c_lane = shifted, s3_prod_lane = passthrough.
-  // s3a_shift_is_c_comb=0 -> s3_c_lane = passthrough, s3_prod_lane = shifted.
-  logic               s3a_shift_is_c_comb;
-  logic               s3a_zero_shift_comb;  // 1 when one side is zero
-  logic               s3a_prod_zero_comb;   // 1 -> output s3_prod_lane forced to 0
-  logic               s3a_c_zero_comb;      // 1 -> output s3_c_lane forced to 0
-
-  // S3 align comb scratch (promoted to module scope per RTL guidelines).
-  logic signed [13:0] s3a_exp_diff;
-  logic signed [13:0] s3a_shift_amt;
-  logic [SUM_W-1:0]   s3a_c_extended;
-  logic [SUM_W-1:0]   s3a_p_extended;
-  int unsigned        s3a_sh;
-
-  // ---------------------------------------------------------------------------
-  // Stage 3 -> Stage 3b register
-  // ---------------------------------------------------------------------------
-  logic               s3b_valid;
-  logic               s3b_special;
-  logic [kronos_pkg::FLEN-1:0]    s3b_special_result;
-  logic [4:0]         s3b_special_flags;
-  logic               s3b_fmt_d;
-  logic [2:0]         s3b_rm;
-  logic               s3b_prod_sign;
-  logic               s3b_addend_sign;
-  logic signed [12:0] s3b_base_exp;
-  logic               s3b_eff_sub;
-  logic [7:0]         s3b_sh;
-  logic [SUM_W-1:0]   s3b_shift_src;
-  logic [SUM_W-1:0]   s3b_passthrough;
-  logic               s3b_shift_is_c;
-  logic               s3b_zero_shift;
-  logic               s3b_prod_zero_flag;
-  logic               s3b_c_zero_flag;
-  fpu_tag_t           s3b_tag;
-
-  // S3b combinational outputs
-  logic [SUM_W-1:0]   s3b_prod_lane_comb;
-  logic [SUM_W-1:0]   s3b_c_lane_comb;
-  logic signed [12:0] s3b_base_exp_out_comb;
-  logic               s3b_eff_sub_out_comb;
-
-  // S3b shift scratch
-  logic [SUM_W-1:0]   s3b_shifted;
-  logic               s3b_sticky;
-  int unsigned        s3b_sh_int;
-
-  // ---------------------------------------------------------------------------
-  // Stage 3b -> Stage 4 register
-  // ---------------------------------------------------------------------------
-  logic               s4_valid;
-  logic               s4_special;
-  logic [kronos_pkg::FLEN-1:0]    s4_special_result;
-  logic [4:0]         s4_special_flags;
-  logic               s4_fmt_d;
-  logic [2:0]         s4_rm;
-  logic               s4_prod_sign;
-  logic               s4_addend_sign;
-  logic signed [12:0] s4_base_exp;
-  logic [SUM_W-1:0]   s4_prod_lane;
-  logic [SUM_W-1:0]   s4_c_lane;
-  logic               s4_eff_sub;
-  fpu_tag_t           s4_tag;
-
-  // ---------------------------------------------------------------------------
-  // Stage 4 -> 4b register (after 160-bit add, before LZC)
-  // ---------------------------------------------------------------------------
-  logic               s4b_valid;
-  logic               s4b_special;
-  logic [kronos_pkg::FLEN-1:0]    s4b_special_result;
-  logic [4:0]         s4b_special_flags;
-  logic               s4b_fmt_d;
-  logic [2:0]         s4b_rm;
-  logic               s4b_res_sign;
-  logic               s4b_zero;
-  logic signed [12:0] s4b_base_exp;
-  logic [SUM_W-1:0]   s4b_mag;
-  logic               s4b_eff_sub;
-  logic               s4b_prod_sign;
-  fpu_tag_t           s4b_tag;
-
-  // Stage 4 combinational outputs
-  logic [SUM_W:0]     s4_sum_comb;
-  logic               s4_res_sign_comb;
-  logic               s4_zero_comb;
-  logic [SUM_W-1:0]   s4_mag_comb;
-  logic [SUM_W-1:0]   s4_diff;
-
-  // Stage 4b LZC outputs
-  logic [8:0]         s4b_msb_pos_comb;
-  logic signed [12:0] s4b_norm_exp_comb;
-  // S4b LZC scratch
-  int                 s4b_lzc_m;
-  logic signed [12:0] s4b_ref_pos_s;
-
-  // ---------------------------------------------------------------------------
-  // Stage 4b -> Stage 5 register
-  // ---------------------------------------------------------------------------
-  logic               s5_valid;
-  logic               s5_special;
-  logic [kronos_pkg::FLEN-1:0]    s5_special_result;
-  logic [4:0]         s5_special_flags;
-  logic               s5_fmt_d;
-  logic [2:0]         s5_rm;
-  logic               s5_res_sign;
-  logic               s5_zero;
-  logic signed [12:0] s5_norm_exp;
-  logic [SUM_W-1:0]   s5_norm_mag;
-  logic               s5_eff_sub;
-  logic               s5_prod_sign;
-  logic [8:0]         s5_msb_pos;
-  fpu_tag_t           s5_tag;
-
-  // Stage 5 combinational outputs (barrel shift + GRS)
-  logic [SIG_W-1:0]   s5_raw_sig_comb;
-  logic               s5_guard_comb;
-  logic               s5_round_b_comb;
-  logic               s5_sticky_comb;
-  logic signed [12:0] s5_exp_comb;
-  logic signed [12:0] s5_exp_pre_tiny_comb;
-  logic               s5_tiny_comb;
-  logic [31:0]        s5_normal_shift_comb;
-
-  // S5 scratch
-  int unsigned        s5_frac_w;
-  int signed          s5_bias;
-  logic signed [12:0] s5_emin;
-  logic [SUM_W-1:0]   s5_mag;
-  logic signed [12:0] s5_exp;
-  logic signed [12:0] s5_exp_pre_tiny;
-  logic               s5_tiny;
-  int unsigned        s5_shift_right_amt;
-  int unsigned        s5_normal_shift;
-  logic [SUM_W-1:0]   s5_pre_mag;
-
-  // ---------------------------------------------------------------------------
-  // Stage 5 -> 5b register (after barrel shift, before round)
-  // ---------------------------------------------------------------------------
-  logic               s5b_valid;
-  logic               s5b_special;
-  logic [kronos_pkg::FLEN-1:0]    s5b_special_result;
-  logic [4:0]         s5b_special_flags;
-  logic               s5b_fmt_d;
-  logic [2:0]         s5b_rm;
-  logic               s5b_res_sign;
-  logic               s5b_zero;
-  logic               s5b_eff_sub;
-  logic               s5b_prod_sign;
-  logic signed [12:0] s5b_exp;
-  logic signed [12:0] s5b_exp_pre_tiny;
-  logic [SIG_W-1:0]   s5b_raw_sig;
-  logic               s5b_guard;
-  logic               s5b_round_b;
-  logic               s5b_sticky;
-  logic               s5b_tiny;
-  logic [SUM_W-1:0]   s5b_mag;
-  logic [31:0]        s5b_normal_shift;
-  fpu_tag_t           s5b_tag;
-
-  // Stage 5b combinational outputs (round, pack)
-  logic [kronos_pkg::FLEN-1:0]    s5b_result_comb;
-  logic [4:0]         s5b_flags_comb;
-
-  // S5b scratch
-  int unsigned                s5b_frac_w;
-  int signed                  s5b_bias;
-  logic signed [12:0]         s5b_emin;
-  logic signed [12:0]         s5b_emax;
-  logic [SIG_W:0]             s5b_rounded_sig;
-  logic                       s5b_inexact;
-  logic                       s5b_overflow_ovf;
-  logic                       s5b_round_up;
-  logic signed [12:0]         s5b_final_exp;
-  logic [SIG_W-1:0]           s5b_final_sig;
-  logic [kronos_pkg::FP_D_EXP_W-1:0]      s5b_exp_field_d;
-  logic [kronos_pkg::FP_S_EXP_W-1:0]      s5b_exp_field_s;
-  // Tininess-after-rounding scratch ("_n" here = "narrow" per file convention).
-  logic [SIG_W-1:0]           s5b_raw_sig_n;
-  logic                       s5b_guard_n, s5b_round_n, s5b_sticky_n;
-  logic                       s5b_round_up_n;
-  logic                       s5b_carry_n;
-  logic [SUM_W-1:0]           s5b_pre_mag_n;
-  int unsigned                s5b_normal_shift_local;
-  int unsigned                s5b_lzc_i;
-
-  // ---------------------------------------------------------------------------
-  // Stage 1 multiply (combinational, output of S2b operand registers)
   // ---------------------------------------------------------------------------
   always_comb begin
     s2_product_comb = s2b_a_sig * s2b_b_sig;

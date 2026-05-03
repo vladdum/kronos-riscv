@@ -74,6 +74,45 @@ module axi_mem_model #(
 
   logic [31:0] mem [0:MEM_WORDS-1];
 
+  // ── Instruction read state ───────────────────────────────────────────
+  logic            i_pending_q;
+  logic [63:0]     i_base_q;
+  logic [ 7:0]     i_len_q;
+  logic [ 1:0]     i_burst_q;
+  logic [ 7:0]     i_beat_q;
+  logic [31:0]     i_lat_q;
+
+  logic [63:0]     i_addr;
+  logic [WI_W-1:0] i_word_lo;
+  logic [WI_W-1:0] i_word_hi;
+
+  // ── Data read state ──────────────────────────────────────────────────
+  logic            d_pending_q;
+  logic [63:0]     d_base_q;
+  logic [ 7:0]     d_len_q;
+  logic [ 1:0]     d_burst_q;
+  logic [ 7:0]     d_beat_q;
+  logic [31:0]     d_lat_q;
+
+  logic [63:0]     d_addr;
+  logic [WI_W-1:0] d_word_lo;
+  logic [WI_W-1:0] d_word_hi;
+
+  // ── Data write state ─────────────────────────────────────────────────
+  logic            d_aw_done_q;
+  logic            d_b_pending_q;
+  logic [63:0]     d_w_base_q;
+  logic [ 7:0]     d_w_beat_q;
+  logic            halt_q;
+  logic [31:0]     halt_code_q;
+
+  logic [63:0]     waddr_c;
+  logic [31:0]     waddr32_c;
+  logic [WI_W-1:0] w_lo_c;
+  logic [WI_W-1:0] w_hi_c;
+  logic [31:0]     wmask_lo_c;
+  logic [31:0]     wmask_hi_c;
+
   initial begin
     foreach (mem[i]) mem[i] = 32'h0;
     if (HEX_FILE != "") $readmemh(HEX_FILE, mem);
@@ -105,17 +144,7 @@ module axi_mem_model #(
     end
   endfunction
 
-  // ── Instruction read state ───────────────────────────────────────────
-  logic            i_pending_q;
-  logic [63:0]     i_base_q;
-  logic [ 7:0]     i_len_q;
-  logic [ 1:0]     i_burst_q;
-  logic [ 7:0]     i_beat_q;
-  logic [31:0]     i_lat_q;
-
-  logic [63:0]     i_addr;
-  logic [WI_W-1:0] i_word_lo;
-  logic [WI_W-1:0] i_word_hi;
+  // ── Instruction read datapath ────────────────────────────────────────
   assign i_addr    = beat_addr(i_base_q, i_len_q, i_burst_q, i_beat_q);
   assign i_word_lo = i_addr[WI_W+1:2];
   assign i_word_hi = i_word_lo + 1;
@@ -156,17 +185,7 @@ module axi_mem_model #(
     end
   end
 
-  // ── Data read state ──────────────────────────────────────────────────
-  logic            d_pending_q;
-  logic [63:0]     d_base_q;
-  logic [ 7:0]     d_len_q;
-  logic [ 1:0]     d_burst_q;
-  logic [ 7:0]     d_beat_q;
-  logic [31:0]     d_lat_q;
-
-  logic [63:0]     d_addr;
-  logic [WI_W-1:0] d_word_lo;
-  logic [WI_W-1:0] d_word_hi;
+  // ── Data read datapath ───────────────────────────────────────────────
   assign d_addr    = beat_addr(d_base_q, d_len_q, d_burst_q, d_beat_q);
   assign d_word_lo = d_addr[WI_W+1:2];
   assign d_word_hi = d_word_lo + 1;
@@ -207,14 +226,7 @@ module axi_mem_model #(
     end
   end
 
-  // ── Data write state ─────────────────────────────────────────────────
-  logic            d_aw_done_q;
-  logic            d_b_pending_q;
-  logic [63:0]     d_w_base_q;
-  logic [ 7:0]     d_w_beat_q;
-  logic            halt_q;
-  logic [31:0]     halt_code_q;
-
+  // ── Data write datapath ──────────────────────────────────────────────
   assign data_aw_ready_o = !d_aw_done_q;
   assign data_w_ready_o  = d_aw_done_q;
   assign data_b_valid_o  = d_b_pending_q;
@@ -230,12 +242,6 @@ module axi_mem_model #(
     return {{8{strb[7]}}, {8{strb[6]}}, {8{strb[5]}}, {8{strb[4]}}};
   endfunction
 
-  logic [63:0]     waddr_c;
-  logic [31:0]     waddr32_c;
-  logic [WI_W-1:0] w_lo_c;
-  logic [WI_W-1:0] w_hi_c;
-  logic [31:0]     wmask_lo_c;
-  logic [31:0]     wmask_hi_c;
   always_comb begin
     waddr_c    = d_w_base_q + (64'(d_w_beat_q) << 3);
     waddr32_c  = waddr_c[31:0];

@@ -170,6 +170,146 @@ module tb_crv_cov;
     end
   endfunction
 
+  // -------------------------------------------------------------------------
+  // AXI data port — declarations (driven below, after instr-port always blocks)
+  // -------------------------------------------------------------------------
+  // Read channel
+  logic        data_r_pend;
+  logic [63:0] data_ar_addr_q;
+  logic [ 7:0] data_ar_len_q;
+  logic [ 1:0] data_ar_burst_q;
+  logic [ 7:0] data_r_beat;
+  logic [63:0] data_r_data_q;
+  // TB beat-tracking helpers (promoted from `automatic` block-locals; see R2).
+  logic [ 7:0] data_nb;
+  logic [63:0] data_na;
+  logic [63:0] data_waddr;
+  int          data_wi_lo;
+  int          data_wi_hi;
+  // Mem-coverage helpers (promoted from `automatic` block-locals; see R2).
+  logic [1:0]  cov_msize;
+  logic [2:0]  cov_maddr3;
+  int          cov_align_bucket;
+  // Write channel
+  logic        data_aw_pend;
+  logic [63:0] data_aw_addr_q;
+  logic [ 7:0] data_aw_len_q;
+  logic [ 7:0] data_w_beat;
+  logic        data_b_pend;
+  logic [31:0] halted;
+  int          irq_countdown;  // cycles remaining for irq_timer assertion
+
+  // -------------------------------------------------------------------------
+  // Functional coverage bit arrays (driven by always_ff blocks below)
+  // -------------------------------------------------------------------------
+  // cg_instr_class (21 bins) — instruction opcode
+  bit cov_op_lui;
+  bit cov_op_auipc;
+  bit cov_op_jal;
+  bit cov_op_jalr;
+  bit cov_op_branch;
+  bit cov_op_load;
+  bit cov_op_store;
+  bit cov_op_imm;
+  bit cov_op_reg;
+  bit cov_op_imm32;
+  bit cov_op_reg32;
+  bit cov_op_fence;
+  bit cov_op_system;
+  bit cov_op_amo;
+  bit cov_op_load_fp;
+  bit cov_op_store_fp;
+  bit cov_op_fmadd;
+  bit cov_op_fmsub;
+  bit cov_op_fnmsub;
+  bit cov_op_fnmadd;
+  bit cov_op_fp;
+
+  // cg_alu_sign (16 bins) — ALU op × result sign cross
+  // 8 funct3 bins × 2 sign bins = 16
+  bit cov_alu_add_sub_pos;   bit cov_alu_add_sub_neg;
+  bit cov_alu_sll_pos;       bit cov_alu_sll_neg;
+  bit cov_alu_slt_pos;       bit cov_alu_slt_neg;
+  bit cov_alu_sltu_pos;      bit cov_alu_sltu_neg;
+  bit cov_alu_xor_pos;       bit cov_alu_xor_neg;
+  bit cov_alu_srl_sra_pos;   bit cov_alu_srl_sra_neg;
+  bit cov_alu_or_pos;        bit cov_alu_or_neg;
+  bit cov_alu_and_pos;       bit cov_alu_and_neg;
+
+  // cg_branch (6 bins) — branch type
+  bit cov_br_beq;
+  bit cov_br_bne;
+  bit cov_br_blt;
+  bit cov_br_bge;
+  bit cov_br_bltu;
+  bit cov_br_bgeu;
+
+  // cg_mem (16 bins) — size × alignment cross
+  // 4 size bins × 4 align bins = 16
+  bit cov_mem_byte_aligned;    bit cov_mem_byte_off4;
+  bit cov_mem_byte_off2;       bit cov_mem_byte_odd;
+  bit cov_mem_half_aligned;    bit cov_mem_half_off4;
+  bit cov_mem_half_off2;       bit cov_mem_half_odd;
+  bit cov_mem_word_aligned;    bit cov_mem_word_off4;
+  bit cov_mem_word_off2;       bit cov_mem_word_odd;
+  bit cov_mem_double_aligned;  bit cov_mem_double_off4;
+  bit cov_mem_double_off2;     bit cov_mem_double_odd;
+
+  // cg_amo (11 bins) — AMO type
+  bit cov_amo_lr;
+  bit cov_amo_sc;
+  bit cov_amo_swap;
+  bit cov_amo_add;
+  bit cov_amo_xor;
+  bit cov_amo_and;
+  bit cov_amo_or;
+  bit cov_amo_min;
+  bit cov_amo_max;
+  bit cov_amo_minu;
+  bit cov_amo_maxu;
+
+  // cg_fp_rm (6 bins) — FP rounding mode
+  bit cov_rm_rne;
+  bit cov_rm_rtz;
+  bit cov_rm_rdn;
+  bit cov_rm_rup;
+  bit cov_rm_rmm;
+  bit cov_rm_dyn;
+
+  // cg_trap (6 bins) — trap mcause via CSR write to mcause (0x342)
+  bit cov_trap_illegal;
+  bit cov_trap_ecall_m;
+  bit cov_trap_ebreak;
+  bit cov_trap_ld_misalign;
+  bit cov_trap_st_misalign;
+  bit cov_trap_irq_timer;
+
+  // cg_icache (2 bins) — Stage 5e I-cache miss path exercise
+  // Tracks whether the I$ miss event (miss_pulse_o from kronos_icache,
+  // mapped to event_bus[16] via icache_miss_pulse in kronos_top) was ever
+  // asserted and whether at least one hit cycle was observed.
+  bit cov_icache_miss_seen;    // at least one I$ miss occurred
+  bit cov_icache_no_miss_seen; // at least one cycle with no miss (normal fetch)
+
+  // cg_dcache (2 bins) — Stage 5f D-cache miss path exercise (Stage 5f)
+  // Tracks whether the D$ miss event (miss_pulse_o from kronos_dcache,
+  // mapped to event_bus[17] via dcache_miss_pulse in kronos_top) was ever
+  // asserted and whether at least one hit cycle was observed.
+  bit cov_dcache_miss_seen;    // at least one D$ miss occurred
+  bit cov_dcache_no_miss_seen; // at least one D$ hit (no miss)
+
+  // Sampling logic — combinational helpers
+  logic is_alu_op;
+  logic is_branch;
+  logic is_mem_op;
+  logic is_amo;
+  logic is_fp_op;
+
+  // Test driver state (used in the initial block)
+  int          cycle_count;
+  string       vmem_path;
+  string       covout_path;
+
   always_comb begin
     instr_rsp          = '0;
     instr_rsp.ar_ready = !instr_r_pend;
@@ -221,32 +361,6 @@ module tb_crv_cov;
   // AXI data port — multi-beat read + write (dcache issues 8-beat WRAP/INCR)
   // Halt is detected via retire_mem_wen (store to 0x4000_0000 sentinel).
   // -------------------------------------------------------------------------
-  // Read channel
-  logic        data_r_pend;
-  logic [63:0] data_ar_addr_q;
-  logic [ 7:0] data_ar_len_q;
-  logic [ 1:0] data_ar_burst_q;
-  logic [ 7:0] data_r_beat;
-  logic [63:0] data_r_data_q;
-  // TB beat-tracking helpers (promoted from `automatic` block-locals; see R2).
-  logic [ 7:0] data_nb;
-  logic [63:0] data_na;
-  logic [63:0] data_waddr;
-  int          data_wi_lo;
-  int          data_wi_hi;
-  // Mem-coverage helpers (promoted from `automatic` block-locals; see R2).
-  logic [1:0]  cov_msize;
-  logic [2:0]  cov_maddr3;
-  int          cov_align_bucket;
-  // Write channel
-  logic        data_aw_pend;
-  logic [63:0] data_aw_addr_q;
-  logic [ 7:0] data_aw_len_q;
-  logic [ 7:0] data_w_beat;
-  logic        data_b_pend;
-  logic [31:0] halted;
-  int          irq_countdown;  // cycles remaining for irq_timer assertion
-
   always_comb begin
     data_rsp          = '0;
     data_rsp.ar_ready = ~data_r_pend;
@@ -364,129 +478,6 @@ module tb_crv_cov;
   // =========================================================================
   // Functional coverage — manual bit arrays (Verilator 5.046 COVERIGN)
   // =========================================================================
-
-  // -------------------------------------------------------------------------
-  // cg_instr_class (21 bins) — instruction opcode
-  // -------------------------------------------------------------------------
-  bit cov_op_lui;
-  bit cov_op_auipc;
-  bit cov_op_jal;
-  bit cov_op_jalr;
-  bit cov_op_branch;
-  bit cov_op_load;
-  bit cov_op_store;
-  bit cov_op_imm;
-  bit cov_op_reg;
-  bit cov_op_imm32;
-  bit cov_op_reg32;
-  bit cov_op_fence;
-  bit cov_op_system;
-  bit cov_op_amo;
-  bit cov_op_load_fp;
-  bit cov_op_store_fp;
-  bit cov_op_fmadd;
-  bit cov_op_fmsub;
-  bit cov_op_fnmsub;
-  bit cov_op_fnmadd;
-  bit cov_op_fp;
-
-  // -------------------------------------------------------------------------
-  // cg_alu_sign (16 bins) — ALU op × result sign cross
-  // -------------------------------------------------------------------------
-  // 8 funct3 bins × 2 sign bins = 16
-  bit cov_alu_add_sub_pos;   bit cov_alu_add_sub_neg;
-  bit cov_alu_sll_pos;       bit cov_alu_sll_neg;
-  bit cov_alu_slt_pos;       bit cov_alu_slt_neg;
-  bit cov_alu_sltu_pos;      bit cov_alu_sltu_neg;
-  bit cov_alu_xor_pos;       bit cov_alu_xor_neg;
-  bit cov_alu_srl_sra_pos;   bit cov_alu_srl_sra_neg;
-  bit cov_alu_or_pos;        bit cov_alu_or_neg;
-  bit cov_alu_and_pos;       bit cov_alu_and_neg;
-
-  // -------------------------------------------------------------------------
-  // cg_branch (6 bins) — branch type
-  // -------------------------------------------------------------------------
-  bit cov_br_beq;
-  bit cov_br_bne;
-  bit cov_br_blt;
-  bit cov_br_bge;
-  bit cov_br_bltu;
-  bit cov_br_bgeu;
-
-  // -------------------------------------------------------------------------
-  // cg_mem (16 bins) — size × alignment cross
-  // -------------------------------------------------------------------------
-  // 4 size bins × 4 align bins = 16
-  bit cov_mem_byte_aligned;    bit cov_mem_byte_off4;
-  bit cov_mem_byte_off2;       bit cov_mem_byte_odd;
-  bit cov_mem_half_aligned;    bit cov_mem_half_off4;
-  bit cov_mem_half_off2;       bit cov_mem_half_odd;
-  bit cov_mem_word_aligned;    bit cov_mem_word_off4;
-  bit cov_mem_word_off2;       bit cov_mem_word_odd;
-  bit cov_mem_double_aligned;  bit cov_mem_double_off4;
-  bit cov_mem_double_off2;     bit cov_mem_double_odd;
-
-  // -------------------------------------------------------------------------
-  // cg_amo (11 bins) — AMO type
-  // -------------------------------------------------------------------------
-  bit cov_amo_lr;
-  bit cov_amo_sc;
-  bit cov_amo_swap;
-  bit cov_amo_add;
-  bit cov_amo_xor;
-  bit cov_amo_and;
-  bit cov_amo_or;
-  bit cov_amo_min;
-  bit cov_amo_max;
-  bit cov_amo_minu;
-  bit cov_amo_maxu;
-
-  // -------------------------------------------------------------------------
-  // cg_fp_rm (6 bins) — FP rounding mode
-  // -------------------------------------------------------------------------
-  bit cov_rm_rne;
-  bit cov_rm_rtz;
-  bit cov_rm_rdn;
-  bit cov_rm_rup;
-  bit cov_rm_rmm;
-  bit cov_rm_dyn;
-
-  // -------------------------------------------------------------------------
-  // cg_trap (6 bins) — trap mcause via CSR write to mcause (0x342)
-  // -------------------------------------------------------------------------
-  bit cov_trap_illegal;
-  bit cov_trap_ecall_m;
-  bit cov_trap_ebreak;
-  bit cov_trap_ld_misalign;
-  bit cov_trap_st_misalign;
-  bit cov_trap_irq_timer;
-
-  // -------------------------------------------------------------------------
-  // cg_icache (2 bins) — Stage 5e I-cache miss path exercise
-  // Tracks whether the I$ miss event (miss_pulse_o from kronos_icache,
-  // mapped to event_bus[16] via icache_miss_pulse in kronos_top) was ever
-  // asserted and whether at least one hit cycle was observed.
-  // -------------------------------------------------------------------------
-  bit cov_icache_miss_seen;    // at least one I$ miss occurred
-  bit cov_icache_no_miss_seen; // at least one cycle with no miss (normal fetch)
-
-  // -------------------------------------------------------------------------
-  // cg_dcache (2 bins) — Stage 5f D-cache miss path exercise (Stage 5f)
-  // Tracks whether the D$ miss event (miss_pulse_o from kronos_dcache,
-  // mapped to event_bus[17] via dcache_miss_pulse in kronos_top) was ever
-  // asserted and whether at least one hit cycle was observed.
-  // -------------------------------------------------------------------------
-  bit cov_dcache_miss_seen;    // at least one D$ miss occurred
-  bit cov_dcache_no_miss_seen; // at least one D$ hit (no miss)
-
-  // -------------------------------------------------------------------------
-  // Sampling logic — combinational helpers
-  // -------------------------------------------------------------------------
-  logic is_alu_op;
-  logic is_branch;
-  logic is_mem_op;
-  logic is_amo;
-  logic is_fp_op;
 
   assign is_alu_op = retire_valid &&
                      (opcode == 7'b0110011 || opcode == 7'b0010011 ||
@@ -804,10 +795,6 @@ module tb_crv_cov;
   // =========================================================================
   // Test driver
   // =========================================================================
-  int          cycle_count;
-  string       vmem_path;
-  string       covout_path;
-
   initial begin
     // Required: +vmem=<path>
     if (!$value$plusargs("vmem=%s", vmem_path)) begin

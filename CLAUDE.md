@@ -635,10 +635,6 @@ After that, every `git commit` runs the hook on staged files in **delta mode** �
 
 Run a full repository scan manually with `python3 scripts/check_rtl_rules.py` (no `--staged`). Bypass the hook with `git commit --no-verify` only when you have a justified reason.
 
-### Known full-scan offenders
-
-A full-repo scan (no `--staged`) currently flags around 700 R1 violations concentrated in the FPU pipeline files (`rtl/stage5/fpu/kronos_fpu_fma.sv`, `kronos_fpu_fmul.sv`, `kronos_fpu_fcvt.sv`, `kronos_fpu_iter.sv`, `kronos_fpu_fadd.sv`, plus their stage-6 mirrors and `kronos_dcache.sv`). These files use a per-pipeline-stage layout — sectioned blocks of `logic` declarations interleaved with the corresponding `always_ff` / `always_comb` blocks — instead of the canonical "single decl block at the top." The pattern is established and not a hazard, but it does not match R1. A dedicated FPU restructuring pass would consolidate the decls; until that lands, the hook's delta mode is the practical guardrail.
-
 ## OpenSoC Integration
 
 The parent project is at `/home/popes/opensoc`. kronos-riscv is added as a

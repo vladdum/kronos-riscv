@@ -90,6 +90,27 @@ module tb_core_fp_basic;
   int          data_w_wi_lo;
   int          data_w_wi_hi;
 
+  // -----------------------------------------------------------------------
+  // AXI slave — data port (multi-beat read + write, dcache issues 8-beat bursts)
+  // -----------------------------------------------------------------------
+  // Read channel
+  logic        data_r_pend;
+  logic [63:0] data_ar_addr_q;
+  logic [7:0]  data_ar_len_q;
+  logic [7:0]  data_r_beat;
+  // Write channel
+  logic        data_aw_pend;
+  logic [63:0] data_aw_addr_q;
+  logic [7:0]  data_aw_len_q;
+  logic [7:0]  data_w_beat;
+  logic        data_b_pend;
+  logic [31:0] halted;
+
+  // -----------------------------------------------------------------------
+  // Test body
+  // -----------------------------------------------------------------------
+  int errors;
+
   always_comb begin
     instr_rsp          = '{default: '0};
     instr_rsp.ar_ready = ~instr_r_pend;
@@ -121,22 +142,6 @@ module tb_core_fp_basic;
       end
     end
   end
-
-  // -----------------------------------------------------------------------
-  // AXI slave — data port (multi-beat read + write, dcache issues 8-beat bursts)
-  // -----------------------------------------------------------------------
-  // Read channel
-  logic        data_r_pend;
-  logic [63:0] data_ar_addr_q;
-  logic [7:0]  data_ar_len_q;
-  logic [7:0]  data_r_beat;
-  // Write channel
-  logic        data_aw_pend;
-  logic [63:0] data_aw_addr_q;
-  logic [7:0]  data_aw_len_q;
-  logic [7:0]  data_w_beat;
-  logic        data_b_pend;
-  logic [31:0] halted;
 
   always_comb begin
     data_rsp          = '{default: '0};
@@ -235,8 +240,6 @@ module tb_core_fp_basic;
   // -----------------------------------------------------------------------
   // Test body
   // -----------------------------------------------------------------------
-  int errors;
-
   initial begin
     // Fill with NOP
     for (int i = 0; i < 64; i++) mem[i] = 32'h0000_0013; // ADDI x0, x0, 0

@@ -326,6 +326,26 @@ module kronos_top
   // -------------------------------------------------------------------------
   logic [31:0] pc_d                              /* verilator public_flat_rd */;
 
+  // -------------------------------------------------------------------------
+  // Boot-vector load latch (pc_q reset semantics)
+  // -------------------------------------------------------------------------
+  logic boot_loaded_q;
+
+  // -------------------------------------------------------------------------
+  // FENCE.I trap suppression while D-cache is dirty
+  // -------------------------------------------------------------------------
+  logic fence_i_dirty_block;
+
+  // -------------------------------------------------------------------------
+  // Retire/event-bus advance gate
+  // -------------------------------------------------------------------------
+  logic retire_advance;
+
+  // -------------------------------------------------------------------------
+  // Lint-tie aggregator for unused stage-6a IRQ / predecode signals
+  // -------------------------------------------------------------------------
+  logic _unused_irq;
+
   // =========================================================================
   // Submodule instantiations
   // =========================================================================
@@ -949,7 +969,6 @@ module kronos_top
   //   - On the first post-reset cycle, sync-load `boot_addr_i` so a non-zero
   //     boot vector still works. boot_addr_i is captured before the load to
   //     avoid synth seeing it as part of the async reset value.
-  logic boot_loaded_q;
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       pc_q          <= 32'b0;
@@ -1218,7 +1237,6 @@ module kronos_top
   // flush completes.  Once dcache_flush_done pulses (or there were no dirty
   // lines), the redirect resumes and the trap handler advances MEPC past
   // the FENCE.I — by which time AXI memory has the up-to-date bytes.
-  logic fence_i_dirty_block;
   assign fence_i_dirty_block = id_ex_q.valid &
                                 (id_ex_q.instr[6:0]   == 7'b0001111) &
                                 (id_ex_q.instr[14:12] == 3'b001) &
@@ -1380,7 +1398,6 @@ module kronos_top
   // should filter by csr_funct3 if they need to distinguish read-only CSR
   // accesses from read-modify-write ones.
   // =========================================================================
-  logic retire_advance;
   assign retire_advance = mem_wb_q.valid & ~combined_stall;
 
   // ---- Performance-counter event bus ----------------------------------------
@@ -1472,7 +1489,6 @@ module kronos_top
   // Stage-6a IRQ ports declared above are not consumed by the stage-5 CSR
   // file; tie them into a dummy XOR to keep the linter quiet.  Stage 5 also
   // does not use the predecode cross-page-fault output (no translation).
-  logic _unused_irq;
   assign _unused_irq = ^{irq_msi_i, irq_mei_i, irq_ssi_i, irq_sti_i,
                          irq_sei_i, cross_page_fault, align_stall,
                          align_need_upper, align_needs_fetch,

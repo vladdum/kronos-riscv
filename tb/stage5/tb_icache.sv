@@ -62,6 +62,10 @@ module tb_icache;
   logic [14:0] line_base;    // 64-byte line base in 32-bit word units
   logic [15:0] word_lo_idx;
   logic [15:0] word_hi_idx;
+
+  // Tree-PLRU stimulus addresses (used inside an unlabeled begin block below).
+  bit [63:0] plru_addr0;
+  bit [63:0] plru_addr1;
   assign wrap_off64  = burst_addr_q[5:3] + burst_beat_q[2:0];
   assign line_base   = burst_addr_q[17:6] * 16;  // 64 bytes / 4 = 16 words per line
   assign word_lo_idx = {1'b0, line_base} + {12'b0, wrap_off64, 1'b0};
@@ -145,8 +149,6 @@ module tb_icache;
     // away from recently-used way 0).  Re-accessing addr0 must be a hit.
     // With hardcoded way-0 victim, addr1 would overwrite addr0 → re-access miss.
     begin
-      bit [63:0] plru_addr0;
-      bit [63:0] plru_addr1;
       plru_addr0 = 64'h1_0000;   // tag 4, set 0
       plru_addr1 = 64'h2_0000;   // tag 8, set 0
 

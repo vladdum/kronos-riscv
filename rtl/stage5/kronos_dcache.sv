@@ -72,19 +72,7 @@ module kronos_dcache
   assign tag_in   = addr_i[PHYS_ADDR_W-1 : SET_IDX_W + OFFSET_W];
   assign beat_idx = addr_i[OFFSET_W-1 : 3];
 
-  // ---- Hit logic ------------------------------------------------------------
-  logic [NUM_WAYS-1:0] hit_way_oh;
-  logic                hit;
-  always_comb begin
-    for (int w = 0; w < NUM_WAYS; w++) begin
-      hit_way_oh[w] = req_i & valid_q[set_idx][w] & (tag_q[set_idx][w] == tag_in);
-    end
-    hit = |hit_way_oh;
-  end
-
-  // ---- State machine --------------------------------------------------------
-  // Subsequent tasks will add WB_AW, WB_W, AMO_RMW states.  For Task 2 we
-  // only have IDLE / REFILL_AR / REFILL_R.
+  // ---- State machine encoding ----------------------------------------------
   typedef enum logic [3:0] {
     DC_IDLE       = 4'b0000,
     DC_REFILL_AR  = 4'b0001,
@@ -97,14 +85,86 @@ module kronos_dcache
     DC_FLUSH_W    = 4'b1000
   } dcache_state_e;
 
+  // ---- State registers ------------------------------------------------------
   dcache_state_e state_q;
+  logic          miss_pulse_q;
 
-  logic miss_pulse_q;
-  logic miss_event;
-  assign miss_event = req_i & ~hit & (state_q == DC_IDLE);
+  // Miss / refill bookkeeping
+  logic [SET_IDX_W-1:0]            miss_set_q;
+  logic [TAG_W-1:0]                miss_tag_q;
+  logic [BEAT_IDX_W-1:0]           miss_beat_q;
+  logic [$clog2(NUM_WAYS)-1:0]     victim_q;
+  logic [3:0]                      beat_cnt_q;
+  logic                            bypass_valid_q;
+  logic [63:0]                     bypass_data_q;
+  logic                            miss_was_store_q;
+  logic [63:0]                     miss_store_data_q;
+  logic [7:0]                      miss_store_strobes_q;
+  logic [2:0]                      miss_store_off_q;
+  logic                            store_done_q;
+  logic [3:0]                      wb_beat_cnt_q;
+  logic [TAG_W-1:0]                evict_tag_q;
 
+  // AMO state registers
+  logic        amo_pending_q;
+  logic [4:0]  amo_op_q;
+  logic [63:0] amo_src_q;
+  logic [63:0] amo_old_val_q;
+  logic        amo_done_q;
+  logic        amo_is_word_q;     // size_i == 3'd2
+  logic [2:0]  amo_addr_off_q;    // addr_i[2:0] captured at AMO issue
+
+  // LR/SC reservation registers
+  logic [PHYS_ADDR_W-1:0] rsrv_addr_q;
+  logic                   rsrv_valid_q;
+  logic                   sc_success_q;
+
+  // Flush state (FENCE.I full writeback + invalidate walk)
+  logic [SET_IDX_W-1:0]              flush_set_q;
+  logic [$clog2(NUM_WAYS)-1:0]       flush_way_q;
+  logic                              flush_done_q;
+
+  // ---- Combinational signals ------------------------------------------------
+  // Hit logic
+  logic [NUM_WAYS-1:0]         hit_way_oh;
+  logic                        hit;
+  logic                        miss_event;
   // Tree-PLRU victim selection (same as I$).
   logic [$clog2(NUM_WAYS)-1:0] victim_pick;
+  // Per-cycle store strobes / aligned store data (hoisted so byte loops can
+  // index them — Vivado rejects bit-selects on function-call returns).
+  logic [ 7:0]                 store_strobes_in;
+  logic [63:0]                 store_data_aligned_in;
+  // dirty_pending_o helper: 1 if any (set, way) has valid && dirty.
+  logic                        dirty_pending;
+  // AMO intermediate signals for DC_AMO_RMW
+  logic [63:0]                 amo_cur_beat;
+  logic [63:0]                 amo_result;
+  logic [7:0]                  amo_be;
+  logic [63:0]                 amo_aligned;
+  // hit_way_idx: binary encoding of hit way for AMO/SC use
+  logic [$clog2(NUM_WAYS)-1:0] hit_way_idx;
+  // hit_beat: full 64-bit beat from the hit way (consumed by the AMO RMW
+  // capture inside the always_ff block below). Declared here so synthesis
+  // sees it before its first use (Synth 8-6901).
+  logic [63:0]                 hit_beat;
+  // Load data path
+  logic [63:0]                 beat_for_load;
+  logic [63:0]                 load_data_full;
+  // Lint sink
+  logic                        _unused;
+
+  // ---- Hit logic ------------------------------------------------------------
+  always_comb begin
+    for (int w = 0; w < NUM_WAYS; w++) begin
+      hit_way_oh[w] = req_i & valid_q[set_idx][w] & (tag_q[set_idx][w] == tag_in);
+    end
+    hit = |hit_way_oh;
+  end
+
+  assign miss_event = req_i & ~hit & (state_q == DC_IDLE);
+
+  // ---- Tree-PLRU victim selection -------------------------------------------
   always_comb begin
     unique case (plru_q[set_idx][2])
       1'b0: victim_pick = plru_q[set_idx][1] ? 2'd1 : 2'd0;
@@ -185,48 +245,11 @@ module kronos_dcache
   // Vivado synthesis (IEEE 1800 grammar) rejects bit-selects on function-call
   // returns — e.g. `store_strobes(...)[b]`. Hoist the per-cycle results into
   // combinational nets so the per-byte loops can index into them directly.
-  logic [ 7:0] store_strobes_in;
-  logic [63:0] store_data_aligned_in;
   assign store_strobes_in      = store_strobes(size_i, addr_i[2:0]);
   assign store_data_aligned_in = store_data_aligned(size_i, addr_i[2:0], wdata_i);
 
-  logic [SET_IDX_W-1:0]            miss_set_q;
-  logic [TAG_W-1:0]                miss_tag_q;
-  logic [BEAT_IDX_W-1:0]           miss_beat_q;
-  logic [$clog2(NUM_WAYS)-1:0]     victim_q;
-  logic [3:0]                      beat_cnt_q;
-  logic                            bypass_valid_q;
-  logic [63:0]                     bypass_data_q;
-  logic                            miss_was_store_q;
-  logic [63:0]                     miss_store_data_q;
-  logic [7:0]                      miss_store_strobes_q;
-  logic [2:0]                      miss_store_off_q;
-  logic                            store_done_q;
-  logic [3:0]                      wb_beat_cnt_q;
-  logic [TAG_W-1:0]                evict_tag_q;
-
-  // AMO state registers
-  logic        amo_pending_q;
-  logic [4:0]  amo_op_q;
-  logic [63:0] amo_src_q;
-  logic [63:0] amo_old_val_q;
-  logic        amo_done_q;
-  logic        amo_is_word_q;     // size_i == 3'd2
-  logic [2:0]  amo_addr_off_q;    // addr_i[2:0] captured at AMO issue
-
-  // LR/SC reservation registers
-  logic [PHYS_ADDR_W-1:0] rsrv_addr_q;
-  logic                   rsrv_valid_q;
-  logic                   sc_success_q;
-
-  // Flush state (FENCE.I full writeback + invalidate walk)
-  logic [SET_IDX_W-1:0]              flush_set_q;
-  logic [$clog2(NUM_WAYS)-1:0]       flush_way_q;
-  logic                              flush_done_q;
-
   // dirty_pending_o: 1 if any (set, way) has valid && dirty.  Used by the
   // top to short-circuit FENCE.I when no writeback is required.
-  logic dirty_pending;
   always_comb begin
     dirty_pending = 1'b0;
     for (int s = 0; s < NUM_SETS; s++)
@@ -236,14 +259,7 @@ module kronos_dcache
   assign dirty_pending_o = dirty_pending;
   assign flush_done_o    = flush_done_q;
 
-  // AMO intermediate signals for DC_AMO_RMW
-  logic [63:0] amo_cur_beat;
-  logic [63:0] amo_result;
-  logic [7:0]  amo_be;
-  logic [63:0] amo_aligned;
-
   // hit_way_idx: binary encoding of hit way for AMO/SC use
-  logic [$clog2(NUM_WAYS)-1:0] hit_way_idx;
   always_comb begin
     hit_way_idx = {$clog2(NUM_WAYS){1'b0}};
     for (int w = 0; w < NUM_WAYS; w++) begin
@@ -252,9 +268,7 @@ module kronos_dcache
   end
 
   // hit_beat: full 64-bit beat from the hit way (consumed by the AMO RMW
-  // capture inside the always_ff block below). Declared here so synthesis
-  // sees it before its first use (Synth 8-6901).
-  logic [63:0] hit_beat;
+  // capture inside the always_ff block below).
   always_comb begin
     hit_beat = 64'h0;
     for (int w = 0; w < NUM_WAYS; w++) begin
@@ -663,11 +677,9 @@ module kronos_dcache
   // hit_beat is built earlier (top of the file) so the AMO RMW capture path
   // can read it; here we just pick between the cached value and the
   // critical-word-first bypass register on a refill.
-  logic [63:0] beat_for_load;
   assign beat_for_load = bypass_valid_q ? bypass_data_q : hit_beat;
 
   // ---- Size/sign extension on loads ----------------------------------------
-  logic [63:0] load_data_full;
   always_comb begin
     load_data_full = beat_for_load;
     unique case (size_i)
@@ -708,7 +720,6 @@ module kronos_dcache
   assign stall_o      = (state_q != DC_IDLE);
   assign miss_pulse_o = miss_pulse_q;
 
-  logic _unused;
   assign _unused = ^{miss_store_off_q};
 
 endmodule
