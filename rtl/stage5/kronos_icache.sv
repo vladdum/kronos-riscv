@@ -242,7 +242,12 @@ module kronos_icache
 
   // ---- Pipeline back-pressure ----------------------------------------------
   assign s2_held_hit = s2_valid_q & s2_hit_q & ~s2_kill_i;
-  assign s2_stall    = s2_held_hit & ~s2_enq_ready_i;
+  // bypass_drive overrides the s2_enq_pc_o / s2_enq_data_o mux when active,
+  // so a same-cycle s2-hit-push would silently lose its tuple — the FB only
+  // accepts one entry per cycle and the bypass wins the priority mux. Stall
+  // s2 while the bypass is taking the FB slot so the held hit pushes next
+  // cycle (after bypass_pending_q clears).
+  assign s2_stall    = s2_held_hit & (~s2_enq_ready_i | bypass_drive);
   assign s1_advance  = s1_valid_q & ~s2_stall & (state_q == ICACHE_IDLE);
   assign s0_ready_o  = (state_q == ICACHE_IDLE) & ~s2_stall;
   assign s0_accept   = s0_valid_i & s0_ready_o;
