@@ -113,6 +113,15 @@ module tb_dcache
     .miss_pulse_o      (miss_pulse)
   );
 
+  // ---- Reference model — pure architectural mirror (no cache state) ------
+  dcache_scoreboard #(
+    .MEM_BYTES (1 << 18),
+    .MEM_BASE  (32'h0)
+  ) u_sb (
+    .clk_i  (clk_i),
+    .rst_ni (rst_ni)
+  );
+
   // ---- AXI memory model + read burst driver ------------------------------
   // Behavioural single-issue memory.  Sized large enough to hold the
   // working set used by the tests below; addresses are >> 3 to index by
@@ -245,7 +254,8 @@ module tb_dcache
   // drive req on the next.  Captures rdata into last_rdata at the cycle
   // data_valid fires (single-cycle bypass pulses would otherwise clear
   // before the test asserts on rdata).
-  task automatic drv_load(input [63:0] a, input [2:0] sz);
+  task automatic drv_load(input [63:0] a, input [2:0] sz, input int gap_cycles = 1);
+    if (gap_cycles > 1) repeat (gap_cycles - 1) @(posedge clk_i);
     prelaunch(a);
     @(posedge clk_i);                    // BRAM read launches here
     @(negedge clk_i);
@@ -264,7 +274,9 @@ module tb_dcache
   // Issue a store.  Same pre-launch shape — store-hit fire wants port-A
   // write + port-B read in the same cycle (WRITE_FIRST forwarding for
   // any concurrent same-beat load); we drive a clean hit/store cycle.
-  task automatic drv_store(input [63:0] a, input [2:0] sz, input [63:0] d);
+  task automatic drv_store(input [63:0] a, input [2:0] sz, input [63:0] d,
+                           input int gap_cycles = 1);
+    if (gap_cycles > 1) repeat (gap_cycles - 1) @(posedge clk_i);
     prelaunch(a);
     @(posedge clk_i);
     @(negedge clk_i);
@@ -284,7 +296,9 @@ module tb_dcache
   // Issue an AMO.  amo_op is the funct5 field (AMOADD = 5'b00000).
   // Captures the OLD value (returned via rdata when amo_done fires).
   task automatic drv_amo(input [63:0] a, input [2:0] sz,
-                         input [4:0]  op, input [63:0] src);
+                         input [4:0]  op, input [63:0] src,
+                         input int gap_cycles = 1);
+    if (gap_cycles > 1) repeat (gap_cycles - 1) @(posedge clk_i);
     prelaunch(a);
     @(posedge clk_i);
     @(negedge clk_i);
@@ -492,6 +506,93 @@ module tb_dcache
                     last_rdata, tb_mem[15'((line >> 3) + 64'd3)]));
   endtask
 
+  // ---- test_raw_random --------------------------------------------------
+  // 10,000 randomised dcache ops with weighted op/size/address/gap. Every
+  // store updates the scoreboard; every load asserts against scoreboard
+  // expected. First mismatch prints full repro context and the test bails
+  // after 3 mismatches.
+  task automatic test_raw_random(input int seed = 0);
+    int          rng_state;
+    int          n_ops;
+    int          op_kind;
+    int          sz;
+    int          gap;
+    int          bucket;
+    int          size_bucket;
+    int          in_hot;
+    logic [63:0] a;
+    logic [63:0] line_base;
+    logic [63:0] data;
+    logic [63:0] expected_v;
+    logic [63:0] wdata_init;
+    int          local_errors;
+    rng_state    = seed;
+    local_errors = 0;
+    n_ops        = 10000;
+    // Use a region that the directed tests (1-5) do not touch.
+    line_base    = 64'h0000_0000_0000_8000;
+
+    // Mirror the initial AXI memory state into the scoreboard so that loads
+    // to cold addresses get the correct expected value.
+    for (int w = 0; w < 32768; w++) begin
+      wdata_init = tb_mem[w];
+      u_sb.store(64'(w * 8), 3'd3, wdata_init);
+    end
+
+    // Seed the thread-local RNG.
+    void'($urandom(rng_state));
+
+    for (int i = 0; i < n_ops; i++) begin
+      bucket      = $urandom() % 100;
+      op_kind     = (bucket < 40) ? 0 : (bucket < 80) ? 1 : 2;
+
+      size_bucket = $urandom() % 4;
+      sz          = size_bucket;
+
+      in_hot      = int'(($urandom() % 100) < 80);
+      // Hot: within 4 KB of line_base; cold: 2..5 lines away (stays in tb_mem).
+      a = (in_hot != 0)
+          ? line_base + 64'($urandom() % (1 << 12))
+          : line_base + (64'($urandom() % 4) + 2) * (1 << 12) +
+                        64'($urandom() % (1 << 12));
+      a = a & ~((64'h1 << sz) - 1);
+
+      bucket      = $urandom() % 100;
+      gap         = (bucket < 60) ? 0 : (bucket < 90) ? 1 : 2;
+
+      // Wait for any in-progress refill/AMO-RMW to complete before
+      // pre-launching the next op. Mirrors the pipeline stall the LSU
+      // would see in real hardware.
+      while (stall) @(posedge clk_i);
+
+      if (op_kind == 0) begin
+        drv_load(a, sz[2:0], gap);
+        expected_v = u_sb.expected(a, sz[2:0]);
+        if ((last_rdata & ((64'h1 << (8 << sz)) - 64'd1)) !==
+            (expected_v & ((64'h1 << (8 << sz)) - 64'd1))) begin
+          $display("FAIL test_raw_random[%0d]: addr=%h sz=%0d gap=%0d got=%h expected=%h (seed=%0d)",
+                   i, a, sz, gap, last_rdata, expected_v, seed);
+          local_errors++;
+          if (local_errors >= 3) break;
+        end
+      end else if (op_kind == 1) begin
+        data = {$urandom(), $urandom()};
+        drv_store(a, sz[2:0], data, gap);
+        u_sb.store(a, sz[2:0], data);
+      end else begin
+        // AMO: clamp size to word/double (byte/half AMOs are illegal in RV64).
+        sz   = (size_bucket < 2) ? 2 : 3;
+        a    = a & ~((64'h1 << sz) - 64'd1);
+        data = {$urandom(), $urandom()};
+        drv_amo(a, sz[2:0], 5'b00001, data, gap);
+        u_sb.store(a, sz[2:0], data);
+      end
+    end
+
+    if (local_errors == 0) $display("PASS test_raw_random (seed=%0d, n_ops=%0d)", seed, n_ops);
+    errors = errors + local_errors;
+  endtask
+
   // ---- Sequencer ---------------------------------------------------------
   initial begin
     drv_reset();
@@ -502,7 +603,13 @@ module tb_dcache
     test_amo_hit_then_load();
     test_refill_window_load();
 
-    if (errors == 0) $display("PASS: tb_dcache (5 stage6g cases)");
+    begin : run_random
+      int rseed;
+      if (!$value$plusargs("seed=%d", rseed)) rseed = 0;
+      test_raw_random(rseed);
+    end
+
+    if (errors == 0) $display("PASS: tb_dcache (5 stage6g cases + random stressor)");
     else             $display("FAIL: tb_dcache (%0d errors)", errors);
     $finish;
   end

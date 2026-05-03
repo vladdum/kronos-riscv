@@ -63,12 +63,19 @@ def _csr_write_visible(line: str) -> bool:
     return rs1 != 0
 
 
-def strip_ignored(line: str) -> str:
+def strip_ignored(line: str, strip_noeffect: bool = False) -> str:
     """Remove mem[...] effects in halt/sig regions and csr[...] effects on
     non-CSR instructions (implicit FS/fflags/trap-CSR writes that Kronos's
     retire trace doesn't surface).
 
     Explicit csr[...] writes on Zicsr instructions are kept and diffed.
+
+    When `strip_noeffect=True`, also drop any line whose remaining content has
+    no observable effect (no register / memory / CSR write — e.g. pure
+    control-flow branches and NOPs). Kronos only emits retire events for
+    instructions with effects; Sail emits one per instruction. Cosim diffs use
+    this to align the two streams. The directed pytest fixtures intentionally
+    use no-effect lines to test line-number alignment, so they leave it off.
 
     Returns cleaned line, or empty string if all observable effects are gone.
     """
@@ -85,10 +92,12 @@ def strip_ignored(line: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if had_mem and not EFFECT_RE.search(cleaned):
         return ""
+    if strip_noeffect and not EFFECT_RE.search(cleaned):
+        return ""
     return cleaned
 
 
-def load(path: Path) -> list[str]:
+def load(path: Path, strip_noeffect: bool = False) -> list[str]:
     lines: list[str] = []
     for raw in path.read_text().splitlines():
         raw = raw.strip()
@@ -98,7 +107,7 @@ def load(path: Path) -> list[str]:
         # (which spins indefinitely) does not cause a spurious length mismatch.
         if HALT_SENTINEL in raw:
             break
-        s = strip_ignored(raw)
+        s = strip_ignored(raw, strip_noeffect=strip_noeffect)
         if s:
             lines.append(s)
     return lines
@@ -126,19 +135,39 @@ def for_compare(line: str) -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print(f"Usage: {argv[0]} <kronos_trace> <sail_trace>", file=sys.stderr)
+    # Backward-compatible CLI: the historical positional form is
+    #   trace_diff.py <kronos> <sail>
+    # The cosim runner (Phase 4) passes an extra --strip-noeffect flag to
+    # drop pure-control-flow lines so Sail (per-instruction) and Kronos
+    # (retire-with-effect-only) align. Existing callers (sim-diff-s5,
+    # pytest fixtures) keep the default off.
+    strip_noeffect = False
+    args = list(argv[1:])
+    if "--strip-noeffect" in args:
+        strip_noeffect = True
+        args = [a for a in args if a != "--strip-noeffect"]
+    if len(args) != 2:
+        print(f"Usage: {argv[0]} [--strip-noeffect] <kronos_trace> <sail_trace>",
+              file=sys.stderr)
         return 2
-    a = load(Path(argv[1]))
-    b = load(Path(argv[2]))
+    a = load(Path(args[0]), strip_noeffect=strip_noeffect)
+    b = load(Path(args[1]), strip_noeffect=strip_noeffect)
     if not a:
         print("MISMATCH: Kronos trace is empty", file=sys.stderr)
         return 1
     # Sync: the Kronos retire trace misses startup instructions (pipeline fill
     # and JAL redirect penalty).  Find the first Kronos line in the Sail trace
-    # by matching PC:instr, then compare from that point forward.
+    # by matching PC:instr, then compare from that point forward.  Fallback
+    # to PC-only sync when the encoding differs — Kronos retire-traces the
+    # decompressed (32-bit) form for C-extension instructions while Sail traces
+    # the original 16-bit form, so the same PC has different opcode bytes in
+    # the two streams.  for_compare() already ignores the encoding for content
+    # comparison, so it is safe to anchor on PC alone.
     first_key = pc_instr(a[0])
     sail_start = next((i for i, l in enumerate(b) if pc_instr(l) == first_key), None)
+    if sail_start is None:
+        first_pc = a[0].split(":", 1)[0]
+        sail_start = next((i for i, l in enumerate(b) if l.split(":", 1)[0] == first_pc), None)
     if sail_start is None:
         print(f"SYNC FAIL: Kronos first instruction '{first_key}' not found in Sail trace")
         return 1

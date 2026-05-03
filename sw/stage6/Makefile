@@ -8,7 +8,8 @@ ABI    := lp64
 CFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostdlib -static -T../stage0/link.ld
 
 TESTS  := test_priv_smode test_delegation test_pmp_basic test_sret test_csr_priv test_priv_smoke \
-          test_pma_mmio_load test_pma_mmio_store test_pma_amo_trap
+          test_pma_mmio_load test_pma_mmio_store test_pma_amo_trap \
+          test_dcache_raw
 
 BUILD_DIR := build
 

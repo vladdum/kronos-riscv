@@ -28,6 +28,9 @@ trap 'rm -f "$TRACE_TMP"' EXIT
 # naturally via HTIF before hitting this limit.  Override via SIM_INST_LIMIT.
 INST_LIMIT=${SIM_INST_LIMIT:-50000}
 
+SAIL_ERR=$(mktemp /tmp/sail_trace_err_XXXXXX.txt)
+trap 'rm -f "$TRACE_TMP" "$SAIL_ERR"' EXIT
+
 sail_riscv_sim \
   --trace-instr \
   --trace-reg \
@@ -36,6 +39,15 @@ sail_riscv_sim \
   --config "$SAIL_CONFIG" \
   --inst-limit "$INST_LIMIT" \
   "$ELF" \
-  >/dev/null 2>&1 || true
+  >/dev/null 2>"$SAIL_ERR" || true
+
+# If Sail produced nothing (crash, missing config, unknown ELF format, etc.),
+# surface its stderr on OUR stderr so the caller can see the cause. CRV traces
+# are large enough that this branch never fires for them — only the cosim
+# runner reaches it on truly broken Sail invocations.
+if [[ ! -s "$TRACE_TMP" ]]; then
+  echo "[sail_trace.sh] Sail produced no trace; stderr follows:" >&2
+  sed -n '1,40p' "$SAIL_ERR" >&2
+fi
 
 python3 "$SCRIPT_DIR/sail_trace_normalize.py" < "$TRACE_TMP"

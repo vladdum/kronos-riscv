@@ -215,6 +215,60 @@ After completing each implementation step:
 
 Both files should always reflect the current state of the code, not the original plan.
 
+## CI gates
+
+### Branch protection — repository setting
+
+`main` should have a branch protection rule that **requires all PR-blocking CI
+checks to pass before merge can be enabled.** Configure once under `Settings ->
+Branches -> Add rule for main -> Require status checks to pass before merging`,
+and tick every job in `.github/workflows/sim.yml` (compliance-s1..s6,
+sim-s5-asm, sim-s6-asm, sim-s6b-asm, sim-fp-top, sim-fp-unit, sim-diff-s5,
+sim-diff-s5-traced, sim-crv-smoke, dcache-stress-s6, crv-smoke-s6,
+cosim-smoke, perf-baseline-s6, sim-s1s2, sim-s3s4, sim-s5-int, sim-s6-int,
+pytest, sim-all). With this enabled, the GitHub merge button is disabled
+whenever any of those checks is failing — the human reviewer cannot merge
+red.
+
+### Local CI verification — `make ci-local`
+
+Before pushing a PR branch, run `make ci-local` from `sim/`. It runs the full
+PR-gating set against the **same toolchain CI uses** (apt
+`gcc-riscv64-unknown-elf 13.2.x` at `/usr/bin/`, not the user's local
+toolchain) so any failure that would be exposed in CI surfaces locally first.
+Push only when this is clean.
+
+### Hard rule — never bypass a failing CI gate
+
+**HARD RULE — never bypass a failing CI gate to enable a PR merge.** This applies
+to every agent and every contributor:
+
+- Do **not** add `continue-on-error: true`, `if: false`, or any equivalent gate
+  bypass to a CI job that has been deliberately failing because it found a bug.
+- Do **not** add a "skip list" / "exclude list" / `KNOWN_FAILURES` mechanism
+  whose purpose is to remove failing tests from a gating job. Tests that are
+  failing for a real reason must stay in the gate so the PR stays red until the
+  underlying bug is fixed.
+- Do **not** rename a failing job to `*-informational`, push it to `nightly`,
+  or otherwise hide its red signal so the PR-blocking gate goes green.
+- Do **not** mark a real failure as `xfail` / "expected to fail" without an
+  explicit, documented platform / config exception (e.g. `if-only` matrix gating
+  for a known-broken host). The bar for adding such exceptions is high and they
+  must reference a tracking issue.
+
+The verification stack exists to catch bugs. A green gate that hides a real
+failure is worse than a red gate that exposes it: it tells maintainers the
+codebase is healthy when it isn't, and it lets the bug ship.
+
+The correct response to a failing gate is one of:
+1. **Fix the underlying bug** so the test passes naturally.
+2. **Repair the test** if the test itself is wrong (reproducer is incorrect,
+   harness is brittle, etc.).
+3. **Wait** — leave the gate red and the PR un-mergeable until 1 or 2 happens.
+
+Filing a tracking issue is necessary but not sufficient. The gate must stay
+red until the fix lands.
+
 ## SW Tests
 
 When creating a new test under `sw/stage<N>/`, add it to the stage's `Makefile` TESTS list.
