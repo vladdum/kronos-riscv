@@ -70,10 +70,9 @@ multiple in-flight memory requests with tagged, out-of-order responses.
 All builds use FuseSoC and Verilator running under WSL/Linux.
 
 ```bash
-# Lint RTL (stage 5 is the default target)
-fusesoc --cores-root=. run --target=lint  opensoc:ip:kronos_riscv
-fusesoc --cores-root=. run --target=lint-s4 opensoc:ip:kronos_riscv
-fusesoc --cores-root=. run --target=lint-s3 opensoc:ip:kronos_riscv
+# Lint RTL (canonical flow — `make lint-rtl-s*` from sim/, UNOPTFLAT enabled)
+cd sim && make lint-rtl-all     # all stages
+cd sim && make lint-rtl-s6      # one stage
 
 # Build per-stage simulators (from sim/)
 cd sim && make build-s1   # RV32I

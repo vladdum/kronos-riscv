@@ -578,6 +578,14 @@ module kronos_top
     .trig_csr_wdata_o (trig_csr_wdata)
   );
 
+  // ex_valid_i is intentionally NOT gated by ~combined_stall.  Same loop
+  // pattern as stage 6's u_trigger (closes #89 in stage 5 too):
+  //   combined_stall -> trigger.ex_valid_i -> match_vec -> trig_hit
+  //                  -> ex_redirect -> s1_kill -> instr_fetch_stall
+  //                  -> combined_stall.
+  // Trigger trap is gated downstream in u_csr.trap_i, so widening trig_hit
+  // during stalls is benign (sticky-hit is idempotent).  csr_req_i keeps
+  // the gate — CSR write commits must observe the stall.
   kronos_trigger u_trigger (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
@@ -587,7 +595,7 @@ module kronos_top
     .csr_wdata_i   (trig_csr_wdata),
     .csr_rdata_o   (trig_csr_rdata),
     .csr_match_o   (trig_csr_match),
-    .ex_valid_i    (id_ex_q.valid & ~combined_stall),
+    .ex_valid_i    (id_ex_q.valid),
     .ex_pc_i       (id_ex_q.pc),
     .ex_is_load_i  (id_ex_q.dec.is_load),
     .ex_is_store_i (id_ex_q.dec.is_store),

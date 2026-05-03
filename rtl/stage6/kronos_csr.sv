@@ -473,9 +473,15 @@ module kronos_csr
   // gated.  Counter-en covers both reads and explicit-write attempts (the
   // latter trap on read-only write violations regardless, but the spec gates
   // the access itself).
+  //
+  // Predicate is computed unconditionally (NOT gated by req_i).  The
+  // "is this actually a CSR access?" gate is applied externally on
+  // csr_illegal_o (in kronos_top) using registered id_ex_q signals, so the
+  // gate doesn't drag req_i (and ~combined_stall) into the comb cone of
+  // csr_illegal_o → ex_redirect (closes #89 cycle through the CSR).
   always_comb begin
     counter_access_illegal = 1'b0;
-    if (req_i && (addr_i[11:5] == 7'b1100000)) begin // 0xC00..0xC1F
+    if (addr_i[11:5] == 7'b1100000) begin // 0xC00..0xC1F
       if (priv_q == PRIV_S) begin
         counter_access_illegal = ~mcounteren[addr_i[4:0]];
       end else if (priv_q == PRIV_U) begin
@@ -490,15 +496,15 @@ module kronos_csr
   // CSR address bits [9:8] encode the minimum privilege required to access the
   // CSR.  Any access where priv_q < addr_i[9:8] is illegal-instruction.  The
   // reserved encoding 2'b10 is treated as M-mode for safety.
+  //
+  // Same external-gate pattern as counter_access_illegal: predicate is raw,
+  // gated outside on registered id_ex_q.dec.is_csr.
   always_comb begin
     // Defaults (rule R7).
-    priv_check_fail = 1'b0;
     required_priv   = addr_i[9:8];                   // CSR addr bits [9:8] = min priv
     // Treat reserved 2'b10 same as M for safety.
     min_priv        = (required_priv == 2'b10) ? PRIV_M : priv_e'(required_priv);
-    if (req_i) begin
-      priv_check_fail = (priv_q < min_priv);
-    end
+    priv_check_fail = (priv_q < min_priv);
   end
 
   assign csr_illegal_o = counter_access_illegal | priv_check_fail;
