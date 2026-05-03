@@ -378,7 +378,7 @@ sim-crv-assists: build-s5 sim-crv-cov-build
 	 done
 	@echo "[crv-assists] done"
 
-sim-group-crv-smoke: sim-crv-coverage sim-crv-assists
+sim-group-crv-smoke: sim-crv-coverage sim-crv-assists sim-crv-smoke
 
 .DEFAULT_GOAL := help
 
@@ -795,7 +795,7 @@ SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-
                      sim-icache
 
 SIM_GROUP_S6_INT  := sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-priv-csr sim-pmp sim-tlb sim-ptw \
-                     sim-kronos-ram
+                     sim-kronos-ram sim-dcache-pma-s6 sim-fetch-buffer sim-cosim-putdec
 
 $(OBJ_DIR):
 	mkdir -p $@
@@ -1401,7 +1401,10 @@ sim-arch-test-s6-priv: gen-arch-tests-s6-priv
 	    work/kronos-rv64imafdc-priv/elfs/
 
 # ── Stage 6 unit-TB stubs (T16 fills these in with real TBs) ───────────────
-sim-muldiv-s6 sim-decode-s6 sim-csr-perf-s6 sim-trigger-s6:
+# sim-decode-s6 is no longer a stub — it points at the real 104k-check
+# tb_decode_s6 testbench below.  The remaining three stay as TODO
+# placeholders so SIM_GROUP_S6_INT keeps a stable list.
+sim-muldiv-s6 sim-csr-perf-s6 sim-trigger-s6:
 	@echo "(stub) $@"
 
 # ── Stage 6 ALU unit TB ───────────────────────────────────────────────────
@@ -1426,7 +1429,7 @@ TB_DECODE_S6_FILES := $(AXI_PKG_SV) \
                       $(RTL_DIR)/stage6/kronos_decode.sv \
                       $(TB_DIR)/stage6/kronos_decode_legacy.sv \
                       $(TB_DIR)/stage6/tb_decode_s6.sv
-sim-decode-s6-tb:
+sim-decode-s6:
 	$(VERILATOR) $(WAIVER) --binary -Wall --Wno-UNUSED --Wno-TIMESCALEMOD --Wno-WIDTHEXPAND \
 	  --Wno-VARHIDDEN \
 	  --top-module tb_decode_s6 $(TB_DECODE_S6_FILES) \
