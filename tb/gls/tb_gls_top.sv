@@ -278,6 +278,17 @@ module tb_gls_top;
   logic        halted;
   logic [31:0] halt_code;
 
+  // ── Retire ring buffer (16 deep) ──────────────────────────────────────
+  localparam int RING_DEPTH = 16;
+  logic [63:0] ring_pc    [RING_DEPTH];
+  logic [31:0] ring_instr [RING_DEPTH];
+  // Declaration-init avoids xelab's "multiple procedural drivers" error
+  // that fires when an `initial` block + an `always_ff` both write the var.
+  int          ring_wp = 0;
+
+  // ── Cycle counter ─────────────────────────────────────────────────────
+  longint cycle = 0;
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       halt_retire      <= 1'b0;
@@ -292,14 +303,7 @@ module tb_gls_top;
   assign halted    = halt_axi | halt_retire;
   assign halt_code = halt_axi ? halt_code_axi : halt_code_retire;
 
-  // ── Retire ring buffer (16 deep) ──────────────────────────────────────
-  localparam int RING_DEPTH = 16;
-  logic [63:0] ring_pc    [RING_DEPTH];
-  logic [31:0] ring_instr [RING_DEPTH];
-  // Declaration-init avoids xelab's "multiple procedural drivers" error
-  // that fires when an `initial` block + an `always_ff` both write the var.
-  int          ring_wp = 0;
-
+  // ── Retire ring buffer write ──────────────────────────────────────────
   always_ff @(posedge clk) begin
     if (rst_n && retire_valid) begin
       ring_pc   [ring_wp] <= retire_pc;
@@ -333,7 +337,6 @@ module tb_gls_top;
   end
 
   // ── Cycle counter, timeout, finish ────────────────────────────────────
-  longint cycle = 0;
   always_ff @(posedge clk) cycle <= cycle + 1;
 
   task automatic dump_ring();
