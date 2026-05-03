@@ -799,7 +799,13 @@ module kronos_top
     end else begin
       pred_taken_q  <= pred_taken & align_instr_valid & if_id_en &
                        ~ex_redirect & ~mem_redirect;
-      pred_target_q <= pred_target;
+      // Hold pred_target_q during a redirect cycle.  Otherwise the
+      // wrong-path predecode emit during a redirect-flush cycle can
+      // overwrite pred_target_q with the wrong-path branch's target,
+      // chaining a misdirect.  See stage 6 kronos_top for the full repro.
+      if (~pred_taken_q & ~ex_redirect & ~mem_redirect) begin
+        pred_target_q <= pred_target;
+      end
     end
   end
 
@@ -954,14 +960,27 @@ module kronos_top
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       if_id_q <= '{default: '0};
-    end else if (if_id_flush | pred_taken_q) begin
-      // pred_taken_q fires the cycle AFTER the branch was captured into
-      // if_id_q.  The wrong-path fall-through that predecode is presenting
-      // this cycle must not propagate to ID — clear the IF/ID register so
-      // ID sees a bubble while the IFU resyncs to pred_target_q.  The branch
-      // itself was already captured the prior cycle and is now safely at
-      // if_id_q's output, so id_ex_en will still latch it into ID/EX.
+    end else if (if_id_flush) begin
+      // ex_redirect / mem_redirect / load-use bubble — the branch (or the
+      // load itself in the load-use case) is wrong-path, so always clear.
       if_id_q <= '{default: '0};
+    end else if (pred_taken_q) begin
+      // pred_taken_q fires the cycle AFTER the branch was captured into
+      // if_id_q.  The branch is at if_id_q's output and we want id_ex to
+      // latch it; the wrong-path fall-through that predecode would emit
+      // this cycle must NOT enter if_id_q.  Two cases:
+      //   (a) id_ex_en = 1: id_ex latches the branch this cycle, so we
+      //       can safely clear if_id_q to bubble the wrong-path fetch.
+      //   (b) id_ex_en = 0 (muldiv/mem stall): id_ex cannot accept the
+      //       branch yet.  Clearing if_id_q here would lose the branch
+      //       — closes #86 (mulw → addiw → bne tight-loop wedge).
+      //       Hold if_id_q so id_ex picks up the branch when the stall
+      //       releases.  The wrong-path predecode emit is naturally
+      //       suppressed: `if_id_en` is also 0 under any stall that drops
+      //       id_ex_en, so we don't fall into the latch branch below.
+      if (id_ex_en) begin
+        if_id_q <= '{default: '0};
+      end
     end else if (if_id_en) begin
       if_id_q.pc          <= predecode_instr_pc;
       if_id_q.instr       <= align_instr;

@@ -257,6 +257,104 @@ jobs:
       - name: Run perf-baseline-s6
         run: make -C sim sim-perf-baseline-s6 PULP_AXI_ROOT=/tmp/pulp_axi
 
+  dcache-stress-s6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: dcache-stress-s6
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run dcache-stress-s6
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim sim-dcache-s6-stress PULP_AXI_ROOT=/tmp/pulp_axi
+
+  crv-smoke-s6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: crv-smoke-s6
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Install Sail
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+          sudo tee /usr/local/bin/sail_riscv_sim_timeout > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          exec timeout 60 sail_riscv_sim "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/sail_riscv_sim_timeout
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run crv-smoke-s6
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim sim-crv-smoke-s6 PULP_AXI_ROOT=/tmp/pulp_axi
+
+  cosim-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: cosim-smoke
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Sail config lives under riscv-arch-test/config/kronos/... — same
+          # reason crv-smoke-s6 needs the submodule. Without it, Sail crashes
+          # silently and trace_diff sees an empty Sail trace.
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Install Sail
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+          sudo tee /usr/local/bin/sail_riscv_sim_timeout > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          exec timeout 60 sail_riscv_sim "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/sail_riscv_sim_timeout
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run cosim-smoke
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim sim-cosim-smoke PULP_AXI_ROOT=/tmp/pulp_axi
+
   sim-diff-traced:
     runs-on: ubuntu-latest
     timeout-minutes: 15

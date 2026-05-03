@@ -19,6 +19,7 @@ _SCENARIOS = {
     "fdiv_fsqrt":         "tools.crv.scenarios.fdiv_fsqrt",
     "branch_pred":        "tools.crv.scenarios.branch_pred",
     "traps":              "tools.crv.scenarios.traps",
+    "raw_stress":         "tools.crv.scenarios.raw_stress",
 }
 
 

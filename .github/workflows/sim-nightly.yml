@@ -80,6 +80,208 @@ jobs:
               labels: ['ci-failure', 'crv'],
             });
 
+  dcache-stress-deep-s6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run dcache-stress-deep-s6
+        id: dcache
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim sim-dcache-s6-stress-deep PULP_AXI_ROOT=/tmp/pulp_axi
+
+      - name: Open tracking issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[dcache-stress-deep nightly] failure ${date} (run ${context.runId})`,
+              body: [
+                `Nightly dcache constrained-random stressor (100 seeds × 10k ops) failed.`,
+                ``,
+                `**Run:** https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                ``,
+                `Reproduce locally:`,
+                '```',
+                `  cd ~/kronos-riscv`,
+                `  make -C sim sim-dcache-s6-stress DCACHE_SEED=<failing_seed>`,
+                '```',
+              ].join('\n'),
+              labels: ['ci-failure', 'dcache'],
+            });
+
+  crv-deep-s6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Install Sail
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+          sudo tee /usr/local/bin/sail_riscv_sim_timeout > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          exec timeout 60 sail_riscv_sim "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/sail_riscv_sim_timeout
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run crv-deep-s6
+        id: crv_s6
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim sim-crv-deep-s6 PULP_AXI_ROOT=/tmp/pulp_axi \
+            CRV_SEED_BASE=$(date +%Y%m%d)000
+
+      - name: Upload CRV artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crv-deep-s6-${{ github.run_id }}
+          path: sim/obj_dir/crv/
+          if-no-files-found: ignore
+
+      - name: Open tracking issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[crv-deep-s6 nightly] failure ${date} (run ${context.runId})`,
+              body: [
+                `Nightly Stage-6 CRV-deep regression (8 scenarios × 50 seeds) failed.`,
+                ``,
+                `**Run:** https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                `**Artefacts:** \`crv-deep-s6-${context.runId}\` attached to the run`,
+                ``,
+                `Reproduce locally:`,
+                '```',
+                `  cd ~/kronos-riscv`,
+                `  make -C sim sim-crv-s6-<scenario> CRV_SEED=<failing_seed>`,
+                '```',
+                ``,
+                `Look at the artefact's \`<scenario>_<seed>/\` directory for the .S, traces, and diff.txt.`,
+              ].join('\n'),
+              labels: ['ci-failure', 'crv'],
+            });
+
+  cosim-deep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Sail config lives under riscv-arch-test/ (submodule). Without it,
+          # Sail crashes silently and trace_diff sees an empty Sail trace.
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Install Sail
+        run: |
+          sudo mkdir -p /usr/local
+          curl --location https://github.com/riscv/sail-riscv/releases/download/0.10/sail-riscv-$(uname)-$(arch).tar.gz \
+            | sudo tar xz --directory=/usr/local --strip-components=1
+          sudo tee /usr/local/bin/sail_riscv_sim_timeout > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          exec timeout 60 sail_riscv_sim "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/sail_riscv_sim_timeout
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Run cosim-deep
+        id: cosim
+        run: |
+          mkdir -p sim/obj_dir
+          make -C sim sim-cosim-deep PULP_AXI_ROOT=/tmp/pulp_axi
+
+      - name: Upload cosim artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosim-deep-${{ github.run_id }}
+          path: sim/obj_dir/cosim_fuzz/
+          if-no-files-found: ignore
+
+      - name: Open tracking issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[cosim-deep nightly] failure ${date} (run ${context.runId})`,
+              body: [
+                `Nightly cosim fuzzer (13 programs × 50 mutations) failed.`,
+                ``,
+                `**Run:** https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                `**Artefacts:** \`cosim-deep-${context.runId}\` attached to the run`,
+                ``,
+                `Find the failing program/seed in the log (look for \`[cosim_fuzz] FAIL\`),`,
+                `then reproduce that single case:`,
+                '```',
+                `  cd ~/kronos-riscv`,
+                `  PYTHONPATH=. python3 -m tools.cosim_fuzz.runner \\`,
+                `    --program sw/cosim/<failing_prog>.c --seed <failing_seed> \\`,
+                `    --out-dir sim/obj_dir/cosim_fuzz \\`,
+                `    --kronos-bin sim/obj_dir/s6/Vsim_top \\`,
+                `    --sail-trace-script tools/sail_trace.sh \\`,
+                `    --diff-script tools/trace_diff.py`,
+                '```',
+              ].join('\n'),
+              labels: ['ci-failure', 'cosim'],
+            });
+
   compliance-s6-priv:
     runs-on: ubuntu-latest
     timeout-minutes: 60

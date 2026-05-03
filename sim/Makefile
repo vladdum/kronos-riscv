@@ -129,6 +129,7 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-group-crv-smoke \
         sim-diff-% sim-diff-all sim-diff-s5-traced \
         sim-crv-% sim-crv-smoke sim-crv-deep \
+        sim-crv-s6-% sim-crv-smoke-s6 sim-crv-deep-s6 \
         sim-crv-cov-build sim-crv-coverage \
         sim-crv-assists
 
@@ -193,7 +194,7 @@ sim-diff-s5-traced: build-s5
 # ---------------------------------------------------------------------------
 CRV_DIR        := $(OBJ_DIR)/crv
 CRV_SCENARIOS  := int_hazards muldiv_interleave mem_ordering fp_arith \
-                  fdiv_fsqrt branch_pred traps
+                  fdiv_fsqrt branch_pred traps raw_stress
 CRV_SEED       ?= 0
 CRV_LENGTH     ?= 200
 CRV_SEED_BASE  ?= 0
@@ -245,6 +246,51 @@ sim-crv-deep: build-s5
 	   done; \
 	 done; \
 	 [ "$$fail" = "0" ] && echo "PASS  sim-crv-deep ($(CRV_SCENARIOS) × 50 seeds)"; \
+	 exit $$fail
+
+# ---- Stage 6 CRV (issue #82 verification overhaul) ----
+CRV_KRONOS_BIN_S6 = $(SIM_BIN_S6)
+
+sim-crv-s6-%: build-s6
+	@mkdir -p $(CRV_DIR)
+	@$(CRV_RUNNER) \
+	  --scenario $* \
+	  --seed $(CRV_SEED) --length $(CRV_LENGTH) \
+	  --build-dir $(CRV_DIR) \
+	  --kronos-bin $(CRV_KRONOS_BIN_S6) \
+	  --link-script $(CRV_LINK) \
+	  --common-s $(CRV_COMMON_S) \
+	  --sail-trace-script $(CRV_SAIL_SH) \
+	  --diff-script $(CRV_DIFF_PY) \
+	  && echo "PASS  sim-crv-s6-$*  (seed=$(CRV_SEED) length=$(CRV_LENGTH))" \
+	  || { echo "FAIL  sim-crv-s6-$*  (seed=$(CRV_SEED))"; exit 1; }
+
+sim-crv-smoke-s6: build-s6
+	@mkdir -p $(CRV_DIR)
+	@fail=0; \
+	 for sc in $(CRV_SCENARIOS); do \
+	   $(CRV_RUNNER) --scenario $$sc --seed 0 --length $(CRV_LENGTH) \
+	     --build-dir $(CRV_DIR) --kronos-bin $(CRV_KRONOS_BIN_S6) \
+	     --link-script $(CRV_LINK) --common-s $(CRV_COMMON_S) \
+	     --sail-trace-script $(CRV_SAIL_SH) --diff-script $(CRV_DIFF_PY) \
+	     && echo "PASS  sim-crv-s6-$$sc-smoke" \
+	     || { echo "FAIL  sim-crv-s6-$$sc-smoke"; fail=1; }; \
+	 done; exit $$fail
+
+sim-crv-deep-s6: build-s6
+	@mkdir -p $(CRV_DIR)
+	@fail=0; \
+	 for i in $$(seq 0 49); do \
+	   for sc in $(CRV_SCENARIOS); do \
+	     seed=$$(($(CRV_SEED_BASE) + $$i)); \
+	     $(CRV_RUNNER) --scenario $$sc --seed $$seed --length $(CRV_LENGTH) \
+	       --build-dir $(CRV_DIR) --kronos-bin $(CRV_KRONOS_BIN_S6) \
+	       --link-script $(CRV_LINK) --common-s $(CRV_COMMON_S) \
+	       --sail-trace-script $(CRV_SAIL_SH) --diff-script $(CRV_DIFF_PY) \
+	       || { echo "FAIL  sim-crv-s6-$$sc seed=$$seed"; fail=1; }; \
+	   done; \
+	 done; \
+	 [ "$$fail" = "0" ] && echo "PASS  sim-crv-deep-s6 ($(CRV_SCENARIOS) × 50 seeds)"; \
 	 exit $$fail
 
 # ---------------------------------------------------------------------------
@@ -1110,6 +1156,64 @@ sim-s6b: build-s6
 
 .PHONY: sim-s6b run-s6b-%
 
+# ── Cosim: putdec_stack regression smoke (issue #82 reproducer) ──────────────
+# Standalone Verilator: bypass works → emits "12345". Guards regression of the
+# bypass. The same program failing in OpenSoC is environment-specific (xpm).
+.PHONY: sim-cosim-putdec
+sim-cosim-putdec: build-s6
+	@$(MAKE) -C ../sw/cosim build/putdec_stack.hex >/dev/null
+	@out=$$(timeout 30 ./$(SIM_BIN_S6) ../sw/cosim/build/putdec_stack.hex 2>&1); \
+	 x10=$$(echo "$$out" | grep -oP 'x10 = \K[0-9]+'); \
+	 prefix=$$(echo "$$out" | sed -n '1,/x10 = /p'); \
+	 if [ "$$x10" = "0" ] && echo "$$prefix" | grep -q '12345'; then \
+	   echo "PASS  sim-cosim-putdec  (emitted 12345)"; \
+	 else \
+	   echo "FAIL  sim-cosim-putdec  (x10=$$x10  prefix did not contain 12345)"; \
+	   echo "--- captured output ---"; echo "$$out" | tail -30; exit 1; \
+	 fi
+
+# ── Cosim fuzzer: source-level mutational fuzzer (Phase 4) ───────────────────
+COSIM_FUZZ_RUNNER := PYTHONPATH=.. python3 -m tools.cosim_fuzz.runner
+COSIM_FUZZ_OUT    := $(OBJ_DIR)/cosim_fuzz
+COSIM_PROGRAMS    := $(notdir $(wildcard ../sw/cosim/*.c))
+
+.PHONY: sim-cosim-smoke sim-cosim-deep
+sim-cosim-smoke: build-s6
+	@$(MAKE) -C ../sw/cosim >/dev/null
+	@mkdir -p $(COSIM_FUZZ_OUT)
+	@fail=0; \
+	 for p in $(COSIM_PROGRAMS); do \
+	   $(COSIM_FUZZ_RUNNER) \
+	     --program ../sw/cosim/$$p --seed 0 \
+	     --out-dir $(COSIM_FUZZ_OUT) \
+	     --kronos-bin $(SIM_BIN_S6) \
+	     --sail-trace-script ../tools/sail_trace.sh \
+	     --diff-script ../tools/trace_diff.py \
+	     --common-s ../sw/cosim/cosim_common.S \
+	     --link-ld ../sw/stage0/link.ld \
+	   || { echo "FAIL  sim-cosim-smoke $$p seed=0"; fail=1; }; \
+	 done; \
+	 [ "$$fail" = "0" ] && echo "PASS  sim-cosim-smoke ($$(echo $(COSIM_PROGRAMS) | wc -w) programs)" || exit 1
+
+sim-cosim-deep: build-s6
+	@$(MAKE) -C ../sw/cosim >/dev/null
+	@mkdir -p $(COSIM_FUZZ_OUT)
+	@fail=0; \
+	 for s in $$(seq 0 49); do \
+	   for p in $(COSIM_PROGRAMS); do \
+	     $(COSIM_FUZZ_RUNNER) \
+	       --program ../sw/cosim/$$p --seed $$s \
+	       --out-dir $(COSIM_FUZZ_OUT) \
+	       --kronos-bin $(SIM_BIN_S6) \
+	       --sail-trace-script ../tools/sail_trace.sh \
+	       --diff-script ../tools/trace_diff.py \
+	       --common-s ../sw/cosim/cosim_common.S \
+	       --link-ld ../sw/stage0/link.ld \
+	     || { echo "FAIL  sim-cosim-deep $$p seed=$$s"; fail=1; }; \
+	   done; \
+	 done; \
+	 [ "$$fail" = "0" ] && echo "PASS  sim-cosim-deep ($$(echo $(COSIM_PROGRAMS) | wc -w) progs × 50 seeds)" || exit 1
+
 # ---------------------------------------------------------------------------
 # Stage 6c — perf baseline (dhrystone, ±2% gate, main-only via mcycle markers)
 # ---------------------------------------------------------------------------
@@ -1504,11 +1608,49 @@ sim-dcache-pma-s6:
 TB_DCACHE_S6_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                       $(RTL_DIR_COMMON)/kronos_ram.sv \
                       $(RTL_DIR)/stage6/kronos_dcache.sv \
+                      $(TB_DIR)/stage6/dcache_scoreboard.sv \
                       $(TB_DIR)/stage6/tb_dcache.sv
-sim-dcache-s6:
+build-dcache-s6:
 	$(VERILATOR) $(WAIVER) --binary $(AXI_FLAGS) --Wno-TIMESCALEMOD -Wno-UNUSED \
 	  -Mdir $(OBJ_DIR)/dcache_s6 --top-module tb_dcache $(TB_DCACHE_S6_FILES)
+
+sim-dcache-s6: build-dcache-s6
 	$(OBJ_DIR)/dcache_s6/Vtb_dcache
+
+# ── ci-local: run the PR-blocking gates locally with the same toolchain CI uses
+# Forces /usr/bin/riscv64-unknown-elf-gcc (apt-installed gcc-13.2) instead of
+# whichever gcc happens to be first on PATH locally.  Catches CI-environment-
+# specific failures BEFORE pushing.  Documented in CLAUDE.md as the required
+# pre-push check.
+.PHONY: ci-local
+ci-local:
+	@if [ ! -x /usr/bin/riscv64-unknown-elf-gcc ]; then \
+	  echo "FAIL  ci-local: /usr/bin/riscv64-unknown-elf-gcc not installed (apt install gcc-riscv64-unknown-elf)"; exit 1; \
+	fi
+	@echo "[ci-local] Using $$(/usr/bin/riscv64-unknown-elf-gcc --version | head -1)"
+	@PATH=/usr/bin:$$PATH $(MAKE) sim-cosim-smoke || { echo "FAIL  ci-local: sim-cosim-smoke"; exit 1; }
+	@PATH=/usr/bin:$$PATH $(MAKE) sim-crv-smoke-s6 || { echo "FAIL  ci-local: sim-crv-smoke-s6"; exit 1; }
+	@$(MAKE) sim-dcache-s6-stress || { echo "FAIL  ci-local: sim-dcache-s6-stress"; exit 1; }
+	@$(MAKE) sim-s6 || { echo "FAIL  ci-local: sim-s6"; exit 1; }
+	@$(MAKE) sim-arch-test-s6 || { echo "FAIL  ci-local: sim-arch-test-s6"; exit 1; }
+	@echo "PASS  ci-local"
+
+.PHONY: sim-dcache-s6-stress sim-dcache-s6-stress-deep
+DCACHE_SEED ?= 0
+sim-dcache-s6-stress: build-dcache-s6
+	@out=$$(./$(OBJ_DIR)/dcache_s6/Vtb_dcache +seed=$(DCACHE_SEED) 2>&1); \
+	 echo "$$out" | grep -E '(PASS|FAIL) test_raw_random' || true; \
+	 echo "$$out" | grep -q 'PASS test_raw_random' \
+	  && echo "PASS  sim-dcache-s6-stress (seed=$(DCACHE_SEED))" \
+	  || { echo "FAIL  sim-dcache-s6-stress (seed=$(DCACHE_SEED))"; echo "$$out" | tail -20; exit 1; }
+
+sim-dcache-s6-stress-deep: build-dcache-s6
+	@fail=0; \
+	for s in $$(seq 0 99); do \
+	  ./$(OBJ_DIR)/dcache_s6/Vtb_dcache +seed=$$s 2>&1 | grep -q 'PASS test_raw_random' \
+	    || { echo "FAIL seed=$$s"; fail=1; }; \
+	done; \
+	[ "$$fail" = "0" ] && echo "PASS  sim-dcache-s6-stress-deep (seeds 0..99)" || exit 1
 
 TB_FPU_SB_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
                    $(RTL_DIR)/common/fpu/kronos_fpu_scoreboard.sv \
