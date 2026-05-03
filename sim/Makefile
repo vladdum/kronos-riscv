@@ -791,7 +791,8 @@ SIM_GROUP_FP_UNIT := sim-pkg-fp sim-hf-smoke sim-sf-smoke \
 
 SIM_GROUP_FP_TOP  := sim-fpu-iter sim-fpu-top sim-fpu-top-iter sim-s5
 
-SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger
+SIM_GROUP_S5_INT  := sim-alu-s5 sim-muldiv-s5 sim-decode-s5 sim-csr-perf-s5 sim-trigger \
+                     sim-icache
 
 SIM_GROUP_S6_INT  := sim-alu-s6 sim-muldiv-s6 sim-decode-s6 sim-priv-csr sim-pmp sim-tlb sim-ptw \
                      sim-kronos-ram
@@ -1624,6 +1625,7 @@ sim-priv-csr:
 	$(OBJ_DIR)/priv_csr/Vtb_priv_csr
 
 TB_ICACHE_FILES := $(AXI_PKG_SV) $(RTL_DIR)/kronos_pkg.sv \
+                   $(RTL_DIR)/common/kronos_ram.sv \
                    $(RTL_DIR)/stage5/kronos_icache.sv \
                    $(TB_DIR)/stage5/tb_icache.sv
 sim-icache:
