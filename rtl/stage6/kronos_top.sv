@@ -140,6 +140,14 @@ module kronos_top
   // address snapshot keeps trap_tval pointing at the offending fetch VA.
   logic              pmp_s1_fetch_fault_q;
   logic [55:0]       pmp_s1_fetch_fault_addr_q;
+  // Registered data-side PMP fault.  The combinational
+  // pmp_data_fault_raw → pmp_data_fault → DTLB FSM next-state →
+  // dcache_req → PTW state → mem_wb_q.lsu_rdata write cone caps Fmax at
+  // ~65 MHz on KV260 (issue #97).  Flopping the gated comparator output
+  // breaks the cone after PMP and keeps the trap-fired-one-cycle-later
+  // behaviour symmetric with the registered fetch-side PMP path.
+  logic              pmp_s1_data_fault_q;
+  logic [55:0]       pmp_s1_data_fault_addr_q;
   logic              itlb_s1_perm_fail_q;
   // pc_q snapshot taken alongside itlb_s1_perm_fail_q so trap_tval for the
   // registered iTLB perm-fail arm reads the same pc_q value the pre-flop
@@ -727,7 +735,12 @@ module kronos_top
                     pmp_fetch_fault | pmp_data_fault |
                     ex_amo_nc_fault | dcache_bus_err_fault |
                     instr_page_fault | load_page_fault | store_page_fault),
-    .trap_pc_i     (id_ex_q.pc),
+    // pmp_s1_data_fault_q's offending LSU has advanced into ex_mem_q at
+    // the trap-firing cycle (registered fault path, #97); use ex_mem_q.pc
+    // for mepc.  All other trap sources (csr/ecall/ebreak/illegal/
+    // instr_page_fault/pmp_fetch_fault/load+store_page_fault/ex_amo_nc/
+    // dcache_bus_err) keep their existing id_ex_q.pc convention.
+    .trap_pc_i     (pmp_s1_data_fault_q ? ex_mem_q.pc : id_ex_q.pc),
     .trap_cause_i  (trap_cause),
     .trap_tval_i   (trap_tval),
     .mret_i        (id_ex_q.valid & ~combined_stall &
@@ -934,8 +947,27 @@ module kronos_top
     .fault_addr_o (pmp_data_fault_addr_raw)
   );
 
-  assign pmp_data_fault      = pmp_data_fault_raw & pmp_any_active;
-  assign pmp_data_fault_addr = pmp_data_fault_addr_raw;
+  // Issue #97 — pmp_data_fault back-edge cut.  The synth report on KV260
+  // shows pmp_data_fault_raw → pmp_data_fault → DTLB FSM → dcache_req
+  // → PTW state → mem_wb_q.lsu_rdata as a single 35-logic-level cone with
+  // the ~110-bit PMP region-match comparator dominating the levels.  Flop
+  // the gated output and the address snapshot; downstream consumers
+  // (LSU's pmp_fault_i, dcache_early_req_valid, trap_i / trap_cause /
+  // trap_tval) read the registered version.  trap timing shifts by one
+  // cycle on faulting load/store, matching the existing convention for
+  // dcache_bus_err_fault (also a MEM-stage fault read off id_ex_q.pc).
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      pmp_s1_data_fault_q      <= 1'b0;
+      pmp_s1_data_fault_addr_q <= 56'h0;
+    end else begin
+      pmp_s1_data_fault_q      <= pmp_data_fault_raw & pmp_any_active;
+      pmp_s1_data_fault_addr_q <= pmp_data_fault_addr_raw;
+    end
+  end
+
+  assign pmp_data_fault      = pmp_s1_data_fault_q;
+  assign pmp_data_fault_addr = pmp_s1_data_fault_addr_q;
 
   // PMA AMO-on-NC trap detection at EX stage (PMP-style).
   // The dcache also exports amo_nc_fault_o, but that fires at MEM stage —
@@ -1858,15 +1890,24 @@ module kronos_top
       trap_cause = {27'b0, kronos_pkg::CAUSE_INSTR_ACCESS_FAULT};       // 1
     end else if (load_page_fault) begin
       trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_PAGE_FAULT};          // 13
-    end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_load) begin
-      // EX-stage data access faults: id_ex_q is the offending instruction.
-      // is_load covers plain LW/LD and LR (LR sets is_amo & is_load).
+    end else if (pmp_s1_data_fault_q & ex_mem_q.dec.is_load) begin
+      // pmp_data_fault is registered (#97).  At trap-firing cycle the
+      // offending LSU has advanced into ex_mem_q.  is_load covers plain
+      // LW/LD and LR (LR sets is_amo & is_load).
+      trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};        // 5
+    end else if (ex_amo_nc_fault & id_ex_q.dec.is_load) begin
+      // PMA AMO-on-NC fires combinationally at EX; offender is in id_ex_q.
       trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};        // 5
     end else if (store_page_fault) begin
       trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_PAGE_FAULT};         // 15
-    end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_store) begin
+    end else if (pmp_s1_data_fault_q & ex_mem_q.dec.is_store) begin
       trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};       // 7
-    end else if ((pmp_data_fault | ex_amo_nc_fault) & id_ex_q.dec.is_amo) begin
+    end else if (ex_amo_nc_fault & id_ex_q.dec.is_store) begin
+      trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};       // 7
+    end else if (pmp_s1_data_fault_q & ex_mem_q.dec.is_amo) begin
+      // AMO/SC violation in MEM stage: report as STORE access fault.
+      trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
+    end else if (ex_amo_nc_fault & id_ex_q.dec.is_amo) begin
       // AMO/SC violation: report as STORE access fault (priv-spec).
       trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
     end else if (dcache_bus_err_fault & ex_mem_q.dec.is_load) begin
