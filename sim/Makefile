@@ -1113,6 +1113,72 @@ $(SIM_BIN_S6): $(SV_FILES_S6) $(abspath sim_main.cpp)
 	  $(PULP_AXI_INC) \
 	  -o V$(TOP_S5)
 
+# -------------------- Stage 7a (BOOM-style fault-bit propagation + EX1/EX2 split) --------------------
+# Same RV64IMAFDC ISA + S-mode + PMP + Sv39/Sv48 as Stage 6, but with a
+# restructured pipeline (EX1/EX2 split, registered fault propagation).  See
+# docs/superpowers/specs/2026-05-05-stage7a-fault-bits-ex-split-design.md.
+RTL_DIR_S7 := $(RTL_DIR)/stage7
+SIM_BIN_S7A := $(OBJ_DIR)/s7a/V$(TOP_S5)
+SW_DIR_S7A := ../sw/stage7a
+
+SV_FILES_S7A := $(AXI_PKG_SV) \
+                $(RTL_DIR)/kronos_pkg.sv \
+                $(RTL_DIR_COMMON)/kronos_ram.sv \
+                $(RTL_DIR_COMMON)/kronos_alu.sv \
+                $(RTL_DIR_S7)/kronos_decode.sv \
+                $(RTL_DIR_S7)/kronos_decode_int.sv \
+                $(RTL_DIR_S7)/kronos_decode_ctrl.sv \
+                $(RTL_DIR_S7)/kronos_decode_mem.sv \
+                $(RTL_DIR_S7)/kronos_decode_sys.sv \
+                $(RTL_DIR_S7)/kronos_decode_fp.sv \
+                $(RTL_DIR)/stage0/kronos_regfile.sv \
+                $(RTL_DIR_S7)/kronos_icache.sv \
+                $(RTL_DIR_S7)/kronos_csr.sv \
+                $(RTL_DIR_S7)/kronos_pmp.sv \
+                $(RTL_DIR_S7)/kronos_tlb.sv \
+                $(RTL_DIR_S7)/kronos_ptw.sv \
+                $(RTL_DIR_COMMON)/kronos_trigger.sv \
+                $(RTL_DIR_S7)/kronos_lsu.sv \
+                $(RTL_DIR_S7)/kronos_dcache.sv \
+                $(RTL_DIR_S7)/kronos_forward.sv \
+                $(RTL_DIR_S7)/kronos_hazard.sv \
+                $(RTL_DIR_COMMON)/kronos_muldiv.sv \
+                $(RTL_DIR_COMMON)/kronos_decompress.sv \
+                $(RTL_DIR_COMMON)/kronos_predecode.sv \
+                $(RTL_DIR_COMMON)/kronos_fetch_buffer.sv \
+                $(RTL_DIR)/common/kronos_bpred.sv \
+                $(RTL_DIR_S7)/kronos_top.sv \
+                sim_top.sv \
+                $(RTL_DIR_COMMON)/kronos_regfile_fp.sv \
+                $(HARDFLOAT_V) \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_scoreboard.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_fmisc.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_fcvt.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_fadd.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_fmul.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_fma.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_fdiv_core.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_fsqrt_core.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_iter.sv \
+                $(RTL_DIR_COMMON)/fpu/kronos_fpu_top.sv
+
+build-s7a: $(SIM_BIN_S7A)
+
+$(SIM_BIN_S7A): $(SV_FILES_S7A) $(abspath sim_main.cpp)
+	mkdir -p $(OBJ_DIR)/s7a
+	$(VERILATOR) $(WAIVER) --cc --exe --build -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY \
+	  --trace --public-flat-rw \
+	  --top-module $(TOP_S5) \
+	  $(SV_FILES_S7A) $(abspath sim_main.cpp) \
+	  -CFLAGS "$(CFLAGS) -DKRONOS_HAS_FPU -DKRONOS_HAS_S6_PRIV" \
+	  -Mdir $(OBJ_DIR)/s7a \
+	  $(PULP_AXI_INC) \
+	  -o V$(TOP_S5)
+
+run-s7a-%: build-s7a
+	$(MAKE) -C $(SW_DIR_S7A) build/$*.hex
+	./$(SIM_BIN_S7A) $(SW_DIR_S7A)/build/$*.hex
+
 # ── Lint: kronos RTL only, with UNOPTFLAT enabled. ────────────────────────────
 # Detects RTL combinational loops (closes #89 detection gap).  Lints the
 # kronos top directly — sim_top.sv (Verilator wrapper for stages 3-6) and the
@@ -1128,10 +1194,11 @@ SV_FILES_S3_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S3)
 SV_FILES_S4_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S4))
 SV_FILES_S5_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S5))
 SV_FILES_S6_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S6))
+SV_FILES_S7A_LINT := $(filter-out $(abspath sim_top.sv) sim_top.sv,$(SV_FILES_S7A))
 
 LINT_FLAGS := -Wall --Wno-UNUSED --Wno-WIDTHEXPAND --Wno-PINCONNECTEMPTY
 
-.PHONY: lint-rtl-s0 lint-rtl-s1 lint-rtl-s2 lint-rtl-s3 lint-rtl-s4 lint-rtl-s5 lint-rtl-s6 lint-rtl-all
+.PHONY: lint-rtl-s0 lint-rtl-s1 lint-rtl-s2 lint-rtl-s3 lint-rtl-s4 lint-rtl-s5 lint-rtl-s6 lint-rtl-s7a lint-rtl-all
 
 lint-rtl-s0:
 	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S0_LINT) $(PULP_AXI_INC)
@@ -1154,7 +1221,10 @@ lint-rtl-s5:
 lint-rtl-s6:
 	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S6_LINT) $(PULP_AXI_INC)
 
-lint-rtl-all: lint-rtl-s0 lint-rtl-s1 lint-rtl-s2 lint-rtl-s3 lint-rtl-s4 lint-rtl-s5 lint-rtl-s6
+lint-rtl-s7a:
+	$(VERILATOR) $(WAIVER) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(SV_FILES_S7A_LINT) $(PULP_AXI_INC)
+
+lint-rtl-all: lint-rtl-s0 lint-rtl-s1 lint-rtl-s2 lint-rtl-s3 lint-rtl-s4 lint-rtl-s5 lint-rtl-s6 lint-rtl-s7a
 
 run-s6-%: build-s6
 	./$(SIM_BIN_S6) $(SW_DIR_S6)/build/$*.hex

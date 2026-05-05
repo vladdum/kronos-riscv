@@ -257,13 +257,60 @@ package kronos_pkg;
   } decoded_instr_t;
 
   // -------------------------------------------------------------------------
-  // Stage 1: forwarding and pipeline register types
+  // Stage 7a — fault propagation contract.
+  //
+  // Each fault source produces exactly one bit; the bit is registered into the
+  // next pipeline register before any consumer reads it.  No combinational
+  // path crosses two modules.  Redirect formation is a single OR per redirect
+  // class: ex_redirect_d at EX2 (direction mispredict only), mem_redirect_d
+  // at MEM (everything else).  See
+  // docs/superpowers/specs/2026-05-05-stage7a-fault-bits-ex-split-design.md
+  // section 3 for the producer-stage write contract.
+  // -------------------------------------------------------------------------
+  typedef struct packed {
+    // ID-stage producers
+    logic ecall;
+    logic ebreak;
+    logic illegal;
+    logic is_mret;
+    logic is_sret;
+    // EX1-stage producers
+    logic csr_illegal;
+    logic mret_priv_fail;
+    logic sret_priv_fail;
+    logic satp_tvm_fail;
+    logic wfi_priv_fail;
+    logic irq_pending;
+    logic bpred_dir_mispredict;
+    // EX2-stage producers
+    logic pmp_fetch_fault;
+    logic pmp_data_fault;
+    logic ex_amo_nc_fault;
+    logic trig_hit;
+    // MEM-stage producers
+    logic instr_page_fault;
+    logic load_page_fault;
+    logic store_page_fault;
+    logic bpred_target_mispredict;
+    logic dcache_bus_err_fault;
+  } fault_t;
+
+  localparam fault_t FAULT_ZERO = '{default: '0};
+
+  // -------------------------------------------------------------------------
+  // Stage 1 / Stage 7a: forwarding and pipeline register types
   // -------------------------------------------------------------------------
 
-  typedef enum logic [1:0] {
-    FWD_NONE  = 2'd0,   // use register-file value
-    FWD_EXMEM = 2'd1,   // forward from EX/MEM alu_result
-    FWD_MEMWB = 2'd2    // forward from WB mux output
+  // Stage 7a — fwd_sel_e widened from 2 bits to 3 bits to add the EX1→EX2
+  // forwarding source (ex1_ex2_q.alu_result, one cycle ahead of EXMEM).
+  // FWD_EXMEM and FWD_MEMWB keep their pre-Stage-7a semantics (1- and 2-stage
+  // ahead of ID under the Stage 7a renames: ex2_mem_q and mem_wb_q
+  // respectively).
+  typedef enum logic [2:0] {
+    FWD_NONE  = 3'd0,   // use register-file value
+    FWD_EX1   = 3'd1,   // Stage 7a — forward from ex1_ex2_q.alu_result
+    FWD_EXMEM = 3'd2,   // forward from EX/MEM alu_result (ex2_mem_q post-7a)
+    FWD_MEMWB = 3'd3    // forward from WB mux output
   } fwd_sel_e;
 
   // -------------------------------------------------------------------------
@@ -303,7 +350,32 @@ package kronos_pkg;
     // Retire-trace: original 32-bit instruction word (already expanded from
     // the C-extension alignment unit, so this is the fully-expanded form).
     logic [31:0] instr;
+    // Stage 7a — registered fault bits.  ID-stage producers populate ecall /
+    // ebreak / illegal / is_mret / is_sret; the rest stay '0 until later
+    // stages OR-fold their bits in at the next pipeline boundary.
+    fault_t      fault;
   } id_ex_reg_t;
+
+  // Stage 7a — pipeline register between EX1 and EX2.  Carries the registered
+  // ALU result + AGU output + branch-direction so EX2 can aggregate faults
+  // and form the direction-mispredict redirect from registered bits only.
+  typedef struct packed {
+    logic [31:0]    pc;
+    decoded_instr_t dec;
+    logic [63:0]    rs2_data;       // forwarded for stores / CSR
+    logic [63:0]    alu_result;     // EX1 output (ALU/AGU)
+    logic [31:0]    eff_va;         // EX1 effective VA for loads/stores/AMO
+    logic [31:0]    ex_pc_d;        // EX1 next-PC (redirect target on mispredict / trap)
+    logic           branch_taken;   // EX1 branch direction
+    logic [63:0]    csr_rdata;      // EX1 CSR read snapshot
+    logic [63:0]    csr_wdata;      // EX1 CSR write source (rs1)
+    logic           valid;
+    logic           is_16b;
+    logic           pred_taken;
+    logic [31:0]    pred_target;
+    logic [31:0]    instr;
+    fault_t         fault;
+  } ex1_ex2_reg_t;
 
   typedef struct packed {
     logic [31:0]    pc;
@@ -312,7 +384,7 @@ package kronos_pkg;
     logic [63:0]    rs2_data;
     logic [31:0]    pc_d;
     logic [63:0]    csr_rdata;
-    logic           redirect;
+    logic           redirect;    // Stage 6 — kept for backward compat; unused in Stage 7a.
     logic           valid;
     // Stage 3+
     logic           is_16b;      // needed so WB computes correct pc4 link address
@@ -322,6 +394,10 @@ package kronos_pkg;
     // into kronos_csr (snapshot of the CSR write source operand).
     logic [31:0]    instr;
     logic [63:0]    csr_wdata;
+    // Stage 7a — registered fault bits.  Stage 7a forms mem_redirect_d
+    // from these + MEM-cycle producers; Stage 6 leaves this field at '0
+    // and continues using the older `redirect` field above.
+    fault_t         fault;
   } ex_mem_reg_t;
 
   typedef struct packed {
@@ -340,6 +416,8 @@ package kronos_pkg;
     logic [63:0]    mem_addr;    // ex_mem_q.alu_result at MEM (store addr)
     logic [63:0]    mem_wdata;   // ex_mem_q.rs2_data at MEM (store data)
     logic [63:0]    csr_wdata;   // rs1 data presented to kronos_csr at EX
+    // Stage 7a — full registered fault aggregate at retire.
+    fault_t         fault;
   } mem_wb_reg_t;
 
   // -------------------------------------------------------------------------
