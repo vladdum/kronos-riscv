@@ -284,6 +284,40 @@ jobs:
       - name: Run perf-baseline-s6
         run: make -C sim sim-perf-baseline-s6 PULP_AXI_ROOT=/tmp/pulp_axi
 
+  compliance-cycle-diff-s7b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: compliance-cycle-diff-s7b
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need ef7378e (stage7a baseline) in history
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Build dhrystone hex
+        run: make -C sw/perf/dhrystone all
+
+      - name: Cycle-diff vs stage7a baseline (ef7378e), budget +5%
+        env:
+          PULP_AXI_ROOT: /tmp/pulp_axi
+        run: |
+          python3 tools/cycle_diff.py \
+            --baseline-commit ef7378e \
+            --prog sw/perf/dhrystone/build/dhrystone.hex \
+            --max-delta 0.05 \
+            --ignore-x10
+
   dcache-stress-s6:
     runs-on: ubuntu-latest
     timeout-minutes: 10

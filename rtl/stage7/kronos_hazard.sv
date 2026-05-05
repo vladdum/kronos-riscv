@@ -3,177 +3,182 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // kronos_hazard.sv — pipeline stall and flush control unit
-// Priority (highest first): MEM/FPU/fetch stall > load-use / JALR-fwd / FRM-hazard
-//                           > EX/MEM redirect > muldiv stall > normal.
+// Pipeline: IF -> ID -> RR -> EX1 -> EX2 -> MEM -> WB.
+// Priority (highest first): MEM/FPU/fetch stall > load-use / JALR-fwd /
+//                           FRM / CSR-RAW > EX/MEM redirect > muldiv stall
+//                           > normal advance.
 // Redirect out-ranks muldiv_stall so a wrong-path MUL can't block a flush.
 // Flush overrides enable: when both asserted, the register is cleared.
 module kronos_hazard
   import kronos_pkg::*;
 (
-  // Load-use detection inputs — EX1 producer (id_ex1_q in Stage 7a).
-  input  logic       id_ex_is_load_i,
-  input  logic [4:0] id_ex_rd_i,
-  input  logic       id_ex_valid_i,
-  // Stage 7a — second load-use source: a load in EX2 (ex1_ex2_q) is still
-  // one cycle away from having data available at the consumer's EX1 read.
-  // Adding this widens the load-use stall to two cycles total.
+  // Producer in RR (id_rr_q).
+  input  logic       id_rr_is_load_i,
+  input  logic       id_rr_is_fp_load_i,
+  input  logic       id_rr_is_csr_i,
+  input  logic [4:0] id_rr_rd_i,
+  input  logic       id_rr_valid_i,
+  // Producer in EX1 (rr_ex1_q).
+  input  logic       rr_ex1_is_load_i,
+  input  logic       rr_ex1_is_fp_load_i,
+  input  logic       rr_ex1_is_csr_i,
+  input  logic       rr_ex1_is_frm_write_i,
+  input  logic [4:0] rr_ex1_rd_i,
+  input  logic       rr_ex1_valid_i,
+  // Producer in EX2 (ex1_ex2_q).
   input  logic       ex1_ex2_is_load_i,
   input  logic       ex1_ex2_is_fp_load_i,
+  input  logic       ex1_ex2_is_csr_i,
   input  logic [4:0] ex1_ex2_rd_i,
+  input  logic       ex1_ex2_rd_wen_i,
   input  logic       ex1_ex2_valid_i,
-  // ID-stage register addresses (for load-use check)
+  // Producer in MEM (ex2_mem_q) — for JALR-fwd and CSR-RAW.
+  input  logic [4:0] ex_mem_rd_i,
+  input  logic       ex_mem_rd_wen_i,
+  input  logic       ex_mem_valid_i,
+  input  logic       ex_mem_is_csr_i,
+  // ID-stage register addresses.
   input  logic       if_id_rs1_used_i,
   input  logic [4:0] if_id_rs1_i,
   input  logic       if_id_rs2_used_i,
   input  logic [4:0] if_id_rs2_i,
-  // FP load-use detection (stage5+; tie to 0 in earlier stages)
-  input  logic       id_ex_is_fp_load_i,
   input  logic       if_id_rs1_fp_i,
   input  logic       if_id_rs2_fp_i,
   input  logic       if_id_rs3_fp_i,
   input  logic [4:0] if_id_rs3_i,
-  // JALR-forward stall: JALR in ID with rs1 matching MEM-stage producer
   input  logic       if_id_is_jalr_i,
-  input  logic [4:0] ex_mem_rd_i,
-  input  logic       ex_mem_rd_wen_i,
-  input  logic       ex_mem_valid_i,
-  // FRM/FCSR RAW hazard: CSR write to FRM/FCSR in EX, FP-dyn-rm instruction in ID.
-  // frm_o is combinatorially from fcsr_q; the write only commits at posedge.
-  // Stall 1 cycle so the FP instruction re-decodes after the write is visible.
-  input  logic       id_ex_is_frm_write_i,  // EX has a CSR write to FRM or FCSR
-  input  logic       if_id_fp_dyn_rm_i,     // ID has an FP instr with rm=3'b111 (DYN)
-  // Stage 7a — generic CSR RAW hazard.  T10 moved architectural CSR write
-  // commit from EX1 to retire (mem_wb_q), so a CSR-using consumer in EX1 sees
-  // a stale CSR value if a CSR-writer is still in EX1/EX2/MEM.  Stall the
-  // consumer in ID until every in-flight CSR-writer has retired.  Producer
-  // bits are id_ex1_q.dec.is_csr / ex1_ex2_q.dec.is_csr / ex2_mem_q.dec.is_csr
-  // (gated by valid).  Consumer bit is any CSR-state read in ID: is_csr,
-  // is_mret, is_sret, is_wfi, is_ecall, is_ebreak (the trap path reads
-  // mtvec/stvec).  All consumer cases either read CSR registers directly or
-  // depend on CSR state via the trap_vector mux.
-  input  logic       id_ex_is_csr_i,        // EX1 has a CSR-writing instruction
-  input  logic       ex1_ex2_is_csr_i,      // EX2 has a CSR-writing instruction
-  input  logic       ex_mem_is_csr_i,       // MEM has a CSR-writing instruction
-  input  logic       if_id_uses_csr_i,      // ID consumes CSR state (csr/mret/sret/wfi/ecall/ebreak)
-  // EX redirect (branch direction mismatch, JAL/JALR, trap, MRET)
+  input  logic       if_id_fp_dyn_rm_i,
+  input  logic       if_id_uses_csr_i,
+  // RR-stage CSR consumer.
+  input  logic       id_rr_uses_csr_i,
+  // EX redirect (branch direction mismatch) and MEM redirect (target / trap).
   input  logic       ex_redirect_i,
-  // MEM redirect (branch target mismatch detected one cycle later)
   input  logic       mem_redirect_i,
-  // MEM/FPU/fetch stall bundle (LSU bus wait, FPU scoreboard, IF not valid).
-  // These freeze the pipeline with absolute priority — they cannot be dropped
-  // by a redirect (e.g. an in-flight AXI transaction must complete).
+  // MEM/FPU/fetch stall, muldiv stall.
   input  logic       mem_stall_i,
-  // muldiv stall — separate from mem_stall_i so redirect can flush a
-  // wrong-path MUL instead of being held by priority-1 pipeline freeze.
   input  logic       muldiv_stall_i,
-  // Pipeline register enables
+  // Pipeline-register enables.
   output logic       pc_en_o,
   output logic       if_id_en_o,
-  output logic       id_ex_en_o,
+  output logic       id_rr_en_o,
+  output logic       rr_ex1_en_o,
   output logic       ex_mem_en_o,
   output logic       mem_wb_en_o,
-  // Pipeline register flush (clear to NOP)
+  // Pipeline-register flushes (clear to NOP).
   output logic       if_id_flush_o,
-  output logic       id_ex_flush_o
+  output logic       id_rr_flush_o,
+  output logic       rr_ex1_flush_o
 );
 
-  // Combinational signals
-  logic load_use;
-  logic fp_load_use;
-  logic jalr_fwd_stall;
-  logic frm_hazard;
-  logic csr_raw_stall;
+  logic load_use, fp_load_use, jalr_fwd_stall, frm_hazard;
+  logic csr_raw_stall_id, csr_raw_stall_rr;
+  logic ex_mem_unused;
 
-  // Stage 7a — load-use stalls 2 cycles total.  A load passes through EX1
-  // (id_ex_*) and EX2 (ex1_ex2_*) before its data lands in mem_wb_q via the
-  // dcache return at end of MEM, so a consumer in ID with rs matching the
-  // load's rd at either of those positions must stall.
-  assign load_use = (id_ex_valid_i && id_ex_is_load_i && (id_ex_rd_i != 5'd0) &&
-                     ((if_id_rs1_used_i && if_id_rs1_i == id_ex_rd_i) ||
-                      (if_id_rs2_used_i && if_id_rs2_i == id_ex_rd_i))) ||
-                    (ex1_ex2_valid_i && ex1_ex2_is_load_i && (ex1_ex2_rd_i != 5'd0) &&
-                     ((if_id_rs1_used_i && if_id_rs1_i == ex1_ex2_rd_i) ||
-                      (if_id_rs2_used_i && if_id_rs2_i == ex1_ex2_rd_i)));
+  // ex_mem_rd_wen_i is reserved for future MEM-class hazard checks.  Tie it
+  // through an unused signal so verilator's lint stays happy.
+  assign ex_mem_unused = ex_mem_rd_wen_i & ex_mem_rd_i[0];
 
-  // FP load-use: FP load in EX1 or EX2, following FP instruction reads the same FP reg.
-  // Uses rs1_fp/rs2_fp/rs3_fp to distinguish FP register reads from integer reads.
-  assign fp_load_use = (id_ex_valid_i && id_ex_is_fp_load_i && (id_ex_rd_i != 5'd0) &&
-                        ((if_id_rs1_fp_i && if_id_rs1_i == id_ex_rd_i) ||
-                         (if_id_rs2_fp_i && if_id_rs2_i == id_ex_rd_i) ||
-                         (if_id_rs3_fp_i && if_id_rs3_i == id_ex_rd_i))) ||
-                       (ex1_ex2_valid_i && ex1_ex2_is_fp_load_i && (ex1_ex2_rd_i != 5'd0) &&
-                        ((if_id_rs1_fp_i && if_id_rs1_i == ex1_ex2_rd_i) ||
-                         (if_id_rs2_fp_i && if_id_rs2_i == ex1_ex2_rd_i) ||
-                         (if_id_rs3_fp_i && if_id_rs3_i == ex1_ex2_rd_i)));
+  // Load-use: load can be in {RR, EX1, EX2}; consumer in ID.  Total stall is
+  // 2 cycles in ID — the load advances RR -> EX1 -> EX2 -> MEM, where the
+  // MEM result bypasses into the consumer's RR stage on the same edge.
+  assign load_use =
+    (id_rr_valid_i   & id_rr_is_load_i   & (id_rr_rd_i   != 5'd0) &
+     ((if_id_rs1_used_i & (if_id_rs1_i == id_rr_rd_i)) |
+      (if_id_rs2_used_i & (if_id_rs2_i == id_rr_rd_i)))) |
+    (rr_ex1_valid_i  & rr_ex1_is_load_i  & (rr_ex1_rd_i  != 5'd0) &
+     ((if_id_rs1_used_i & (if_id_rs1_i == rr_ex1_rd_i)) |
+      (if_id_rs2_used_i & (if_id_rs2_i == rr_ex1_rd_i)))) |
+    (ex1_ex2_valid_i & ex1_ex2_is_load_i & (ex1_ex2_rd_i != 5'd0) &
+     ((if_id_rs1_used_i & (if_id_rs1_i == ex1_ex2_rd_i)) |
+      (if_id_rs2_used_i & (if_id_rs2_i == ex1_ex2_rd_i))));
 
-  // JALR in ID with rs1 matching the instruction in MEM (about to enter WB).
-  // Stalling 1 cycle converts MEM/WB forward into EX/MEM forward or regfile read,
-  // breaking the JALR adder -> mispredict comparator carry-chain path (class 2).
-  assign jalr_fwd_stall = if_id_is_jalr_i &&
-                           ex_mem_valid_i && ex_mem_rd_wen_i &&
-                           (ex_mem_rd_i != 5'd0) &&
-                           (if_id_rs1_i == ex_mem_rd_i);
+  // FP load-use: same shape, FP consumer keys.
+  assign fp_load_use =
+    (id_rr_valid_i   & id_rr_is_fp_load_i   & (id_rr_rd_i   != 5'd0) &
+     ((if_id_rs1_fp_i & (if_id_rs1_i == id_rr_rd_i)) |
+      (if_id_rs2_fp_i & (if_id_rs2_i == id_rr_rd_i)) |
+      (if_id_rs3_fp_i & (if_id_rs3_i == id_rr_rd_i)))) |
+    (rr_ex1_valid_i  & rr_ex1_is_fp_load_i  & (rr_ex1_rd_i  != 5'd0) &
+     ((if_id_rs1_fp_i & (if_id_rs1_i == rr_ex1_rd_i)) |
+      (if_id_rs2_fp_i & (if_id_rs2_i == rr_ex1_rd_i)) |
+      (if_id_rs3_fp_i & (if_id_rs3_i == rr_ex1_rd_i)))) |
+    (ex1_ex2_valid_i & ex1_ex2_is_fp_load_i & (ex1_ex2_rd_i != 5'd0) &
+     ((if_id_rs1_fp_i & (if_id_rs1_i == ex1_ex2_rd_i)) |
+      (if_id_rs2_fp_i & (if_id_rs2_i == ex1_ex2_rd_i)) |
+      (if_id_rs3_fp_i & (if_id_rs3_i == ex1_ex2_rd_i))));
 
-  // FRM/FCSR RAW hazard: a CSR write to FRM/FCSR is in EX and the next
-  // instruction in ID will use dynamic rounding mode. The decode unit reads
-  // frm combinatorially from fcsr_q; the write only lands at posedge. One
-  // stall cycle lets the FP instruction re-decode with the updated FRM.
-  assign frm_hazard = id_ex_is_frm_write_i && if_id_fp_dyn_rm_i;
+  // JALR-fwd stall: JALR in ID with rs1 matching the producer in ex1_ex2_q
+  // (one stage shifted vs 7a's ex_mem_q check, to keep the stall budget the
+  // same as the deeper pipe).  Gate on rd_wen so stores don't trigger a
+  // wasted stall (stores have rd_wen = 0 and never produce a value into rd).
+  assign jalr_fwd_stall = if_id_is_jalr_i &
+                           ex1_ex2_valid_i & ex1_ex2_rd_wen_i &
+                           (ex1_ex2_rd_i != 5'd0) &
+                           (if_id_rs1_i == ex1_ex2_rd_i);
 
-  // Stage 7a — CSR RAW stall.  In stage 7a the architectural CSR write
-  // commits at retire (mem_wb_q), four pipe stages downstream of EX1.  A CSR
-  // consumer following a CSR writer at any distance < 4 instructions reads
-  // stale state and goes to the wrong target / wrong mode.  This stall is
-  // conservative: any in-flight CSR-write keeps the consumer in ID until
-  // the writer reaches WB (where retire_i pulses and the architectural
-  // register updates at the same edge that releases the consumer into EX1).
-  assign csr_raw_stall = if_id_uses_csr_i &
-                         ((id_ex_valid_i    & id_ex_is_csr_i)    |
-                          (ex1_ex2_valid_i  & ex1_ex2_is_csr_i)  |
-                          (ex_mem_valid_i   & ex_mem_is_csr_i));
+  // FRM/FCSR RAW: a CSR write to FRM/FCSR in EX1, FP-DYN-rm consumer in ID.
+  assign frm_hazard = rr_ex1_is_frm_write_i & if_id_fp_dyn_rm_i;
+
+  // CSR-RAW (ID-stage consumer): writer in {RR, EX1, EX2, MEM}.
+  assign csr_raw_stall_id = if_id_uses_csr_i &
+                            ((id_rr_valid_i   & id_rr_is_csr_i)   |
+                             (rr_ex1_valid_i  & rr_ex1_is_csr_i)  |
+                             (ex1_ex2_valid_i & ex1_ex2_is_csr_i) |
+                             (ex_mem_valid_i  & ex_mem_is_csr_i));
+
+  // CSR-RAW (RR-stage consumer): writer in {EX1, EX2, MEM}.  Closes a
+  // one-cycle gap when an ID-stage stall releases the consumer the same cycle
+  // a new writer enters EX1 from id_rr_q.
+  assign csr_raw_stall_rr = id_rr_uses_csr_i &
+                            ((rr_ex1_valid_i  & rr_ex1_is_csr_i)  |
+                             (ex1_ex2_valid_i & ex1_ex2_is_csr_i) |
+                             (ex_mem_valid_i  & ex_mem_is_csr_i));
 
   always_comb begin
-    // Default: full advance, no flush
-    pc_en_o       = 1'b1;
-    if_id_en_o    = 1'b1;
-    id_ex_en_o    = 1'b1;
-    ex_mem_en_o   = 1'b1;
-    mem_wb_en_o   = 1'b1;
-    if_id_flush_o = 1'b0;
-    id_ex_flush_o = 1'b0;
+    pc_en_o        = 1'b1;
+    if_id_en_o     = 1'b1;
+    id_rr_en_o     = 1'b1;
+    rr_ex1_en_o    = 1'b1;
+    ex_mem_en_o    = 1'b1;
+    mem_wb_en_o    = 1'b1;
+    if_id_flush_o  = 1'b0;
+    id_rr_flush_o  = 1'b0;
+    rr_ex1_flush_o = 1'b0;
 
     if (mem_stall_i) begin
-      // Priority 1: MEM/FPU/fetch stall — hold all stages
+      // Priority 1: MEM/FPU/fetch stall — hold all stages.
       pc_en_o     = 1'b0;
       if_id_en_o  = 1'b0;
-      id_ex_en_o  = 1'b0;
+      id_rr_en_o  = 1'b0;
+      rr_ex1_en_o = 1'b0;
       ex_mem_en_o = 1'b0;
       mem_wb_en_o = 1'b0;
     end else if (ex_redirect_i | mem_redirect_i) begin
-      // Priority 2: EX/MEM redirect — squash IF and ID.  Must outrank the
-      // RAW-class stalls (load-use, CSR-RAW, frm_hazard, jalr_fwd_stall) so a
-      // redirect always flushes the speculative wrong-path follower in
-      // if_id_q.  If the wrong-path follower happens to be a CSR/load
-      // consumer of an in-flight producer, leaving it in if_id_q (priority 3
-      // below holds, doesn't flush) and then advancing it onto the new
-      // (post-redirect) path commits it with stale state — visible as e.g.
-      // test_sret reaching sret with sepc=0 because the wrong-path sret
-      // survived an mret redirect.  Placed above muldiv_stall so a wrong-
-      // path MUL is flushed instead of deadlocking the muldiv FSM.
-      if_id_flush_o = 1'b1;
-      id_ex_flush_o = 1'b1;
-    end else if (load_use | fp_load_use | jalr_fwd_stall | frm_hazard | csr_raw_stall) begin
-      // Priority 3: load-use / FRM / CSR-RAW hazard — stall PC+IF+ID,
-      // bubble into EX
+      // Priority 2: redirect — flush IF/ID/RR/EX1 wrong-path followers.
+      // Older stages (EX2/MEM) flush via combinational gating in kronos_top
+      // when the redirect carries a MEM-stage trap.
+      if_id_flush_o  = 1'b1;
+      id_rr_flush_o  = 1'b1;
+      rr_ex1_flush_o = 1'b1;
+    end else if (load_use | fp_load_use | csr_raw_stall_id | jalr_fwd_stall | frm_hazard) begin
+      // Priority 3a: ID-class RAW — stall PC+IF+ID, bubble into RR.
       pc_en_o       = 1'b0;
       if_id_en_o    = 1'b0;
-      id_ex_en_o    = 1'b0;
-      id_ex_flush_o = 1'b1;   // flush overrides en -> bubble in ID/EX
+      id_rr_en_o    = 1'b0;
+      id_rr_flush_o = 1'b1;
+    end else if (csr_raw_stall_rr) begin
+      // Priority 3b: RR-class CSR-RAW — stall PC+IF+ID+RR, bubble into EX1.
+      pc_en_o        = 1'b0;
+      if_id_en_o     = 1'b0;
+      id_rr_en_o     = 1'b0;
+      rr_ex1_en_o    = 1'b0;
+      rr_ex1_flush_o = 1'b1;
     end else if (muldiv_stall_i) begin
-      // Priority 4: muldiv FSM busy — hold all stages while it completes.
+      // Priority 4: muldiv FSM busy — hold all stages.
       pc_en_o     = 1'b0;
       if_id_en_o  = 1'b0;
-      id_ex_en_o  = 1'b0;
+      id_rr_en_o  = 1'b0;
+      rr_ex1_en_o = 1'b0;
       ex_mem_en_o = 1'b0;
       mem_wb_en_o = 1'b0;
     end
