@@ -170,6 +170,49 @@ filesets:
       - rtl/stage6/kronos_top.sv
     file_type: systemVerilogSource
 
+  files_rtl_s7a:
+    depend:
+      - pulp-platform.org::axi:0.39.9
+    files:
+      - rtl/kronos_pkg.sv
+      - rtl/common/kronos_ram.sv
+      - rtl/stage0/kronos_regfile.sv
+      - rtl/stage7/kronos_forward.sv
+      - rtl/stage7/kronos_hazard.sv
+      - rtl/common/kronos_predecode.sv
+      - rtl/common/kronos_fetch_buffer.sv
+      - rtl/common/kronos_bpred.sv
+      - rtl/common/kronos_alu.sv
+      - rtl/stage7/kronos_decode.sv
+      - rtl/stage7/kronos_decode_ctrl.sv
+      - rtl/stage7/kronos_decode_sys.sv
+      - rtl/stage7/kronos_decode_mem.sv
+      - rtl/stage7/kronos_decode_int.sv
+      - rtl/stage7/kronos_decode_fp.sv
+      - rtl/common/kronos_regfile_fp.sv
+      - rtl/stage7/kronos_icache.sv
+      - rtl/stage7/kronos_csr.sv
+      - rtl/stage7/kronos_pmp.sv
+      - rtl/stage7/kronos_tlb.sv
+      - rtl/stage7/kronos_ptw.sv
+      - rtl/common/kronos_trigger.sv
+      - rtl/stage7/kronos_lsu.sv
+      - rtl/stage7/kronos_dcache.sv
+      - rtl/common/kronos_muldiv.sv
+      - rtl/common/kronos_decompress.sv
+      - rtl/common/fpu/kronos_fpu_scoreboard.sv
+      - rtl/common/fpu/kronos_fpu_fmisc.sv
+      - rtl/common/fpu/kronos_fpu_fcvt.sv
+      - rtl/common/fpu/kronos_fpu_fadd.sv
+      - rtl/common/fpu/kronos_fpu_fmul.sv
+      - rtl/common/fpu/kronos_fpu_fma.sv
+      - rtl/common/fpu/kronos_fpu_fdiv_core.sv
+      - rtl/common/fpu/kronos_fpu_fsqrt_core.sv
+      - rtl/common/fpu/kronos_fpu_iter.sv
+      - rtl/common/fpu/kronos_fpu_top.sv
+      - rtl/stage7/kronos_top.sv
+    file_type: systemVerilogSource
+
   files_fpga_kv260:
     depend:
       - pulp-platform.org::axi:0.39.9
@@ -194,7 +237,7 @@ filesets:
 
 targets:
   default:
-    filesets: [files_rtl_s6]
+    filesets: [files_rtl_s7a]
     toplevel: kronos_top
 
   stage5:
