@@ -69,8 +69,14 @@ module kronos_top
   // -------------------------------------------------------------------------
   // Pipeline registers
   // -------------------------------------------------------------------------
-  if_id_reg_t  if_id_q;
-  id_ex_reg_t  id_ex1_q;
+  if_id_reg_t   if_id_q;
+  // ID/RR pipeline register (Stage 7b).  Carries the decode result + ID-owned
+  // fault bits across the new RR (register-read) stage so EX1 starts from
+  // pre-flopped operands and the regfile / bypass / CSR read no longer share
+  // a cycle with decode.
+  id_rr_reg_t   id_rr_q;
+  id_rr_reg_t   id_rr_d;
+  rr_ex1_reg_t  rr_ex1_q;
   // Stage 7a — EX1→EX2 pipeline register.  Carries registered ALU result,
   // effective VA, branch direction, and the running fault aggregate so EX2
   // can form ex_redirect_d from registered bits only.
@@ -89,8 +95,8 @@ module kronos_top
   // -------------------------------------------------------------------------
   // Hazard / forwarding control
   // -------------------------------------------------------------------------
-  logic      pc_en, if_id_en, id_ex1_en, ex2_mem_en, mem_wb_en;
-  logic      if_id_flush, id_ex1_flush;
+  logic      pc_en, if_id_en, id_rr_en, rr_ex1_en, ex2_mem_en, mem_wb_en;
+  logic      if_id_flush, id_rr_flush, rr_ex1_flush;
   fwd_sel_e  fwd_rs1_sel, fwd_rs2_sel;
 
   // -------------------------------------------------------------------------
@@ -98,7 +104,9 @@ module kronos_top
   // -------------------------------------------------------------------------
   decoded_instr_t  id_dec;
   logic [kronos_pkg::XLEN-1:0] rs1_rdata_64, rs2_rdata_64;
-  logic [kronos_pkg::XLEN-1:0] rs1_data_id, rs2_data_id, rs3_data_id;
+  // RR-stage operand-data wires (regfile reads + bypass-source select feed
+  // these; the bypass mux at the RR/EX1 boundary captures into rr_ex1_q).
+  logic [kronos_pkg::XLEN-1:0] rs1_data_rr, rs2_data_rr, rs3_data_rr;
   logic            wb_writing;
 
   // FP regfile read ports
@@ -107,12 +115,19 @@ module kronos_top
   // CSR frm output
   logic [2:0]     frm;
 
-  // ID-stage forwarding helper signals.
+  // RR-stage source-select helper signals.
   // FP paths: 2-bit one-hot selector + data mux (4-way, replaces 4-level chain).
-  // Integer path: plain WB-bypass-or-regfile (EX/MEM forwarding via fwd_rs1_sel).
+  // Integer path: plain WB-bypass-or-regfile (EX-class bypassing handled by the
+  // RR/EX1 forwarding mux below via fwd_rs1_sel/fwd_rs2_sel).
   logic [1:0]      fp_rs1_sel, fp_rs2_sel, fp_rs3_sel;
-  logic [kronos_pkg::FLEN-1:0] fp_rs1_data_id, fp_rs2_data_id, fp_rs3_data_id;
-  logic [kronos_pkg::XLEN-1:0] int_rs1_data_id, int_rs2_data_id;
+  logic [kronos_pkg::FLEN-1:0] fp_rs1_data_rr, fp_rs2_data_rr, fp_rs3_data_rr;
+  logic [kronos_pkg::XLEN-1:0] int_rs1_data_rr, int_rs2_data_rr;
+  // RR-stage CSR read (speculative).  u_csr drives a second combinational read
+  // port keyed on id_rr_q.dec.csr_addr; the result is captured into
+  // rr_ex1_q.csr_rdata at the RR/EX1 boundary so EX1 consumes a flopped value.
+  logic [kronos_pkg::XLEN-1:0] rr_csr_rdata_combinational;
+  // Bypassed RS1/RS2 captured into rr_ex1_q at the RR/EX1 flop boundary.
+  logic [kronos_pkg::XLEN-1:0] rs1_bypassed, rs2_bypassed;
 
   // -------------------------------------------------------------------------
   // EX-stage wires (64-bit datapath)
@@ -211,7 +226,7 @@ module kronos_top
   logic [31:0]       trap_tval;
   logic              csr_illegal;
   // Raw csr_illegal_o from u_csr (computed unconditionally on addr/priv);
-  // csr_illegal below is the externally gated form on registered id_ex1_q
+  // csr_illegal below is the externally gated form on registered rr_ex1_q
   // fields, kept off the comb cone driven by combined_stall (closes #89).
   logic              csr_illegal_raw;
   // priv-checked control transfers (mret/sret) and TVM/TW gates.
@@ -300,7 +315,7 @@ module kronos_top
   logic        ex1_ex2_csr_q;
   logic        ex2_mem_csr_q;
   // Stage 7a — csr_new_val pipeline.  u_csr.csr_new_val_o is computed
-  // combinationally from id_ex1_q at the EX1 cycle.  The architectural CSR
+  // combinationally from rr_ex1_q at the EX1 cycle.  The architectural CSR
   // commit happens at retire_i (mem_wb_q), so the value must be carried
   // through ex1_ex2 -> ex2_mem -> mem_wb in lockstep with the instruction.
   logic [kronos_pkg::XLEN-1:0] ex1_ex2_csr_new_val_q;
@@ -430,7 +445,7 @@ module kronos_top
   // PMA fault wires from dcache (routed to trap path).
   // dcache_amo_nc_fault is retained for the LSU mem_stall exemption only;
   // the trap-path uses the EX-stage ex_amo_nc_fault below for correct
-  // trap_cause/mepc sourcing while id_ex1_q still holds the offending op.
+  // trap_cause/mepc sourcing while rr_ex1_q still holds the offending op.
   logic        dcache_amo_nc_fault;
   logic        dcache_bus_err_fault;
   // EX-stage pre-launch wires for the dcache BRAM read.  The dTLB
@@ -496,7 +511,7 @@ module kronos_top
   // EX2→MEM boundary.  Captured alongside mem_wb_q.fault so trap_i fires from
   // mem_wb_q-cycle (retire) state, in lockstep with mem_redirect_q.
   // Without these snapshots, trap_cause would read live combinational sources
-  // (id_ex1_q.dec.illegal, irq_cause, …) that have advanced to the next
+  // (rr_ex1_q.dec.illegal, irq_cause, …) that have advanced to the next
   // instruction by the time the trap fires.
   logic [31:0] mem_wb_trap_cause_q;
   logic [31:0] mem_wb_trap_tval_q;
@@ -506,7 +521,7 @@ module kronos_top
   logic [55:0] mem_wb_pmp_data_addr_q;
   // mem-cycle trap_cause / trap_tval combinational form (read at EX2→MEM
   // boundary by the snapshot flop).  Computed from ex2_mem_q registered fields
-  // + MEM-cycle producers — none of which read id_ex1_q, so the trap context
+  // + MEM-cycle producers — none of which read rr_ex1_q, so the trap context
   // tracks the trapping instruction even after the pipeline advances.
   logic [31:0] mem_trap_cause_d;
   logic [31:0] mem_trap_tval_d;
@@ -548,7 +563,7 @@ module kronos_top
 
   // FPU operand muxes: EX forwarding for integer-source FP instructions.
   // FMV.W.X / FMV.D.X read integer rs1/rs2; use fwd_rs1/2_data so that
-  // MEM-WB bypassing applies (id_ex1_q.rs1_data may be stale when the
+  // MEM-WB bypassing applies (rr_ex1_q.rs1_data may be stale when the
   // producer was still in MEM when the FP instruction was in ID).
   logic [kronos_pkg::FLEN-1:0] fpu_a_i, fpu_b_i;
 
@@ -605,8 +620,8 @@ module kronos_top
 
   kronos_regfile u_regfile (
     .clk_i       (clk_i),
-    .rs1_addr_i  (id_dec.rs1),
-    .rs2_addr_i  (id_dec.rs2),
+    .rs1_addr_i  (id_rr_q.dec.rs1),
+    .rs2_addr_i  (id_rr_q.dec.rs2),
     .rs1_rdata_o (rs1_rdata_64),
     .rs2_rdata_o (rs2_rdata_64),
     .rd_addr_i   (mem_wb_q.dec.rd),
@@ -618,11 +633,11 @@ module kronos_top
   kronos_regfile_fp u_regfile_fp (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
-    .ra1_i   (id_dec.rs1),
+    .ra1_i   (id_rr_q.dec.rs1),
     .rd1_o   (fp_rd1),
-    .ra2_i   (id_dec.rs2),
+    .ra2_i   (id_rr_q.dec.rs2),
     .rd2_o   (fp_rd2),
-    .ra3_i   (id_dec.rs3),
+    .ra3_i   (id_rr_q.dec.rs3),
     .rd3_o   (fp_rd3),
     .wa_i    (fp_wa),
     .wd_i    (fp_wd),
@@ -634,15 +649,22 @@ module kronos_top
     .if_id_rs1_used_i   (id_dec.rs1_used),
     .if_id_rs2_i        (id_dec.rs2),
     .if_id_rs2_used_i   (id_dec.rs2_used),
-    // EX1 producer (id_ex1_q) — freshest source.  is_load suppresses bypass
-    // because load data has not yet reached ex1_ex2_q.alu_result at consumer-EX1.
-    .id_ex1_rd_i        (id_ex1_q.dec.rd),
-    .id_ex1_rd_wen_i    (id_ex1_q.dec.rd_wen),
-    .id_ex1_rd_fp_i     (id_ex1_q.dec.rd_fp),
-    .id_ex1_is_load_i   (id_ex1_q.dec.wb_sel == WB_MEM),
-    .id_ex1_valid_i     (id_ex1_q.valid),
-    // EX2 producer (ex1_ex2_q) — middle source.  is_load suppresses bypass
-    // because load data has not yet reached ex2_mem_q.alu_result at consumer-EX1.
+    // RR producer (id_rr_q) — freshest source.  is_load suppression mirrors
+    // the EX1/EX2 producer slots: the load result lands via wb_result_64 once
+    // mem_wb_q catches it; bypassing it earlier would forward stale alu_result.
+    .id_rr_rd_i         (id_rr_q.dec.rd),
+    .id_rr_rd_wen_i     (id_rr_q.dec.rd_wen),
+    .id_rr_rd_fp_i      (id_rr_q.dec.rd_fp),
+    .id_rr_is_load_i    (id_rr_q.dec.wb_sel == WB_MEM),
+    .id_rr_valid_i      (id_rr_q.valid),
+    // EX1 producer (rr_ex1_q).  is_load suppresses bypass because load data
+    // has not yet reached ex1_ex2_q.alu_result at consumer-EX1.
+    .rr_ex1_rd_i        (rr_ex1_q.dec.rd),
+    .rr_ex1_rd_wen_i    (rr_ex1_q.dec.rd_wen),
+    .rr_ex1_rd_fp_i     (rr_ex1_q.dec.rd_fp),
+    .rr_ex1_is_load_i   (rr_ex1_q.dec.wb_sel == WB_MEM),
+    .rr_ex1_valid_i     (rr_ex1_q.valid),
+    // EX2 producer (ex1_ex2_q).  Loads suppress for the same reason.
     .ex1_ex2_rd_i       (ex1_ex2_q.dec.rd),
     .ex1_ex2_rd_wen_i   (ex1_ex2_q.dec.rd_wen),
     .ex1_ex2_rd_fp_i    (ex1_ex2_q.dec.rd_fp),
@@ -660,7 +682,7 @@ module kronos_top
   // muldiv_stall is exposed raw (no redirect gating) — kronos_hazard resolves
   // the priority so a redirect flushes the wrong-path MUL without needing
   // muldiv_stall to fan in from ex_redirect/mem_redirect.
-  assign muldiv_stall      = id_ex1_q.valid & id_ex1_q.dec.is_muldiv & ~muldiv_valid;
+  assign muldiv_stall      = rr_ex1_q.valid & rr_ex1_q.dec.is_muldiv & ~muldiv_valid;
   // when a PMP fetch fault is active, the alignment unit suppresses
   // its instr_valid_o (see kronos_align.sv).  We must NOT treat this as a
   // pipeline stall, because the same fault asserts trap_i and ex_redirect to
@@ -671,7 +693,7 @@ module kronos_top
   // visible as align_instr_valid is the only fetch-side stall signal.  PMP
   // fetch fault is excluded so trap delivery is not gated by it.  Also
   // suppress under an active redirect — during a redirect cycle the IF/ID
-  // register is being flushed (id_ex1_flush from hazard), so holding the
+  // register is being flushed (rr_ex1_flush from hazard), so holding the
   // pipeline on "no fresh fetch" would freeze the stage that needs to drain
   // the wrong-path JAL/branch out of EX.
   assign instr_fetch_stall = ~align_instr_valid & ~pmp_fetch_fault &
@@ -691,7 +713,7 @@ module kronos_top
   // include mem_stall here because mem_stall must depend combinationally on
   // this signal (to assert the stall the same cycle FENCE.I enters EX) —
   // including mem_stall would form a combinational loop.
-  // Stage 7a — detect FENCE.I from ex1_ex2_q (EX2) rather than id_ex1_q (EX1).
+  // Stage 7a — detect FENCE.I from ex1_ex2_q (EX2) rather than rr_ex1_q (EX1).
   // The EX1/EX2 split moves the SW one cycle further from dcache_req issue
   // (which fires from MEM = ex2_mem_q).  If we triggered from EX1, FENCE.I
   // would be one cycle ahead of the dirtying SW's dcache_req cycle and
@@ -721,8 +743,8 @@ module kronos_top
   // fpu_dispatching: the FPU dispatch will fire this cycle.  Stall immediately
   // so the following instruction stays in IF/ID and can receive the FP result
   // via the ID forwarding mux when the stall releases.
-  assign fpu_dispatching   = id_ex1_q.valid & id_ex1_q.dec.is_fp &
-                             ~id_ex1_q.dec.fp_load & ~id_ex1_q.dec.fp_store &
+  assign fpu_dispatching   = rr_ex1_q.valid & rr_ex1_q.dec.is_fp &
+                             ~rr_ex1_q.dec.fp_load & ~rr_ex1_q.dec.fp_store &
                              ~fpu_dispatched_q;
   // fp_result_avail: FPU result is available (just fired this cycle or latched
   // from a previous cycle where fpu_out_valid fired but the pipeline was still
@@ -737,14 +759,14 @@ module kronos_top
   // Release stall once the result is available; keep stalled until then.
   assign fpu_stall         = (fp_inflight_q | fpu_dispatching) & ~fp_result_avail;
 
-  assign load_use_event = id_ex1_q.valid & id_ex1_q.dec.is_load & (id_ex1_q.dec.rd != 5'd0)
-                         & ((id_dec.rs1_used & (id_dec.rs1 == id_ex1_q.dec.rd)) |
-                            (id_dec.rs2_used & (id_dec.rs2 == id_ex1_q.dec.rd)));
+  assign load_use_event = rr_ex1_q.valid & rr_ex1_q.dec.is_load & (rr_ex1_q.dec.rd != 5'd0)
+                         & ((id_dec.rs1_used & (id_dec.rs1 == rr_ex1_q.dec.rd)) |
+                            (id_dec.rs2_used & (id_dec.rs2 == rr_ex1_q.dec.rd)));
 
-  assign fp_load_use_event = id_ex1_q.valid & id_ex1_q.dec.fp_load & (id_ex1_q.dec.rd != 5'd0)
-                            & ((id_dec.rs1_fp & (id_dec.rs1 == id_ex1_q.dec.rd)) |
-                               (id_dec.rs2_fp & (id_dec.rs2 == id_ex1_q.dec.rd)) |
-                               (id_dec.rs3_fp & (id_dec.rs3 == id_ex1_q.dec.rd)));
+  assign fp_load_use_event = rr_ex1_q.valid & rr_ex1_q.dec.fp_load & (rr_ex1_q.dec.rd != 5'd0)
+                            & ((id_dec.rs1_fp & (id_dec.rs1 == rr_ex1_q.dec.rd)) |
+                               (id_dec.rs2_fp & (id_dec.rs2 == rr_ex1_q.dec.rd)) |
+                               (id_dec.rs3_fp & (id_dec.rs3 == rr_ex1_q.dec.rd)));
 
   assign jalr_fwd_event = id_dec.is_jalr & ex2_mem_q.valid & ex2_mem_q.dec.rd_wen
                          & (ex2_mem_q.dec.rd != 5'd0) & (id_dec.rs1 == ex2_mem_q.dec.rd);
@@ -754,13 +776,13 @@ module kronos_top
   // is fed to hazard separately so redirect flush can out-rank it.
   //
   // a dTLB miss for an EX-stage load/store/AMO must freeze the
-  // pipeline.  The dTLB lookup happens in EX (against id_ex1_q) but the LSU
+  // pipeline.  The dTLB lookup happens in EX (against rr_ex1_q) but the LSU
   // fires in MEM (against ex2_mem_q).  Without this stall, the missing access
   // would advance to MEM with a stale ex2_mem_data_pa_q (captured before the
   // PTW completed) and complete via the dcache before ptw_pf could fire.
   //
   // Qualifications:
-  //   - id_ex1_q.valid          -> ignore phantom misses on bubbles
+  //   - rr_ex1_q.valid          -> ignore phantom misses on bubbles
   //   - ~load/store_page_fault -> let the PTW's page-fault pulse take the
   //     trap on the same cycle (otherwise dtlb_miss stays high through the
   //     fault cycle and combined_stall blocks the redirect).
@@ -769,16 +791,16 @@ module kronos_top
   // to issue the AR while tlb_miss_i is high, so align_instr_valid stays
   // low until the PTW refills).
   assign combined_stall_no_muldiv = mem_stall | instr_fetch_stall | fpu_stall
-                                  | (id_ex1_q.valid & dtlb_miss &
+                                  | (rr_ex1_q.valid & dtlb_miss &
                                      ~load_page_fault & ~store_page_fault);
   assign combined_stall    = combined_stall_no_muldiv | muldiv_stall;
 
   // FRM/FCSR RAW hazard: a CSR write to FRM/FCSR in EX will update fcsr_q at
   // the posedge, but decode reads frm combinatorially from fcsr_q. Stall 1
   // cycle so the FP instruction in ID re-decodes after the new FRM is visible.
-  assign id_ex_is_frm_write = id_ex1_q.valid & id_ex1_q.dec.is_csr &
-                               (id_ex1_q.dec.csr_addr == 12'h002 |  // FRM
-                                id_ex1_q.dec.csr_addr == 12'h003);  // FCSR
+  assign id_ex_is_frm_write = rr_ex1_q.valid & rr_ex1_q.dec.is_csr &
+                               (rr_ex1_q.dec.csr_addr == 12'h002 |  // FRM
+                                rr_ex1_q.dec.csr_addr == 12'h003);  // FCSR
   // Detect FP instruction in ID that uses dynamic rounding mode (rm=3'b111).
   // Covers OP-FP (0x53) and FMA variants (0x43/0x47/0x4B/0x4F).
   assign if_id_fp_dyn_rm    = if_id_q.valid &
@@ -790,64 +812,75 @@ module kronos_top
                                 if_id_q.instr[6:0] == 7'b1001111);  // FNMADD
 
   kronos_hazard u_hazard (
-    .id_ex_is_load_i      (id_ex1_q.dec.is_load),
-    .id_ex_rd_i           (id_ex1_q.dec.rd),
-    .id_ex_valid_i        (id_ex1_q.valid),
-    // Stage 7a — second load-use source (load in EX2 stalls one more cycle).
-    .ex1_ex2_is_load_i    (ex1_ex2_q.dec.is_load),
-    .ex1_ex2_is_fp_load_i (ex1_ex2_q.dec.fp_load),
-    .ex1_ex2_rd_i         (ex1_ex2_q.dec.rd),
-    .ex1_ex2_valid_i      (ex1_ex2_q.valid),
-    .if_id_rs1_used_i     (id_dec.rs1_used),
-    .if_id_rs1_i          (id_dec.rs1),
-    .if_id_rs2_used_i     (id_dec.rs2_used),
-    .if_id_rs2_i          (id_dec.rs2),
-    // FP load-use hazard
-    .id_ex_is_fp_load_i   (id_ex1_q.dec.fp_load),
-    .if_id_rs1_fp_i       (id_dec.rs1_fp),
-    .if_id_rs2_fp_i       (id_dec.rs2_fp),
-    .if_id_rs3_fp_i       (id_dec.rs3_fp),
-    .if_id_rs3_i          (id_dec.rs3),
-    .if_id_is_jalr_i      (id_dec.is_jalr),
-    .ex_mem_rd_i          (ex2_mem_q.dec.rd),
-    .ex_mem_rd_wen_i      (ex2_mem_q.dec.rd_wen & ex2_mem_q.valid),
-    .ex_mem_valid_i       (ex2_mem_q.valid),
-    // FRM/FCSR RAW hazard
-    .id_ex_is_frm_write_i (id_ex_is_frm_write),
-    .if_id_fp_dyn_rm_i    (if_id_fp_dyn_rm),
-    // Stage 7a — generic CSR RAW hazard.  CSR architectural commit moved to
-    // retire (mem_wb_q), so a CSR-using consumer in ID must wait until every
-    // in-flight CSR-write reaches WB before advancing into EX1.
-    .id_ex_is_csr_i       (id_ex1_q.dec.is_csr),
-    .ex1_ex2_is_csr_i     (ex1_ex2_q.dec.is_csr),
-    .ex_mem_is_csr_i      (ex2_mem_q.dec.is_csr),
-    .if_id_uses_csr_i     (if_id_q.valid & (id_dec.is_csr | id_dec.is_mret |
-                                            id_dec.is_sret | id_dec.is_wfi |
-                                            id_dec.is_ecall | id_dec.is_ebreak)),
+    // RR producer (id_rr_q) — load-use, csr-raw, and uses_csr arms.
+    .id_rr_is_load_i       (id_rr_q.dec.is_load),
+    .id_rr_is_fp_load_i    (id_rr_q.dec.fp_load),
+    .id_rr_is_csr_i        (id_rr_q.dec.is_csr),
+    .id_rr_rd_i            (id_rr_q.dec.rd),
+    .id_rr_valid_i         (id_rr_q.valid),
+    // uses_csr already AND-folds id_rr_q.valid; do not double-gate downstream.
+    .id_rr_uses_csr_i      (id_rr_q.valid & (id_rr_q.dec.is_csr | id_rr_q.dec.is_mret |
+                                              id_rr_q.dec.is_sret | id_rr_q.dec.is_wfi |
+                                              id_rr_q.dec.is_ecall | id_rr_q.dec.is_ebreak)),
+    // EX1 producer (rr_ex1_q).
+    .rr_ex1_is_load_i      (rr_ex1_q.dec.is_load),
+    .rr_ex1_is_fp_load_i   (rr_ex1_q.dec.fp_load),
+    .rr_ex1_is_csr_i       (rr_ex1_q.dec.is_csr),
+    .rr_ex1_is_frm_write_i (id_ex_is_frm_write),
+    .rr_ex1_rd_i           (rr_ex1_q.dec.rd),
+    .rr_ex1_valid_i        (rr_ex1_q.valid),
+    // EX2 producer (ex1_ex2_q).
+    .ex1_ex2_is_load_i     (ex1_ex2_q.dec.is_load),
+    .ex1_ex2_is_fp_load_i  (ex1_ex2_q.dec.fp_load),
+    .ex1_ex2_is_csr_i      (ex1_ex2_q.dec.is_csr),
+    .ex1_ex2_rd_i          (ex1_ex2_q.dec.rd),
+    .ex1_ex2_rd_wen_i      (ex1_ex2_q.dec.rd_wen),
+    .ex1_ex2_valid_i       (ex1_ex2_q.valid),
+    // MEM producer (ex2_mem_q).
+    .ex_mem_rd_i           (ex2_mem_q.dec.rd),
+    .ex_mem_rd_wen_i       (ex2_mem_q.dec.rd_wen & ex2_mem_q.valid),
+    .ex_mem_valid_i        (ex2_mem_q.valid),
+    .ex_mem_is_csr_i       (ex2_mem_q.dec.is_csr),
+    // ID-stage register addresses.
+    .if_id_rs1_used_i      (id_dec.rs1_used),
+    .if_id_rs1_i           (id_dec.rs1),
+    .if_id_rs2_used_i      (id_dec.rs2_used),
+    .if_id_rs2_i           (id_dec.rs2),
+    .if_id_rs1_fp_i        (id_dec.rs1_fp),
+    .if_id_rs2_fp_i        (id_dec.rs2_fp),
+    .if_id_rs3_fp_i        (id_dec.rs3_fp),
+    .if_id_rs3_i           (id_dec.rs3),
+    .if_id_is_jalr_i       (id_dec.is_jalr),
+    .if_id_fp_dyn_rm_i     (if_id_fp_dyn_rm),
+    .if_id_uses_csr_i      (if_id_q.valid & (id_dec.is_csr | id_dec.is_mret |
+                                              id_dec.is_sret | id_dec.is_wfi |
+                                              id_dec.is_ecall | id_dec.is_ebreak)),
     // OR fence_i_redirect_q into the EX-redirect input so the cycle the
     // FENCE.I redirect fires also flushes the wrong-path follower in
-    // if_id_q / id_ex1_q.  Without this, the post-FENCE.I bytes the IFU
+    // if_id_q / rr_ex1_q.  Without this, the post-FENCE.I bytes the IFU
     // streams in during the 2-cycle gap before mem_redirect_q to mtvec
     // would propagate through the fault-bit pipeline and trigger
     // spurious bpred_dir_mispredict / bpred_mispredict_target events.
-    .ex_redirect_i        (ex_redirect_q | fence_i_redirect_q),
-    .mem_redirect_i       (mem_redirect_q),
-    .mem_stall_i          (combined_stall_no_muldiv),
-    .muldiv_stall_i       (muldiv_stall),
-    .pc_en_o          (pc_en),
-    .if_id_en_o       (if_id_en),
-    .id_ex_en_o       (id_ex1_en),
-    .ex_mem_en_o      (ex2_mem_en),
-    .mem_wb_en_o      (mem_wb_en),
-    .if_id_flush_o    (if_id_flush),
-    .id_ex_flush_o    (id_ex1_flush)
+    .ex_redirect_i         (ex_redirect_q | fence_i_redirect_q),
+    .mem_redirect_i        (mem_redirect_q),
+    .mem_stall_i           (combined_stall_no_muldiv),
+    .muldiv_stall_i        (muldiv_stall),
+    .pc_en_o               (pc_en),
+    .if_id_en_o            (if_id_en),
+    .id_rr_en_o            (id_rr_en),
+    .rr_ex1_en_o           (rr_ex1_en),
+    .ex_mem_en_o           (ex2_mem_en),
+    .mem_wb_en_o           (mem_wb_en),
+    .if_id_flush_o         (if_id_flush),
+    .id_rr_flush_o         (id_rr_flush),
+    .rr_ex1_flush_o        (rr_ex1_flush)
   );
 
   kronos_alu u_alu (
-    .op_i        (id_ex1_q.dec.alu_op),
+    .op_i        (rr_ex1_q.dec.alu_op),
     .a_i         (alu_a),
     .b_i         (alu_b),
-    .word_op_i   (id_ex1_q.dec.is_word_op),
+    .word_op_i   (rr_ex1_q.dec.is_word_op),
     .result_o    (alu_result),
     .adder_out_o (alu_adder_out),
     .cmp_lt_o    (alu_cmp_lt),
@@ -857,12 +890,12 @@ module kronos_top
   kronos_muldiv u_muldiv (
     .clk_i     (clk_i),
     .rst_ni    (rst_ni),
-    .req_i     (id_ex1_q.valid & id_ex1_q.dec.is_muldiv & muldiv_idle & ~mem_stall
+    .req_i     (rr_ex1_q.valid & rr_ex1_q.dec.is_muldiv & muldiv_idle & ~mem_stall
                & ~ex_redirect_q & ~mem_redirect_q),
-    .op_i      (id_ex1_q.dec.muldiv_op),
+    .op_i      (rr_ex1_q.dec.muldiv_op),
     .a_i       (fwd_rs1_data),
     .b_i       (fwd_rs2_data),
-    .word_op_i (id_ex1_q.dec.is_word_op),
+    .word_op_i (rr_ex1_q.dec.is_word_op),
     .result_o  (muldiv_result),
     // busy_o is internal hand-off only; the top observes muldiv_valid/idle.
     .busy_o    (muldiv_busy_unused),
@@ -870,7 +903,7 @@ module kronos_top
     .idle_o    (muldiv_idle)
   );
 
-  assign ex_result = id_ex1_q.dec.is_muldiv ? muldiv_result : alu_result;
+  assign ex_result = rr_ex1_q.dec.is_muldiv ? muldiv_result : alu_result;
 
   // MISA_EXT = I + M + A + C + F + D extension bits (bits 8,12,0,2,5,3) = 26'h112D
   kronos_csr #(.MISA_EXT(26'h112D)) u_csr (
@@ -881,14 +914,20 @@ module kronos_top
     // side effects in Stage 7a (state writes commit on retire_i below), so
     // dropping the gate breaks the combined_stall→csr.req_i→csr_illegal→
     // ex_redirect→combined_stall loop noted in stage6 kronos_top.sv:807.
-    .req_i         (id_ex1_q.valid & id_ex1_q.dec.is_csr),
-    .addr_i        (id_ex1_q.dec.csr_addr),
-    .funct3_i      (id_ex1_q.dec.csr_funct3),
-    .use_imm_i     (id_ex1_q.dec.csr_use_imm),
+    .req_i         (rr_ex1_q.valid & rr_ex1_q.dec.is_csr),
+    .addr_i        (rr_ex1_q.dec.csr_addr),
+    .funct3_i      (rr_ex1_q.dec.csr_funct3),
+    .use_imm_i     (rr_ex1_q.dec.csr_use_imm),
     .rs1_data_i    (fwd_rs1_data),
-    .rs1_addr_i    (id_ex1_q.dec.rs1),
+    .rs1_addr_i    (rr_ex1_q.dec.rs1),
     .rdata_o       (csr_rdata),
-    // valid_o is the CSR's own one-cycle ack; the top tracks it via id_ex1_q.
+    // RR-stage second read port — combinational read on id_rr_q.dec.csr_addr.
+    // Captured into rr_ex1_q.csr_rdata at the RR/EX1 boundary so the EX1 cycle
+    // does not see a combinational CSR-file read in front of the bypass mux.
+    .rr_csr_addr_i    (id_rr_q.dec.csr_addr),
+    .rr_csr_read_en_i (id_rr_q.valid & id_rr_q.dec.is_csr),
+    .rr_csr_rdata_o   (rr_csr_rdata_combinational),
+    // valid_o is the CSR's own one-cycle ack; the top tracks it via rr_ex1_q.
     .valid_o       (csr_valid_unused),
     // Stage 7a — retire-cycle CSR write commit.  Pulses for one cycle when a
     // non-trapping CSR instruction reaches MEM/WB.  Wrong-path instructions
@@ -948,7 +987,7 @@ module kronos_top
     // Zicntr: pulse once per retired instruction.  Count at the EX→MEM
     // transition so the count is visible to a csrrc-instret two instructions
     // later (matches the SAIL reference-model semantics used by ACT4).
-    .instret_retire_i (ex2_mem_en & id_ex1_q.valid & ~combined_stall),
+    .instret_retire_i (ex2_mem_en & rr_ex1_q.valid & ~combined_stall),
     .event_bus_i      (event_bus),
     // Stage 5h
     .trig_csr_rdata_i (trig_csr_rdata),
@@ -981,10 +1020,10 @@ module kronos_top
   // External gate on csr_illegal_raw.  u_csr now computes the priv/counter
   // predicates unconditionally so csr_illegal_o doesn't depend on req_i (and
   // therefore doesn't drag combined_stall into the cone of ex_redirect).
-  // The gate uses only registered id_ex1_q fields, breaking the cycle:
+  // The gate uses only registered rr_ex1_q fields, breaking the cycle:
   //   combined_stall -> csr.req_i -> csr_illegal -> ex_redirect ->
   //   redirect_load -> s0_valid_to_icache -> ... -> combined_stall.
-  assign csr_illegal = id_ex1_q.valid & id_ex1_q.dec.is_csr & csr_illegal_raw;
+  assign csr_illegal = rr_ex1_q.valid & rr_ex1_q.dec.is_csr & csr_illegal_raw;
 
   // ex_valid_i is intentionally NOT gated by ~combined_stall.  Closing
   // ~combined_stall here would form a comb loop:
@@ -1002,16 +1041,16 @@ module kronos_top
   kronos_trigger u_trigger (
     .clk_i         (clk_i),
     .rst_ni        (rst_ni),
-    .csr_req_i     (id_ex1_q.valid & id_ex1_q.dec.is_csr & ~combined_stall),
-    .csr_addr_i    (id_ex1_q.dec.csr_addr),
+    .csr_req_i     (rr_ex1_q.valid & rr_ex1_q.dec.is_csr & ~combined_stall),
+    .csr_addr_i    (rr_ex1_q.dec.csr_addr),
     .csr_we_i      (trig_csr_we),
     .csr_wdata_i   (trig_csr_wdata),
     .csr_rdata_o   (trig_csr_rdata),
     .csr_match_o   (trig_csr_match),
-    .ex_valid_i    (id_ex1_q.valid),
-    .ex_pc_i       (id_ex1_q.pc),
-    .ex_is_load_i  (id_ex1_q.dec.is_load),
-    .ex_is_store_i (id_ex1_q.dec.is_store),
+    .ex_valid_i    (rr_ex1_q.valid),
+    .ex_pc_i       (rr_ex1_q.pc),
+    .ex_is_load_i  (rr_ex1_q.dec.is_load),
+    .ex_is_store_i (rr_ex1_q.dec.is_store),
     .ex_mem_addr_i (alu_result),
     .hit_o         (trig_hit),
     .hit_pc_o      (trig_hit_pc)
@@ -1033,7 +1072,7 @@ module kronos_top
   // edge-triggered traps in the trap_taken_pulse).
   // -------------------------------------------------------------------------
   always_comb begin
-    unique case (id_ex1_q.dec.mem_funct3)
+    unique case (rr_ex1_q.dec.mem_funct3)
       3'b000:  pmp_data_size = 3'd0; // LB / SB
       3'b001:  pmp_data_size = 3'd1; // LH / SH
       3'b010:  pmp_data_size = 3'd2; // LW / SW / FLW / FSW
@@ -1108,17 +1147,17 @@ module kronos_top
     // combined_stall → valid_i → pmp_fault.  The fault flag is meaningful
     // whenever a load/store sits in EX; the trap path gates trap_i with
     // ~combined_stall so the trap only fires when the pipeline advances.
-    .valid_i      (id_ex1_q.valid &
-                   (id_ex1_q.dec.is_load | id_ex1_q.dec.is_store |
-                    id_ex1_q.dec.is_amo)),
+    .valid_i      (rr_ex1_q.valid &
+                   (rr_ex1_q.dec.is_load | rr_ex1_q.dec.is_store |
+                    rr_ex1_q.dec.is_amo)),
     // alu_result is the (rs1+imm) memory address before the EX/MEM register.
     .addr_i       ({24'b0, alu_result[31:0]}),
     .size_i       (pmp_data_size),
     .is_fetch_i   (1'b0),
-    .is_load_i    (id_ex1_q.dec.is_load |
-                   (id_ex1_q.dec.is_amo & id_ex1_q.dec.is_lr)),
-    .is_store_i   (id_ex1_q.dec.is_store |
-                   (id_ex1_q.dec.is_amo & ~id_ex1_q.dec.is_lr)),
+    .is_load_i    (rr_ex1_q.dec.is_load |
+                   (rr_ex1_q.dec.is_amo & rr_ex1_q.dec.is_lr)),
+    .is_store_i   (rr_ex1_q.dec.is_store |
+                   (rr_ex1_q.dec.is_amo & ~rr_ex1_q.dec.is_lr)),
     .fault_o      (pmp_data_fault_raw),
     .fault_addr_o (pmp_data_fault_addr_raw)
   );
@@ -1131,11 +1170,11 @@ module kronos_top
   // (LSU's pmp_fault_i, dcache_early_req_valid, trap_i / trap_cause /
   // trap_tval) read the registered version.  trap timing shifts by one
   // cycle on faulting load/store, matching the existing convention for
-  // dcache_bus_err_fault (also a MEM-stage fault read off id_ex1_q.pc).
+  // dcache_bus_err_fault (also a MEM-stage fault read off rr_ex1_q.pc).
   // Stage 7a — gate the register on ex1_ex2_en (~combined_stall) so the
   // s1 fault tracks the instruction transitioning EX1→EX2.  Without the gate,
   // a mem_stall on a faulting earlier load/store would let pmp_data_fault_raw
-  // keep latching for the later instruction in id_ex1_q each cycle the stall
+  // keep latching for the later instruction in rr_ex1_q each cycle the stall
   // holds; when the stall releases, the held instruction in ex1_ex2_q would
   // pick up the later instruction's fault as its own ex2_fault_d (test
   // sw/stage6/test_pmp_basic — the LUI(0x50) in ex1_ex2_q inherited the
@@ -1155,10 +1194,10 @@ module kronos_top
 
   // PMA AMO-on-NC trap detection at EX stage (PMP-style).
   // The dcache also exports amo_nc_fault_o, but that fires at MEM stage —
-  // by then id_ex1_q has advanced to the next instruction, so trap_cause /
+  // by then rr_ex1_q has advanced to the next instruction, so trap_cause /
   // mepc would be sourced from the wrong pipeline register. Detecting here
-  // at EX (id_ex1_q + alu_result) ensures the offending instruction is in
-  // id_ex1_q at trap time, matching how pmp_data_fault is wired.
+  // at EX (rr_ex1_q + alu_result) ensures the offending instruction is in
+  // rr_ex1_q at trap time, matching how pmp_data_fault is wired.
   always_comb begin
     ex_addr_uncacheable = 1'b0;
     for (int r = 0; r < NUM_NC_REGIONS; r++) begin
@@ -1167,8 +1206,8 @@ module kronos_top
         ex_addr_uncacheable = 1'b1;
     end
   end
-  assign ex_amo_nc_fault = id_ex1_q.valid &
-                           (id_ex1_q.dec.is_amo | id_ex1_q.dec.is_lr | id_ex1_q.dec.is_sc) &
+  assign ex_amo_nc_fault = rr_ex1_q.valid &
+                           (rr_ex1_q.dec.is_amo | rr_ex1_q.dec.is_lr | rr_ex1_q.dec.is_sc) &
                            ex_addr_uncacheable;
 
 
@@ -1181,12 +1220,12 @@ module kronos_top
   //     the MMU; no `is_wfi` decode bit exists yet.
   // -------------------------------------------------------------------------
   always_comb begin
-    mret_priv_fail = id_ex1_q.dec.is_mret & (priv_q != PRIV_M);
-    sret_priv_fail = id_ex1_q.dec.is_sret &
+    mret_priv_fail = rr_ex1_q.dec.is_mret & (priv_q != PRIV_M);
+    sret_priv_fail = rr_ex1_q.dec.is_sret &
                      ( (priv_q == PRIV_U) |
                        ((priv_q == PRIV_S) & mstatus[22]) );  // TSR
-    satp_tvm_fail  = id_ex1_q.dec.is_csr &
-                     (id_ex1_q.dec.csr_addr == kronos_pkg::CSR_SATP) &
+    satp_tvm_fail  = rr_ex1_q.dec.is_csr &
+                     (rr_ex1_q.dec.csr_addr == kronos_pkg::CSR_SATP) &
                      (priv_q == PRIV_S) & mstatus[20];       // TVM
   end
 
@@ -1199,7 +1238,7 @@ module kronos_top
   //     mstatus.MPP (bits 12:11) when in M-mode.
   //   - For fetch, MPRV does not apply — always use priv_q.
   //
-  // SFENCE.VMA pulses for one cycle when a SFENCE.VMA retires (id_ex1_q.valid
+  // SFENCE.VMA pulses for one cycle when a SFENCE.VMA retires (rr_ex1_q.valid
   // & is_sfence_vma & ~combined_stall).  rs1==x0 sweeps all VAs; rs2==x0
   // sweeps all ASIDs.  fwd_rs1_data / fwd_rs2_data are the EX-stage forwarded
   // operands so a producer one stage ahead is bypassed correctly.
@@ -1213,18 +1252,18 @@ module kronos_top
   assign translate_data   = (satp_mode != kronos_pkg::SATP_MODE_BARE) & (eff_priv_data != PRIV_M);
   assign translate_fetch  = (satp_mode != kronos_pkg::SATP_MODE_BARE) & (priv_q != PRIV_M);
 
-  assign sfence_vma         = id_ex1_q.valid & id_ex1_q.dec.is_sfence_vma & ~combined_stall;
+  assign sfence_vma         = rr_ex1_q.valid & rr_ex1_q.dec.is_sfence_vma & ~combined_stall;
   assign sfence_va          = fwd_rs1_data;
   assign sfence_asid        = fwd_rs2_data[15:0];
-  assign sfence_va_valid    = (id_ex1_q.dec.rs1 != 5'd0);
-  assign sfence_asid_valid  = (id_ex1_q.dec.rs2 != 5'd0);
+  assign sfence_va_valid    = (rr_ex1_q.dec.rs1 != 5'd0);
+  assign sfence_asid_valid  = (rr_ex1_q.dec.rs2 != 5'd0);
 
   // wfi_priv_fail is intentionally NOT gated by ~combined_stall (closes #89).
   // The comb cone of ex_redirect must stay free of combined_stall.  The
   // actual trap is gated by ~combined_stall in u_csr.trap_i and the perf
   // counter trap_taken_pulse, so widening the predicate during stalls does
   // not double-fire the trap or skew event counts.
-  assign wfi_priv_fail    = id_ex1_q.valid & id_ex1_q.dec.is_wfi &
+  assign wfi_priv_fail    = rr_ex1_q.valid & rr_ex1_q.dec.is_wfi &
                               (priv_q != PRIV_M) & mstatus[21] /*TW*/;
 
   // -------------------------------------------------------------------------
@@ -1245,8 +1284,8 @@ module kronos_top
   // and refills the dTLB with the updated entry.  kronos_tlb invalidates
   // matching entries on refill so the stale A=1/D=0 line cannot keep
   // answering lookups at a lower index.
-  assign dtlb_miss = translate_data & id_ex1_q.valid &
-                     (id_ex1_q.dec.is_load | id_ex1_q.dec.is_store | id_ex1_q.dec.is_amo) &
+  assign dtlb_miss = translate_data & rr_ex1_q.valid &
+                     (rr_ex1_q.dec.is_load | rr_ex1_q.dec.is_store | rr_ex1_q.dec.is_amo) &
                      ((~dtlb_hit & ~dtlb_perm_fail) | dtlb_a_zero | dtlb_d_zero);
 
   // PA muxes — when translation is off (Bare or M-mode), forward the original
@@ -1300,9 +1339,9 @@ module kronos_top
                             (ptw_pf & (ptw_pf_which == TLB_FETCH)) |
                             cross_page_fault;
   assign load_page_fault  = (dtlb_perm_fail | (ptw_pf & (ptw_pf_which == TLB_LOAD))) &
-                            id_ex1_q.dec.is_load;
+                            rr_ex1_q.dec.is_load;
   assign store_page_fault = (dtlb_perm_fail | (ptw_pf & (ptw_pf_which == TLB_STORE))) &
-                            (id_ex1_q.dec.is_store | id_ex1_q.dec.is_amo);
+                            (rr_ex1_q.dec.is_store | rr_ex1_q.dec.is_amo);
 
   // STAGE5f: 64-bit LSU — thin adapter to kronos_dcache.
   kronos_lsu u_lsu (
@@ -1365,10 +1404,10 @@ module kronos_top
   );
 
   // mem_stall extends LSU stall with the FENCE.I D-cache flush window so
-  // FENCE.I is held in EX (id_ex1_q.valid stays high) until the cache is
+  // FENCE.I is held in EX (rr_ex1_q.valid stays high) until the cache is
   // drained.  The kick-off term (fence_i_pulse_raw & dirty_pending) is
   // combinational so the pipeline freezes the SAME cycle FENCE.I enters EX,
-  // before id_ex1_q can advance.  fence_i_active_q latches one cycle later
+  // before rr_ex1_q can advance.  fence_i_active_q latches one cycle later
   // and holds the stall across the rest of the flush walk.
   assign mem_stall = lsu_mem_stall | fence_i_active_q |
                      (fence_i_pulse_raw & dcache_dirty_pending);
@@ -1467,16 +1506,16 @@ module kronos_top
   kronos_tlb #(.N(8)) u_dtlb (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
-    .lookup_valid_i     (translate_data & id_ex1_q.valid &
-                         (id_ex1_q.dec.is_load | id_ex1_q.dec.is_store |
-                          id_ex1_q.dec.is_amo)),
+    .lookup_valid_i     (translate_data & rr_ex1_q.valid &
+                         (rr_ex1_q.dec.is_load | rr_ex1_q.dec.is_store |
+                          rr_ex1_q.dec.is_amo)),
     .lookup_va_i        (alu_result),
     .lookup_asid_i      (satp_asid),
     .lookup_priv_i      (eff_priv_data),
-    .is_load_i          (id_ex1_q.dec.is_load |
-                         (id_ex1_q.dec.is_amo & id_ex1_q.dec.is_lr)),
-    .is_store_i         (id_ex1_q.dec.is_store |
-                         (id_ex1_q.dec.is_amo & ~id_ex1_q.dec.is_lr)),
+    .is_load_i          (rr_ex1_q.dec.is_load |
+                         (rr_ex1_q.dec.is_amo & rr_ex1_q.dec.is_lr)),
+    .is_store_i         (rr_ex1_q.dec.is_store |
+                         (rr_ex1_q.dec.is_amo & ~rr_ex1_q.dec.is_lr)),
     .is_fetch_i         (1'b0),
     .sum_i              (mstatus[18]),
     .mxr_i              (mstatus[19]),
@@ -1520,10 +1559,10 @@ module kronos_top
     .itlb_miss_va_i       ({32'b0, icache_fetch_addr}),
     .dtlb_miss_i          (dtlb_miss),
     .dtlb_miss_va_i       (alu_result),
-    .dtlb_miss_is_load_i  (id_ex1_q.dec.is_load |
-                           (id_ex1_q.dec.is_amo & id_ex1_q.dec.is_lr)),
-    .dtlb_miss_is_store_i (id_ex1_q.dec.is_store |
-                           (id_ex1_q.dec.is_amo & ~id_ex1_q.dec.is_lr)),
+    .dtlb_miss_is_load_i  (rr_ex1_q.dec.is_load |
+                           (rr_ex1_q.dec.is_amo & rr_ex1_q.dec.is_lr)),
+    .dtlb_miss_is_store_i (rr_ex1_q.dec.is_store |
+                           (rr_ex1_q.dec.is_amo & ~rr_ex1_q.dec.is_lr)),
     .miss_priv_i          (eff_priv_data),
     .sum_i                (mstatus[18]),
     .mxr_i                (mstatus[19]),
@@ -1555,21 +1594,21 @@ module kronos_top
   );
 
   // FPU top
-  assign fpu_tag_in = '{rd: id_ex1_q.dec.rd, fp_dest: id_ex1_q.dec.rd_fp};
+  assign fpu_tag_in = '{rd: rr_ex1_q.dec.rd, fp_dest: rr_ex1_q.dec.rd_fp};
 
   kronos_fpu_top u_fpu (
     .clk_i      (clk_i),
     .rst_ni     (rst_ni),
     .flush_i    (1'b0),
-    .in_valid_i (id_ex1_q.valid & id_ex1_q.dec.is_fp &
-                 ~id_ex1_q.dec.fp_load & ~id_ex1_q.dec.fp_store &
+    .in_valid_i (rr_ex1_q.valid & rr_ex1_q.dec.is_fp &
+                 ~rr_ex1_q.dec.fp_load & ~rr_ex1_q.dec.fp_store &
                  ~fpu_dispatched_q),
-    .op_i       (id_ex1_q.dec.fp_op),
-    .fmt_d_i    (id_ex1_q.dec.fmt_d),
-    .rm_i       (id_ex1_q.dec.rm_resolved),
+    .op_i       (rr_ex1_q.dec.fp_op),
+    .fmt_d_i    (rr_ex1_q.dec.fmt_d),
+    .rm_i       (rr_ex1_q.dec.rm_resolved),
     .a_i        (fpu_a_i),
     .b_i        (fpu_b_i),
-    .c_i        (id_ex1_q.rs3_data),
+    .c_i        (rr_ex1_q.rs3_data),
     .tag_i      (fpu_tag_in),
     .busy_o     (fpu_busy),
     .out_valid_o(fpu_out_valid),
@@ -1585,8 +1624,8 @@ module kronos_top
       fpu_dispatched_q <= 1'b0;
     end else begin
       // Dispatch: fire once per FP arithmetic instruction in EX
-      if (id_ex1_q.valid & id_ex1_q.dec.is_fp &
-          ~id_ex1_q.dec.fp_load & ~id_ex1_q.dec.fp_store &
+      if (rr_ex1_q.valid & rr_ex1_q.dec.is_fp &
+          ~rr_ex1_q.dec.fp_load & ~rr_ex1_q.dec.fp_store &
           ~fpu_dispatched_q & ~fpu_busy) begin
         fp_inflight_q    <= 1'b1;
         fpu_dispatched_q <= 1'b1;
@@ -1843,10 +1882,10 @@ module kronos_top
     .pred_taken_o    (pred_taken),
     .pred_target_o   (pred_target),
     .upd_valid_i     (bpred_update_en),
-    .upd_pc_i        (id_ex1_q.pc),
+    .upd_pc_i        (rr_ex1_q.pc),
     .upd_taken_i     (actual_taken),
     .upd_target_i    (ex_pc_d),
-    .upd_is_jal_i    (id_ex1_q.dec.is_jal | id_ex1_q.dec.is_jalr)
+    .upd_is_jal_i    (rr_ex1_q.dec.is_jal | rr_ex1_q.dec.is_jalr)
   );
 
   // =========================================================================
@@ -1900,16 +1939,16 @@ module kronos_top
       // if_id_q.  The branch is at if_id_q's output and we want id_ex to
       // latch it; the wrong-path fall-through that predecode would emit
       // this cycle must NOT enter if_id_q.  Two cases:
-      //   (a) id_ex1_en = 1: id_ex latches the branch this cycle, so we
+      //   (a) rr_ex1_en = 1: id_ex latches the branch this cycle, so we
       //       can safely clear if_id_q to bubble the wrong-path fetch.
-      //   (b) id_ex1_en = 0 (muldiv/mem stall): id_ex cannot accept the
+      //   (b) rr_ex1_en = 0 (muldiv/mem stall): id_ex cannot accept the
       //       branch yet.  Clearing if_id_q here would lose the branch
       //       — closes #86 (mulw → addiw → bne tight-loop wedge).
       //       Hold if_id_q so id_ex picks up the branch when the stall
       //       releases.  The wrong-path predecode emit is naturally
       //       suppressed: `if_id_en` is also 0 under any stall that drops
-      //       id_ex1_en, so we don't fall into the latch branch below.
-      if (id_ex1_en) begin
+      //       rr_ex1_en, so we don't fall into the latch branch below.
+      if (rr_ex1_en) begin
         if_id_q <= '{default: '0};
       end
     end else if (if_id_en) begin
@@ -1923,175 +1962,213 @@ module kronos_top
   end
 
   // =========================================================================
-  // ID stage
+  // ID stage — produces id_rr_d combinationally.  Decode + fault-bit gen +
+  // forwarding-selector capture; no regfile / bypass / CSR access here.
   // =========================================================================
 
-  // two-level ID forwarding structure.
-  //
-  // FP path: compute a 2-bit one-hot selector independently of data, then use
-  // a balanced 4-way unique-case mux.  Separating condition evaluation from
-  // data selection reduces the path from ~10–12 LUT levels to ~4–5 LUT levels.
-  //
-  // Integer path: drop the 0-gap EX bypass and 1-gap MEM bypass from ID.
-  // Those cases are already handled by fwd_rs1_sel = FWD_EXMEM / FWD_MEMWB
-  // in the EX-stage forwarding mux (correct because the producer is in
-  // ex2_mem_q / mem_wb_q when the consumer reaches EX).  Only the 3-gap WB
-  // bypass is kept here (the producer has retired by the time the consumer
-  // reaches EX, so no EX mux can help).
-
-  // FP selector encoding: 2'd0 = FPU result, 2'd1 = EX/MEM FP, 2'd2 = WB FP,
-  //                       2'd3 = FP regfile.
+  // ID/RR next-state.  Decode result, ID-owned fault bits, and the RR/EX1-stage
+  // bypass selectors (computed at ID by u_forward) cross the boundary; rs/csr
+  // reads and the RR/EX1 bypass mux fire inside the RR cycle.
   always_comb begin
-    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_dec.rs1))
+    id_rr_d              = kronos_pkg::ID_RR_REG_ZERO;
+    id_rr_d.pc           = if_id_q.pc;
+    id_rr_d.instr        = if_id_q.instr;
+    id_rr_d.dec          = id_dec;
+    id_rr_d.fwd_rs1_sel  = fwd_rs1_sel;
+    id_rr_d.fwd_rs2_sel  = fwd_rs2_sel;
+    id_rr_d.valid        = if_id_q.valid;
+    id_rr_d.is_16b       = if_id_q.is_16b;
+    id_rr_d.pred_taken   = if_id_q.pred_taken;
+    id_rr_d.pred_target  = if_id_q.pred_target;
+    // ID-owned fault producers.  Non-ID bits stay '0 here; EX1/EX2/MEM each
+    // OR-fold their own producers at later pipe boundaries.
+    id_rr_d.fault            = kronos_pkg::FAULT_ZERO;
+    id_rr_d.fault.ecall      = if_id_q.valid & id_dec.is_ecall;
+    id_rr_d.fault.ebreak     = if_id_q.valid & id_dec.is_ebreak;
+    id_rr_d.fault.illegal    = if_id_q.valid & id_dec.illegal &
+                               ~fence_i_dirty_block;
+    id_rr_d.fault.is_mret    = if_id_q.valid & id_dec.is_mret;
+    id_rr_d.fault.is_sret    = if_id_q.valid & id_dec.is_sret;
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if      (!rst_ni)        id_rr_q <= kronos_pkg::ID_RR_REG_ZERO;
+    else if (id_rr_flush)    id_rr_q <= kronos_pkg::ID_RR_REG_ZERO;
+    else if (id_rr_en)       id_rr_q <= id_rr_d;
+  end
+
+  // =========================================================================
+  // RR stage — regfile reads (int + FP), source-select muxes, RR/EX1 bypass.
+  // =========================================================================
+
+  // FP source-select mux.  Selector encoding:
+  //   2'd0 = live FPU result, 2'd1 = EX/MEM FP forward, 2'd2 = WB FP forward,
+  //   2'd3 = FP regfile read.
+  always_comb begin
+    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_rr_q.dec.rs1))
       fp_rs1_sel = 2'd0;
     else if (ex2_mem_q.valid & ex2_mem_q.dec.is_fp & ex2_mem_q.dec.rd_fp &
-             ~ex2_mem_q.dec.fp_load & (ex2_mem_q.dec.rd == id_dec.rs1))
+             ~ex2_mem_q.dec.fp_load & (ex2_mem_q.dec.rd == id_rr_q.dec.rs1))
       fp_rs1_sel = 2'd1;
-    else if (fp_we & (fp_wa == id_dec.rs1))
+    else if (fp_we & (fp_wa == id_rr_q.dec.rs1))
       fp_rs1_sel = 2'd2;
     else
       fp_rs1_sel = 2'd3;
   end
   always_comb begin
     unique case (fp_rs1_sel)
-      2'd0:    fp_rs1_data_id = fp_result_cur;
-      2'd1:    fp_rs1_data_id = ex2_mem_q.alu_result;
-      2'd2:    fp_rs1_data_id = fp_wd;
-      default: fp_rs1_data_id = fp_rd1;
+      2'd0:    fp_rs1_data_rr = fp_result_cur;
+      2'd1:    fp_rs1_data_rr = ex2_mem_q.alu_result;
+      2'd2:    fp_rs1_data_rr = fp_wd;
+      default: fp_rs1_data_rr = fp_rd1;
     endcase
   end
 
   always_comb begin
-    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_dec.rs2))
+    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_rr_q.dec.rs2))
       fp_rs2_sel = 2'd0;
     else if (ex2_mem_q.valid & ex2_mem_q.dec.is_fp & ex2_mem_q.dec.rd_fp &
-             ~ex2_mem_q.dec.fp_load & (ex2_mem_q.dec.rd == id_dec.rs2))
+             ~ex2_mem_q.dec.fp_load & (ex2_mem_q.dec.rd == id_rr_q.dec.rs2))
       fp_rs2_sel = 2'd1;
-    else if (fp_we & (fp_wa == id_dec.rs2))
+    else if (fp_we & (fp_wa == id_rr_q.dec.rs2))
       fp_rs2_sel = 2'd2;
     else
       fp_rs2_sel = 2'd3;
   end
   always_comb begin
     unique case (fp_rs2_sel)
-      2'd0:    fp_rs2_data_id = fp_result_cur;
-      2'd1:    fp_rs2_data_id = ex2_mem_q.alu_result;
-      2'd2:    fp_rs2_data_id = fp_wd;
-      default: fp_rs2_data_id = fp_rd2;
+      2'd0:    fp_rs2_data_rr = fp_result_cur;
+      2'd1:    fp_rs2_data_rr = ex2_mem_q.alu_result;
+      2'd2:    fp_rs2_data_rr = fp_wd;
+      default: fp_rs2_data_rr = fp_rd2;
     endcase
   end
 
   always_comb begin
-    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_dec.rs3))
+    if      (fp_result_avail & fp_tag_cur.fp_dest & (fp_tag_cur.rd == id_rr_q.dec.rs3))
       fp_rs3_sel = 2'd0;
     else if (ex2_mem_q.valid & ex2_mem_q.dec.is_fp & ex2_mem_q.dec.rd_fp &
-             ~ex2_mem_q.dec.fp_load & (ex2_mem_q.dec.rd == id_dec.rs3))
+             ~ex2_mem_q.dec.fp_load & (ex2_mem_q.dec.rd == id_rr_q.dec.rs3))
       fp_rs3_sel = 2'd1;
-    else if (fp_we & (fp_wa == id_dec.rs3))
+    else if (fp_we & (fp_wa == id_rr_q.dec.rs3))
       fp_rs3_sel = 2'd2;
     else
       fp_rs3_sel = 2'd3;
   end
   always_comb begin
     unique case (fp_rs3_sel)
-      2'd0:    fp_rs3_data_id = fp_result_cur;
-      2'd1:    fp_rs3_data_id = ex2_mem_q.alu_result;
-      2'd2:    fp_rs3_data_id = fp_wd;
-      default: fp_rs3_data_id = fp_rd3;
+      2'd0:    fp_rs3_data_rr = fp_result_cur;
+      2'd1:    fp_rs3_data_rr = ex2_mem_q.alu_result;
+      2'd2:    fp_rs3_data_rr = fp_wd;
+      default: fp_rs3_data_rr = fp_rd3;
     endcase
   end
 
-  // Integer path: WB bypass (3-gap) or register file.
-  // rd_wen guards against B/S-type encodings where instr[11:7] is an
-  // immediate, not a real destination register.
-  assign int_rs1_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs1)
+  // Integer path: WB bypass (oldest source, no bypass-mux key for it) or
+  // regfile read.  rd_wen guards against B/S-type encodings where instr[11:7]
+  // is an immediate, not a real destination register.
+  assign int_rs1_data_rr = (wb_writing && mem_wb_q.dec.rd == id_rr_q.dec.rs1)
                            ? wb_result_64 : rs1_rdata_64;
-  assign int_rs2_data_id = (wb_writing && mem_wb_q.dec.rd == id_dec.rs2)
+  assign int_rs2_data_rr = (wb_writing && mem_wb_q.dec.rd == id_rr_q.dec.rs2)
                            ? wb_result_64 : rs2_rdata_64;
 
-  // Final operand mux: FP or integer.  FP and integer paths are mutually
-  // exclusive on rs1_fp / rs2_fp — one more LUT level added here.
-  assign rs1_data_id = id_dec.rs1_fp ? fp_rs1_data_id : int_rs1_data_id;
-  assign rs2_data_id = id_dec.rs2_fp ? fp_rs2_data_id : int_rs2_data_id;
-  assign rs3_data_id = fp_rs3_data_id;
+  // Final RR-stage operand mux: FP or integer.  FP and integer paths are
+  // mutually exclusive on rs1_fp / rs2_fp.
+  assign rs1_data_rr = id_rr_q.dec.rs1_fp ? fp_rs1_data_rr : int_rs1_data_rr;
+  assign rs2_data_rr = id_rr_q.dec.rs2_fp ? fp_rs2_data_rr : int_rs2_data_rr;
+  assign rs3_data_rr = fp_rs3_data_rr;
+
+  // RR/EX1 bypass mux — selects the freshest producer slot keyed by
+  // id_rr_q.fwd_rs*_sel.  Captured into rr_ex1_q.rs1_data / rs2_data so EX1
+  // consumes a flop output (no combinational regfile / bypass cone in front of
+  // the ALU / AGU / FPU dispatch / branch-compare).
+  //
+  // Source map (rs1; rs2 mirrors):
+  //   FWD_EX1_NOW : same-cycle live ex_result (consumer was in RR at ID-time
+  //                  T, producer in EX1 now at T+1; ex_result has not yet
+  //                  flopped into ex1_ex2_q.alu_result).  ex_result picks
+  //                  muldiv_result vs alu_result so MUL/DIV producers bypass
+  //                  through the same path.
+  //   FWD_EX1     : ex1_ex2_q.alu_result (or csr_rdata when CSR-typed).
+  //   FWD_EXMEM   : ex2_mem_q.alu_result (or csr_rdata when CSR-typed).
+  //   FWD_MEMWB   : wb_result_64 (writeback mux output).
+  //   default     : RR-cycle source (FP mux or int regfile/WB-bypass mux).
+  always_comb begin
+    unique case (id_rr_q.fwd_rs1_sel)
+      FWD_EX1_NOW: rs1_bypassed = ex_result;
+      FWD_EX1:     rs1_bypassed = ex1_ex2_csr_q ? ex1_ex2_q.csr_rdata : ex1_ex2_q.alu_result;
+      FWD_EXMEM:   rs1_bypassed = ex2_mem_csr_q ? ex2_mem_q.csr_rdata : ex2_mem_q.alu_result;
+      FWD_MEMWB:   rs1_bypassed = wb_result_64;
+      default:     rs1_bypassed = rs1_data_rr;
+    endcase
+    unique case (id_rr_q.fwd_rs2_sel)
+      FWD_EX1_NOW: rs2_bypassed = ex_result;
+      FWD_EX1:     rs2_bypassed = ex1_ex2_csr_q ? ex1_ex2_q.csr_rdata : ex1_ex2_q.alu_result;
+      FWD_EXMEM:   rs2_bypassed = ex2_mem_csr_q ? ex2_mem_q.csr_rdata : ex2_mem_q.alu_result;
+      FWD_MEMWB:   rs2_bypassed = wb_result_64;
+      default:     rs2_bypassed = rs2_data_rr;
+    endcase
+  end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      id_ex1_q <= kronos_pkg::ID_EX_REG_ZERO;
-    end else if (id_ex1_flush) begin
-      id_ex1_q <= kronos_pkg::ID_EX_REG_ZERO;
-    end else if (id_ex1_en) begin
-      id_ex1_q.pc          <= if_id_q.pc;
-      id_ex1_q.dec         <= id_dec;
-      id_ex1_q.rs1_data    <= rs1_data_id;
-      id_ex1_q.rs2_data    <= rs2_data_id;
-      id_ex1_q.rs3_data    <= rs3_data_id;
-      id_ex1_q.valid       <= if_id_q.valid;
-      id_ex1_q.is_16b      <= if_id_q.is_16b;
-      id_ex1_q.pred_taken  <= if_id_q.pred_taken;
-      id_ex1_q.pred_target <= if_id_q.pred_target;
-      id_ex1_q.fwd_rs1_sel <= fwd_rs1_sel;
-      id_ex1_q.fwd_rs2_sel <= fwd_rs2_sel;
-      id_ex1_q.instr       <= if_id_q.instr;
-      // Stage 7a — ID-stage fault producers.  All non-ID bits stay '0 here;
-      // EX1 / EX2 / MEM each OR-fold their own bits at the next pipe boundary.
-      id_ex1_q.fault           <= kronos_pkg::FAULT_ZERO;
-      id_ex1_q.fault.ecall     <= if_id_q.valid & id_dec.is_ecall;
-      id_ex1_q.fault.ebreak    <= if_id_q.valid & id_dec.is_ebreak;
-      id_ex1_q.fault.illegal   <= if_id_q.valid & id_dec.illegal &
-                                  ~fence_i_dirty_block;
-      id_ex1_q.fault.is_mret   <= if_id_q.valid & id_dec.is_mret;
-      id_ex1_q.fault.is_sret   <= if_id_q.valid & id_dec.is_sret;
+      rr_ex1_q <= kronos_pkg::RR_EX1_REG_ZERO;
+    end else if (rr_ex1_flush) begin
+      rr_ex1_q <= kronos_pkg::RR_EX1_REG_ZERO;
+    end else if (rr_ex1_en) begin
+      rr_ex1_q.pc          <= id_rr_q.pc;
+      rr_ex1_q.dec         <= id_rr_q.dec;
+      rr_ex1_q.rs1_data    <= rs1_bypassed;
+      rr_ex1_q.rs2_data    <= rs2_bypassed;
+      rr_ex1_q.rs3_data    <= rs3_data_rr;
+      rr_ex1_q.valid       <= id_rr_q.valid;
+      rr_ex1_q.is_16b      <= id_rr_q.is_16b;
+      rr_ex1_q.pred_taken  <= id_rr_q.pred_taken;
+      rr_ex1_q.pred_target <= id_rr_q.pred_target;
+      rr_ex1_q.fwd_rs1_sel <= id_rr_q.fwd_rs1_sel;
+      rr_ex1_q.fwd_rs2_sel <= id_rr_q.fwd_rs2_sel;
+      rr_ex1_q.instr       <= id_rr_q.instr;
+      // ID-owned fault bits travel with the instruction; EX1/EX2/MEM fold in
+      // their own producers at later pipe boundaries.
+      rr_ex1_q.fault       <= id_rr_q.fault;
+      // Speculative CSR read captured at the RR/EX1 boundary.  Consumed by
+      // EX1's writeback-value pipe via the EX1-stage rdata_o path (kept until
+      // 7c retiming); already-flopped here so EX1 sees no comb CSR-file read.
+      rr_ex1_q.csr_rdata   <= rr_csr_rdata_combinational;
     end
   end
 
   // =========================================================================
-  // EX stage — 64-bit forwarding mux
+  // EX1 stage — operand consumption from RR/EX1 flop outputs (no comb cone).
   // =========================================================================
 
-  // Stage 7a — three-source forwarding mux.  ex1_ex2_csr_q / ex2_mem_csr_q are
-  // pre-registered wb_sel == WB_CSR flags that gate csr_rdata vs alu_result,
-  // removing the 3-bit wb_sel compare from each forward-data path.
-  //   FWD_EX1   = consumer's source was in EX1 at decision time → in EX2 now → ex1_ex2_q.
-  //   FWD_EXMEM = consumer's source was in EX2 at decision time → in MEM now → ex2_mem_q.
-  //   FWD_MEMWB = consumer's source was in MEM at decision time → in WB now → wb_result_64.
-  always_comb begin
-    unique case (id_ex1_q.fwd_rs1_sel)
-      FWD_NONE:  fwd_rs1_data = id_ex1_q.rs1_data;
-      FWD_EX1:   fwd_rs1_data = ex1_ex2_csr_q ? ex1_ex2_q.csr_rdata : ex1_ex2_q.alu_result;
-      FWD_EXMEM: fwd_rs1_data = ex2_mem_csr_q ? ex2_mem_q.csr_rdata : ex2_mem_q.alu_result;
-      FWD_MEMWB: fwd_rs1_data = wb_result_64;
-      default:   fwd_rs1_data = id_ex1_q.rs1_data;
-    endcase
-    unique case (id_ex1_q.fwd_rs2_sel)
-      FWD_NONE:  fwd_rs2_data = id_ex1_q.rs2_data;
-      FWD_EX1:   fwd_rs2_data = ex1_ex2_csr_q ? ex1_ex2_q.csr_rdata : ex1_ex2_q.alu_result;
-      FWD_EXMEM: fwd_rs2_data = ex2_mem_csr_q ? ex2_mem_q.csr_rdata : ex2_mem_q.alu_result;
-      FWD_MEMWB: fwd_rs2_data = wb_result_64;
-      default:   fwd_rs2_data = id_ex1_q.rs2_data;
-    endcase
-  end
+  // The bypass mux fires at RR (above) and captures into rr_ex1_q.{rs1,rs2}_data
+  // at the RR/EX1 boundary.  EX1 reads pure flop outputs; alias names kept so
+  // downstream consumers (alu_a/alu_b, fpu_a_i/fpu_b_i, JALR adder, CSR rs1
+  // operand, branch comparator, dcache wdata) don't all need to be retargeted.
+  assign fwd_rs1_data = rr_ex1_q.rs1_data;
+  assign fwd_rs2_data = rr_ex1_q.rs2_data;
 
   // ALU operand formation — PC zero-extends to 64, imm sign-extends to 64.
-  assign alu_a = id_ex1_q.dec.use_pc  ? {32'b0, id_ex1_q.pc}
+  assign alu_a = rr_ex1_q.dec.use_pc  ? {32'b0, rr_ex1_q.pc}
                                      : fwd_rs1_data;
-  assign alu_b = id_ex1_q.dec.use_imm ? {{32{id_ex1_q.dec.imm[31]}}, id_ex1_q.dec.imm}
+  assign alu_b = rr_ex1_q.dec.use_imm ? {{32{rr_ex1_q.dec.imm[31]}}, rr_ex1_q.dec.imm}
                                      : fwd_rs2_data;
 
   // FPU operand forwarding: for FP instructions with integer-source operands
   // (FMV.W.X, FMV.D.X), apply EX integer forwarding so a producer one or two
   // stages ahead is bypassed correctly.  FP-source operands were already
   // forwarded via the fpu_out_valid bypass in the ID-stage rs1/2_data_id mux.
-  assign fpu_a_i = id_ex1_q.dec.rs1_fp ? id_ex1_q.rs1_data : fwd_rs1_data;
-  assign fpu_b_i = id_ex1_q.dec.rs2_fp ? id_ex1_q.rs2_data : fwd_rs2_data;
+  assign fpu_a_i = rr_ex1_q.dec.rs1_fp ? rr_ex1_q.rs1_data : fwd_rs1_data;
+  assign fpu_b_i = rr_ex1_q.dec.rs2_fp ? rr_ex1_q.rs2_data : fwd_rs2_data;
 
   // Branch condition — consumes the ALU's comparator outputs. Decode sets
   // alu_op = ALU_SLT / ALU_SLTU for branches so cmp_lt_o runs on the right
   // signedness; eq_o is valid for any subtract-style alu_op.
   always_comb begin
     branch_taken = 1'b0;
-    if (id_ex1_q.valid & id_ex1_q.dec.is_branch) begin
-      unique case (id_ex1_q.dec.branch_funct3)
+    if (rr_ex1_q.valid & rr_ex1_q.dec.is_branch) begin
+      unique case (rr_ex1_q.dec.branch_funct3)
         3'b000:  branch_taken =  alu_eq;        // BEQ
         3'b001:  branch_taken = ~alu_eq;        // BNE
         3'b100:  branch_taken =  alu_cmp_lt;    // BLT  (signed)
@@ -2108,7 +2185,7 @@ module kronos_top
   // populates mem_wb_q.fault), then snapshot into mem_wb_trap_cause_q /
   // mem_wb_trap_tval_q.  The CSR's trap_i fires at retire (mem_wb_q.valid &
   // mem_wb_fault_any_trap), so the snapshot is the value mepc/mcause/mtval
-  // commit.  This decouples the trap fields from id_ex1_q (which has advanced
+  // commit.  This decouples the trap fields from rr_ex1_q (which has advanced
   // to the next instruction by retire-cycle).
   //
   // Sdtrig action fires before the matched instruction commits, so a
@@ -2173,7 +2250,7 @@ module kronos_top
   // data PMP / page / dcache-bus faults, original instruction word for
   // illegal-instruction (priv-spec § 3.1.16), 0 otherwise.  Reads ex2_mem_q
   // registered state and the MEM-cycle live page-fault / dcache-bus-err
-  // signals — none of which depend on id_ex1_q.
+  // signals — none of which depend on rr_ex1_q.
   always_comb begin
     if      (ex2_mem_q.fault.pmp_fetch_fault) mem_trap_tval_d = mem_wb_pmp_fetch_addr_q[31:0];
     else if (instr_page_fault)                mem_trap_tval_d = ex2_mem_q.pc;
@@ -2243,18 +2320,18 @@ module kronos_top
   assign trap_tval  = mem_wb_trap_tval_q;
 
   // JALR target: 64-bit add, truncate to 32-bit PC (physical PC is 32-bit).
-  assign jalr_target_64 = (fwd_rs1_data + {{32{id_ex1_q.dec.imm[31]}}, id_ex1_q.dec.imm})
+  assign jalr_target_64 = (fwd_rs1_data + {{32{rr_ex1_q.dec.imm[31]}}, rr_ex1_q.dec.imm})
                            & ~64'd1;
 
   // Stage 7a — EX1-cycle predictive trap_cause / trap_class.  Drives
   // u_csr.trap_cause_ex_i / trap_class_ex_i so the trap_vector_o output is
   // computed against the correct medeleg/mideleg slot at the cycle ex_pc_d
   // is sampled.  Mirrors the priority ordering of mem_trap_cause_d below
-  // but reads EX1-cycle signals (id_ex1_q + the same EX1 fault producers
+  // but reads EX1-cycle signals (rr_ex1_q + the same EX1 fault producers
   // that drive ex_pc_d → trap_vector).
   always_comb begin
-    ex1_trap_class = (id_ex1_q.valid & (id_ex1_q.dec.is_ecall |
-                       id_ex1_q.dec.is_ebreak | id_ex1_q.dec.illegal |
+    ex1_trap_class = (rr_ex1_q.valid & (rr_ex1_q.dec.is_ecall |
+                       rr_ex1_q.dec.is_ebreak | rr_ex1_q.dec.illegal |
                        csr_illegal | mret_priv_fail | sret_priv_fail |
                        satp_tvm_fail | wfi_priv_fail | irq_pending)) |
                      trig_hit | pmp_fetch_fault | pmp_data_fault |
@@ -2269,9 +2346,9 @@ module kronos_top
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_INSTR_ACCESS_FAULT};
     end else if (load_page_fault) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_PAGE_FAULT};
-    end else if (pmp_data_fault & id_ex1_q.dec.is_load) begin
+    end else if (pmp_data_fault & rr_ex1_q.dec.is_load) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};
-    end else if (ex_amo_nc_fault & id_ex1_q.dec.is_load) begin
+    end else if (ex_amo_nc_fault & rr_ex1_q.dec.is_load) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};
     end else if (store_page_fault) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_PAGE_FAULT};
@@ -2279,16 +2356,16 @@ module kronos_top
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
     end else if (ex_amo_nc_fault) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
-    end else if (dcache_bus_err_fault & id_ex1_q.dec.is_load) begin
+    end else if (dcache_bus_err_fault & rr_ex1_q.dec.is_load) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};
     end else if (dcache_bus_err_fault) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
     end else if (irq_pending) begin
       ex1_trap_cause = {1'b1, 26'b0, irq_cause};
-    end else if (id_ex1_q.dec.illegal | csr_illegal | mret_priv_fail |
+    end else if (rr_ex1_q.dec.illegal | csr_illegal | mret_priv_fail |
                  sret_priv_fail | satp_tvm_fail | wfi_priv_fail) begin
       ex1_trap_cause = 32'd2;
-    end else if (id_ex1_q.dec.is_ecall) begin
+    end else if (rr_ex1_q.dec.is_ecall) begin
       unique case (priv_q)
         PRIV_U:  ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_ECALL_U};
         PRIV_S:  ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_ECALL_S};
@@ -2301,8 +2378,8 @@ module kronos_top
   end
 
   always_comb begin
-    if      ((id_ex1_q.valid & (id_ex1_q.dec.is_ecall | id_ex1_q.dec.is_ebreak |
-                               id_ex1_q.dec.illegal  | csr_illegal |
+    if      ((rr_ex1_q.valid & (rr_ex1_q.dec.is_ecall | rr_ex1_q.dec.is_ebreak |
+                               rr_ex1_q.dec.illegal  | csr_illegal |
                                mret_priv_fail | sret_priv_fail | satp_tvm_fail |
                                wfi_priv_fail |
                                irq_pending)) | trig_hit |
@@ -2310,69 +2387,69 @@ module kronos_top
               ex_amo_nc_fault | dcache_bus_err_fault |
               instr_page_fault | load_page_fault | store_page_fault) begin
       ex_pc_d = trap_vector[31:0];
-    end else if (id_ex1_q.valid & id_ex1_q.dec.is_mret & ~mret_priv_fail) begin
+    end else if (rr_ex1_q.valid & rr_ex1_q.dec.is_mret & ~mret_priv_fail) begin
       ex_pc_d = mepc[31:0];
-    end else if (id_ex1_q.valid & id_ex1_q.dec.is_sret & ~sret_priv_fail) begin
+    end else if (rr_ex1_q.valid & rr_ex1_q.dec.is_sret & ~sret_priv_fail) begin
       ex_pc_d = sepc[31:0];
-    end else if (id_ex1_q.valid & id_ex1_q.dec.is_jalr) begin
+    end else if (rr_ex1_q.valid & rr_ex1_q.dec.is_jalr) begin
       ex_pc_d = jalr_target_64[31:0];
-    end else if (id_ex1_q.valid & id_ex1_q.dec.is_jal) begin
-      ex_pc_d = id_ex1_q.pc + id_ex1_q.dec.imm;
+    end else if (rr_ex1_q.valid & rr_ex1_q.dec.is_jal) begin
+      ex_pc_d = rr_ex1_q.pc + rr_ex1_q.dec.imm;
     end else if (branch_taken) begin
-      ex_pc_d = id_ex1_q.pc + id_ex1_q.dec.imm;
+      ex_pc_d = rr_ex1_q.pc + rr_ex1_q.dec.imm;
     end else begin
-      ex_pc_d = id_ex1_q.is_16b ? id_ex1_q.pc + 32'd2 : id_ex1_q.pc + 32'd4;
+      ex_pc_d = rr_ex1_q.is_16b ? rr_ex1_q.pc + 32'd2 : rr_ex1_q.pc + 32'd4;
     end
   end
 
   // STAGE3: branch predictor — misprediction detection and update
-  assign is_branch_or_jump = id_ex1_q.dec.is_branch | id_ex1_q.dec.is_jal | id_ex1_q.dec.is_jalr;
-  assign actual_taken      = branch_taken | id_ex1_q.dec.is_jal | id_ex1_q.dec.is_jalr;
+  assign is_branch_or_jump = rr_ex1_q.dec.is_branch | rr_ex1_q.dec.is_jal | rr_ex1_q.dec.is_jalr;
+  assign actual_taken      = branch_taken | rr_ex1_q.dec.is_jal | rr_ex1_q.dec.is_jalr;
 
   // Direction-only misprediction: taken/not-taken disagrees with prediction.
   // Target misprediction (both predicted and actually taken, but wrong target)
   // is deferred to the MEM stage (bpred_mispredict_target) so that the JALR
   // target adder and the 32-bit comparator are removed from the ex_redirect
   // combinational path.
-  assign bpred_mispredict = id_ex1_q.valid & (
-    (id_ex1_q.pred_taken & ~actual_taken) |
-    (~id_ex1_q.pred_taken & actual_taken)
+  assign bpred_mispredict = rr_ex1_q.valid & (
+    (rr_ex1_q.pred_taken & ~actual_taken) |
+    (~rr_ex1_q.pred_taken & actual_taken)
   );
 
   // Suppress BTB update from the speculative instruction in EX when mem_redirect fires.
-  assign bpred_update_en = id_ex1_q.valid & ex2_mem_en & is_branch_or_jump & ~mem_redirect_q;
+  assign bpred_update_en = rr_ex1_q.valid & ex2_mem_en & is_branch_or_jump & ~mem_redirect_q;
 
   // FENCE.I trap suppression: when FENCE.I sits in EX and the D-cache still
   // holds dirty data, suppress the illegal-instruction redirect until the
   // flush completes.  Once dcache_flush_done pulses (or there were no dirty
   // lines), the redirect resumes and the trap handler advances MEPC past
   // the FENCE.I — by which time AXI memory has the up-to-date bytes.
-  assign fence_i_dirty_block = id_ex1_q.valid &
-                                (id_ex1_q.instr[6:0]   == 7'b0001111) &
-                                (id_ex1_q.instr[14:12] == 3'b001) &
+  assign fence_i_dirty_block = rr_ex1_q.valid &
+                                (rr_ex1_q.instr[6:0]   == 7'b0001111) &
+                                (rr_ex1_q.instr[14:12] == 3'b001) &
                                 dcache_dirty_pending & ~dcache_flush_done;
 
   // Stage 7a — EX1 fault next-state.  Each bit is a single-cycle decision.
-  // Carries forward id_ex1_q.fault and ORs in the EX1-stage producers.
+  // Carries forward rr_ex1_q.fault and ORs in the EX1-stage producers.
   fault_t ex1_fault_d;
   always_comb begin
-    ex1_fault_d                       = id_ex1_q.fault;
-    ex1_fault_d.csr_illegal           = id_ex1_q.valid & id_ex1_q.dec.is_csr &
+    ex1_fault_d                       = rr_ex1_q.fault;
+    ex1_fault_d.csr_illegal           = rr_ex1_q.valid & rr_ex1_q.dec.is_csr &
                                         csr_illegal_raw;
-    ex1_fault_d.mret_priv_fail        = id_ex1_q.valid & id_ex1_q.dec.is_mret &
+    ex1_fault_d.mret_priv_fail        = rr_ex1_q.valid & rr_ex1_q.dec.is_mret &
                                         mret_priv_fail;
-    ex1_fault_d.sret_priv_fail        = id_ex1_q.valid & id_ex1_q.dec.is_sret &
+    ex1_fault_d.sret_priv_fail        = rr_ex1_q.valid & rr_ex1_q.dec.is_sret &
                                         sret_priv_fail;
-    ex1_fault_d.satp_tvm_fail         = id_ex1_q.valid & satp_tvm_fail;
-    ex1_fault_d.wfi_priv_fail         = id_ex1_q.valid & id_ex1_q.dec.is_wfi &
+    ex1_fault_d.satp_tvm_fail         = rr_ex1_q.valid & satp_tvm_fail;
+    ex1_fault_d.wfi_priv_fail         = rr_ex1_q.valid & rr_ex1_q.dec.is_wfi &
                                         wfi_priv_fail;
     ex1_fault_d.irq_pending           = irq_pending;
     ex1_fault_d.bpred_dir_mispredict  = bpred_mispredict;
     // Stage 7a — sample EX1-cycle live producers into the EX1→EX2 register so
     // they propagate alongside the offending instruction.  ex_amo_nc_fault and
-    // trig_hit are pure combinational from id_ex1_q; without this snapshot
+    // trig_hit are pure combinational from rr_ex1_q; without this snapshot
     // ex2_fault_d would re-sample the live signals at the next cycle, when
-    // id_ex1_q has advanced to the wrong instruction.
+    // rr_ex1_q has advanced to the wrong instruction.
     ex1_fault_d.ex_amo_nc_fault       = ex_amo_nc_fault;
     ex1_fault_d.trig_hit              = trig_hit;
   end
@@ -2381,22 +2458,22 @@ module kronos_top
   always_comb begin
     ex1_ex2_d              = '{default: '0, dec: kronos_pkg::DECODED_INSTR_ZERO,
                                fault: kronos_pkg::FAULT_ZERO};
-    ex1_ex2_d.pc           = id_ex1_q.pc;
-    ex1_ex2_d.dec          = id_ex1_q.dec;
+    ex1_ex2_d.pc           = rr_ex1_q.pc;
+    ex1_ex2_d.dec          = rr_ex1_q.dec;
     ex1_ex2_d.rs2_data     = fwd_rs2_data;
-    ex1_ex2_d.alu_result   = (id_ex1_q.valid & id_ex1_q.dec.is_fp &
-                              ~id_ex1_q.dec.fp_load & ~id_ex1_q.dec.fp_store)
+    ex1_ex2_d.alu_result   = (rr_ex1_q.valid & rr_ex1_q.dec.is_fp &
+                              ~rr_ex1_q.dec.fp_load & ~rr_ex1_q.dec.fp_store)
                               ? fp_result_cur : ex_result;
     ex1_ex2_d.eff_va       = alu_adder_out[31:0];
     ex1_ex2_d.ex_pc_d      = ex_pc_d;
     ex1_ex2_d.branch_taken = branch_taken;
     ex1_ex2_d.csr_rdata    = csr_rdata;
     ex1_ex2_d.csr_wdata    = fwd_rs1_data;
-    ex1_ex2_d.valid        = id_ex1_q.valid & ~irq_pending;
-    ex1_ex2_d.is_16b       = id_ex1_q.is_16b;
-    ex1_ex2_d.pred_taken   = id_ex1_q.pred_taken;
-    ex1_ex2_d.pred_target  = id_ex1_q.pred_target;
-    ex1_ex2_d.instr        = id_ex1_q.instr;
+    ex1_ex2_d.valid        = rr_ex1_q.valid & ~irq_pending;
+    ex1_ex2_d.is_16b       = rr_ex1_q.is_16b;
+    ex1_ex2_d.pred_taken   = rr_ex1_q.pred_taken;
+    ex1_ex2_d.pred_target  = rr_ex1_q.pred_target;
+    ex1_ex2_d.instr        = rr_ex1_q.instr;
     ex1_ex2_d.fault        = ex1_fault_d;
   end
 
@@ -2416,7 +2493,7 @@ module kronos_top
   assign ex1_ex2_en    = ~combined_stall;
   // Stage 7a — flush ex1_ex2_q on mem_redirect_d (live, same cycle as the
   // trap-causing instruction sits in ex2_mem_q) as well as the registered _q
-  // bits.  Without the _d term, the wrong-path follower in id_ex1_q latches
+  // bits.  Without the _d term, the wrong-path follower in rr_ex1_q latches
   // into ex1_ex2_q at the same edge mem_redirect_q goes high; one cycle later
   // that follower's bpred_dir_mispredict can raise ex_redirect_q and override
   // the IFU's trap_vector / xRET reload — visible as test_csr_priv jumping to
@@ -2426,7 +2503,7 @@ module kronos_top
   // Stage 7a — EX2 fault next-state.  Carries EX1 bits forward verbatim.
   // pmp_fetch_fault / pmp_data_fault are sampled from the registered
   // pmp_s1_*_fault_q outputs which already track the EX2-stage instruction
-  // (the raw signals are computed off id_ex1_q and registered at the EX1→EX2
+  // (the raw signals are computed off rr_ex1_q and registered at the EX1→EX2
   // boundary).  ex_amo_nc_fault and trig_hit were sampled into ex1_fault_d
   // at the EX1→EX2 boundary so the bit travels with the instruction.
   fault_t ex2_fault_d;
@@ -2502,12 +2579,12 @@ module kronos_top
   // Stage 7a — wb_sel pipeline tracking the producer one stage ahead at the
   // forwarding-mux read site.  ex1_ex2_csr_q tags the instruction landing in
   // ex1_ex2_q (read by FWD_EX1), ex2_mem_csr_q tags the one landing in
-  // ex2_mem_q (read by FWD_EXMEM).  Sources are id_ex1_q at the EX1→EX2 edge
+  // ex2_mem_q (read by FWD_EXMEM).  Sources are rr_ex1_q at the EX1→EX2 edge
   // and ex1_ex2_q at the EX2→MEM edge — i.e. each register samples its own
-  // upstream stage, NOT id_ex1_q both times.
+  // upstream stage, NOT rr_ex1_q both times.
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)         ex1_ex2_csr_q <= 1'b0;
-    else if (ex1_ex2_en) ex1_ex2_csr_q <= (id_ex1_q.dec.wb_sel == WB_CSR);
+    else if (ex1_ex2_en) ex1_ex2_csr_q <= (rr_ex1_q.dec.wb_sel == WB_CSR);
   end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)         ex2_mem_csr_q <= 1'b0;
@@ -2515,7 +2592,7 @@ module kronos_top
   end
 
   // Stage 7a — csr_new_val pipeline.  u_csr.csr_new_val_o (= csr_new_val_post)
-  // is combinational from id_ex1_q at the EX1 stage, so capture it at the
+  // is combinational from rr_ex1_q at the EX1 stage, so capture it at the
   // EX1→EX2 edge and propagate forward.  Without this stage, the EX2→MEM
   // snapshot would read the next-EX1 instruction's value instead of the EX2
   // instruction's, and retire would commit the wrong CSR write.
@@ -2547,10 +2624,10 @@ module kronos_top
   end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)         ex1_ex2_is_fp_arith_q <= 1'b0;
-    else if (ex1_ex2_en) ex1_ex2_is_fp_arith_q <= id_ex1_q.valid &
-                                                  id_ex1_q.dec.is_fp &
-                                                  ~id_ex1_q.dec.fp_load &
-                                                  ~id_ex1_q.dec.fp_store;
+    else if (ex1_ex2_en) ex1_ex2_is_fp_arith_q <= rr_ex1_q.valid &
+                                                  rr_ex1_q.dec.is_fp &
+                                                  ~rr_ex1_q.dec.fp_load &
+                                                  ~rr_ex1_q.dec.fp_store;
   end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)         ex2_mem_fflags_q      <= 5'b0;

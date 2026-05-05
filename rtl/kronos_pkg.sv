@@ -301,16 +301,20 @@ package kronos_pkg;
   // Stage 1 / Stage 7a: forwarding and pipeline register types
   // -------------------------------------------------------------------------
 
-  // Stage 7a — fwd_sel_e widened from 2 bits to 3 bits to add the EX1→EX2
-  // forwarding source (ex1_ex2_q.alu_result, one cycle ahead of EXMEM).
-  // FWD_EXMEM and FWD_MEMWB keep their pre-Stage-7a semantics (1- and 2-stage
-  // ahead of ID under the Stage 7a renames: ex2_mem_q and mem_wb_q
-  // respectively).
+  // Stage 7b — fwd_sel_e gains FWD_EX1_NOW for the same-cycle bypass from the
+  // combinational EX1 alu_result_d into the RR/EX1 flop.  Names of the older
+  // sources keep their semantic meaning ("the source is in this register"),
+  // even though the consumer cycle moved one stage later by inserting RR:
+  //   FWD_EX1_NOW  - same cycle (combinational alu_result_d at EX1)
+  //   FWD_EX1      - 1-cycle-old (ex1_ex2_q.alu_result)
+  //   FWD_EXMEM    - 2-cycle-old (ex2_mem_q.alu_result)
+  //   FWD_MEMWB    - 3-cycle-old (mem_wb_q via writeback mux)
   typedef enum logic [2:0] {
-    FWD_NONE  = 3'd0,   // use register-file value
-    FWD_EX1   = 3'd1,   // Stage 7a — forward from ex1_ex2_q.alu_result
-    FWD_EXMEM = 3'd2,   // forward from EX/MEM alu_result (ex2_mem_q post-7a)
-    FWD_MEMWB = 3'd3    // forward from WB mux output
+    FWD_NONE     = 3'd0,   // use register-file value
+    FWD_EX1_NOW  = 3'd1,   // Stage 7b — same-cycle EX1 alu_result_d
+    FWD_EX1      = 3'd2,   // 1-cycle-old: ex1_ex2_q.alu_result
+    FWD_EXMEM    = 3'd3,   // 2-cycle-old: ex2_mem_q.alu_result
+    FWD_MEMWB    = 3'd4    // 3-cycle-old: WB mux output
   } fwd_sel_e;
 
   // -------------------------------------------------------------------------
@@ -435,6 +439,58 @@ package kronos_pkg;
   };
 
   localparam id_ex_reg_t ID_EX_REG_ZERO = '{
+    dec:         DECODED_INSTR_ZERO,
+    fwd_rs1_sel: FWD_NONE,
+    fwd_rs2_sel: FWD_NONE,
+    default:     '0
+  };
+
+  // -------------------------------------------------------------------------
+  // ID/RR and RR/EX1 pipeline register types (RR = register-read)
+  // -------------------------------------------------------------------------
+  // The RR stage sits between ID and EX1.  id_rr_reg_t carries the decode
+  // output + ID-owned fault bits across the ID/RR boundary; the regfile read,
+  // bypass mux, and CSR speculative read fire inside RR and capture into
+  // rr_ex1_reg_t at the RR/EX1 boundary.  rr_ex1_reg_t mirrors id_ex_reg_t
+  // plus a registered csr_rdata field.
+  typedef struct packed {
+    logic [31:0]    pc;
+    decoded_instr_t dec;
+    fwd_sel_e       fwd_rs1_sel;
+    fwd_sel_e       fwd_rs2_sel;
+    logic           valid;
+    logic           is_16b;
+    logic           pred_taken;
+    logic [31:0]    pred_target;
+    logic [31:0]    instr;
+    fault_t         fault;          // ID-owned bits only
+  } id_rr_reg_t;
+
+  typedef struct packed {
+    logic [31:0]    pc;
+    decoded_instr_t dec;
+    logic [63:0]    rs1_data;
+    logic [63:0]    rs2_data;
+    logic [63:0]    rs3_data;
+    fwd_sel_e       fwd_rs1_sel;
+    fwd_sel_e       fwd_rs2_sel;
+    logic           valid;
+    logic           is_16b;
+    logic           pred_taken;
+    logic [31:0]    pred_target;
+    logic [31:0]    instr;
+    fault_t         fault;
+    logic [63:0]    csr_rdata;       // speculative CSR read captured at RR
+  } rr_ex1_reg_t;
+
+  localparam id_rr_reg_t ID_RR_REG_ZERO = '{
+    dec:         DECODED_INSTR_ZERO,
+    fwd_rs1_sel: FWD_NONE,
+    fwd_rs2_sel: FWD_NONE,
+    default:     '0
+  };
+
+  localparam rr_ex1_reg_t RR_EX1_REG_ZERO = '{
     dec:         DECODED_INSTR_ZERO,
     fwd_rs1_sel: FWD_NONE,
     fwd_rs2_sel: FWD_NONE,

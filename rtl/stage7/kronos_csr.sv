@@ -26,6 +26,15 @@ module kronos_csr
   input  logic [4:0]      rs1_addr_i,
   output logic [kronos_pkg::XLEN-1:0] rdata_o,
   output logic        valid_o,
+  // RR-stage speculative CSR read.  Drives a second combinational read port
+  // keyed on the consumer's csr_addr at the RR cycle (one stage ahead of EX1).
+  // The result is captured into rr_ex1_q.csr_rdata at the RR/EX1 boundary so
+  // the EX1 cycle starts from a flopped CSR value rather than a comb CSR-file
+  // read in front of the bypass mux.  Pure read; no architectural state side
+  // effects (write commit still happens at retire_i below).
+  input  logic [11:0] rr_csr_addr_i,
+  input  logic        rr_csr_read_en_i,
+  output logic [kronos_pkg::XLEN-1:0] rr_csr_rdata_o,
   // Stage 7a — retire-cycle CSR write commit.  Pulses one cycle when the
   // CSR-writing instruction reaches MEM/WB and is NOT trapping
   // (mem_wb_q.valid & mem_wb_q.dec.is_csr & ~|mem_wb_q.fault.* & ~combined_stall).
@@ -391,88 +400,102 @@ module kronos_csr
   // -------------------------------------------------------------------------
   // CSR read (combinational)
   // -------------------------------------------------------------------------
-  always_comb begin
-    // Default (rule R7) — overridden by every legal CSR address below; the
-    // unique-case `default` arm preserves the trigger-CSR override path.
-    rdata_o = 64'hDEAD_C5A0_DEAD_C5A0;
-    unique case (addr_i)
-      12'h001: rdata_o = {59'b0, fcsr_q[4:0]};           // FFLAGS
-      12'h002: rdata_o = {61'b0, fcsr_q[7:5]};           // FRM
-      12'h003: rdata_o = {56'b0, fcsr_q};                 // FCSR
-      12'h300: rdata_o = {(mstatus[14:13] == 2'b11), mstatus[62:0]}; // bit63=SD, derived from FS
-      12'h301: rdata_o = misa;
-      kronos_pkg::CSR_MEDELEG: rdata_o = medeleg;
-      kronos_pkg::CSR_MIDELEG: rdata_o = mideleg;
-      12'h304: rdata_o = mie;
-      12'h305: rdata_o = mtvec;
-      kronos_pkg::CSR_MCOUNTEREN: rdata_o = {32'd0, mcounteren};
-      12'h320: rdata_o = {53'b0, mcountinhibit};         // mcountinhibit
-      12'h323: rdata_o = {56'b0, mhpmevent[3]};
-      12'h324: rdata_o = {56'b0, mhpmevent[4]};
-      12'h325: rdata_o = {56'b0, mhpmevent[5]};
-      12'h326: rdata_o = {56'b0, mhpmevent[6]};
-      12'h327: rdata_o = {56'b0, mhpmevent[7]};
-      12'h328: rdata_o = {56'b0, mhpmevent[8]};
-      12'h329: rdata_o = {56'b0, mhpmevent[9]};
-      12'h32A: rdata_o = {56'b0, mhpmevent[10]};
-      12'h340: rdata_o = mscratch;
-      12'h341: rdata_o = mepc;
-      12'h342: rdata_o = mcause;
-      12'h343: rdata_o = mtval;
-      12'h344: rdata_o = mip | mip_sw;
+  // Shared read mux body — keyed on a 12-bit address.  Used by both the
+  // legacy EX1-cycle read port (rdata_o) and the Stage 7b RR-cycle
+  // speculative read port (rr_csr_rdata_o).  Both ports see the same
+  // architectural CSR state because writes commit at retire_i.
+  function automatic logic [kronos_pkg::XLEN-1:0] read_csr (input logic [11:0] addr);
+    logic [kronos_pkg::XLEN-1:0] result;
+    // Default — overridden by every legal CSR address below; the case
+    // `default` arm preserves the trigger-CSR override path.
+    result = 64'hDEAD_C5A0_DEAD_C5A0;
+    case (addr)
+      12'h001: result = {59'b0, fcsr_q[4:0]};           // FFLAGS
+      12'h002: result = {61'b0, fcsr_q[7:5]};           // FRM
+      12'h003: result = {56'b0, fcsr_q};                 // FCSR
+      12'h300: result = {(mstatus[14:13] == 2'b11), mstatus[62:0]}; // bit63=SD, derived from FS
+      12'h301: result = misa;
+      kronos_pkg::CSR_MEDELEG: result = medeleg;
+      kronos_pkg::CSR_MIDELEG: result = mideleg;
+      12'h304: result = mie;
+      12'h305: result = mtvec;
+      kronos_pkg::CSR_MCOUNTEREN: result = {32'd0, mcounteren};
+      12'h320: result = {53'b0, mcountinhibit};         // mcountinhibit
+      12'h323: result = {56'b0, mhpmevent[3]};
+      12'h324: result = {56'b0, mhpmevent[4]};
+      12'h325: result = {56'b0, mhpmevent[5]};
+      12'h326: result = {56'b0, mhpmevent[6]};
+      12'h327: result = {56'b0, mhpmevent[7]};
+      12'h328: result = {56'b0, mhpmevent[8]};
+      12'h329: result = {56'b0, mhpmevent[9]};
+      12'h32A: result = {56'b0, mhpmevent[10]};
+      12'h340: result = mscratch;
+      12'h341: result = mepc;
+      12'h342: result = mcause;
+      12'h343: result = mtval;
+      12'h344: result = mip | mip_sw;
       // PMP CSRs.  pmpcfg0 packs cfg bytes 0..7; pmpcfg2 packs 8..15.
-      kronos_pkg::CSR_PMPCFG0: rdata_o = {pmpcfg_q[7], pmpcfg_q[6], pmpcfg_q[5], pmpcfg_q[4],
+      kronos_pkg::CSR_PMPCFG0: result = {pmpcfg_q[7], pmpcfg_q[6], pmpcfg_q[5], pmpcfg_q[4],
                               pmpcfg_q[3], pmpcfg_q[2], pmpcfg_q[1], pmpcfg_q[0]};
-      kronos_pkg::CSR_PMPCFG2: rdata_o = {pmpcfg_q[15], pmpcfg_q[14], pmpcfg_q[13], pmpcfg_q[12],
+      kronos_pkg::CSR_PMPCFG2: result = {pmpcfg_q[15], pmpcfg_q[14], pmpcfg_q[13], pmpcfg_q[12],
                               pmpcfg_q[11], pmpcfg_q[10], pmpcfg_q[9],  pmpcfg_q[8]};
-      kronos_pkg::CSR_PMPADDR0:  rdata_o = {10'd0, pmpaddr_q[0]};
-      kronos_pkg::CSR_PMPADDR1:  rdata_o = {10'd0, pmpaddr_q[1]};
-      kronos_pkg::CSR_PMPADDR2:  rdata_o = {10'd0, pmpaddr_q[2]};
-      kronos_pkg::CSR_PMPADDR3:  rdata_o = {10'd0, pmpaddr_q[3]};
-      kronos_pkg::CSR_PMPADDR4:  rdata_o = {10'd0, pmpaddr_q[4]};
-      kronos_pkg::CSR_PMPADDR5:  rdata_o = {10'd0, pmpaddr_q[5]};
-      kronos_pkg::CSR_PMPADDR6:  rdata_o = {10'd0, pmpaddr_q[6]};
-      kronos_pkg::CSR_PMPADDR7:  rdata_o = {10'd0, pmpaddr_q[7]};
-      kronos_pkg::CSR_PMPADDR8:  rdata_o = {10'd0, pmpaddr_q[8]};
-      kronos_pkg::CSR_PMPADDR9:  rdata_o = {10'd0, pmpaddr_q[9]};
-      kronos_pkg::CSR_PMPADDR10: rdata_o = {10'd0, pmpaddr_q[10]};
-      kronos_pkg::CSR_PMPADDR11: rdata_o = {10'd0, pmpaddr_q[11]};
-      kronos_pkg::CSR_PMPADDR12: rdata_o = {10'd0, pmpaddr_q[12]};
-      kronos_pkg::CSR_PMPADDR13: rdata_o = {10'd0, pmpaddr_q[13]};
-      kronos_pkg::CSR_PMPADDR14: rdata_o = {10'd0, pmpaddr_q[14]};
-      kronos_pkg::CSR_PMPADDR15: rdata_o = {10'd0, pmpaddr_q[15]};
+      kronos_pkg::CSR_PMPADDR0:  result = {10'd0, pmpaddr_q[0]};
+      kronos_pkg::CSR_PMPADDR1:  result = {10'd0, pmpaddr_q[1]};
+      kronos_pkg::CSR_PMPADDR2:  result = {10'd0, pmpaddr_q[2]};
+      kronos_pkg::CSR_PMPADDR3:  result = {10'd0, pmpaddr_q[3]};
+      kronos_pkg::CSR_PMPADDR4:  result = {10'd0, pmpaddr_q[4]};
+      kronos_pkg::CSR_PMPADDR5:  result = {10'd0, pmpaddr_q[5]};
+      kronos_pkg::CSR_PMPADDR6:  result = {10'd0, pmpaddr_q[6]};
+      kronos_pkg::CSR_PMPADDR7:  result = {10'd0, pmpaddr_q[7]};
+      kronos_pkg::CSR_PMPADDR8:  result = {10'd0, pmpaddr_q[8]};
+      kronos_pkg::CSR_PMPADDR9:  result = {10'd0, pmpaddr_q[9]};
+      kronos_pkg::CSR_PMPADDR10: result = {10'd0, pmpaddr_q[10]};
+      kronos_pkg::CSR_PMPADDR11: result = {10'd0, pmpaddr_q[11]};
+      kronos_pkg::CSR_PMPADDR12: result = {10'd0, pmpaddr_q[12]};
+      kronos_pkg::CSR_PMPADDR13: result = {10'd0, pmpaddr_q[13]};
+      kronos_pkg::CSR_PMPADDR14: result = {10'd0, pmpaddr_q[14]};
+      kronos_pkg::CSR_PMPADDR15: result = {10'd0, pmpaddr_q[15]};
       // Zicntr (U-mode read-only views) + M-mode aliases
-      12'hC00, 12'hB00: rdata_o = mcycle;                     // cycle / mcycle
-      12'hC01:          rdata_o = mcycle;                     // time (mirror cycle)
-      12'hC02, 12'hB02: rdata_o = minstret;                   // instret / minstret
+      12'hC00, 12'hB00: result = mcycle;                     // cycle / mcycle
+      12'hC01:          result = mcycle;                     // time (mirror cycle)
+      12'hC02, 12'hB02: result = minstret;                   // instret / minstret
       // Zihpm counters: M-mode RW (0xB03..0xB0A) and U-mode RO aliases (0xC03..0xC0A)
-      12'hB03, 12'hC03: rdata_o = mhpmcounter[3];
-      12'hB04, 12'hC04: rdata_o = mhpmcounter[4];
-      12'hB05, 12'hC05: rdata_o = mhpmcounter[5];
-      12'hB06, 12'hC06: rdata_o = mhpmcounter[6];
-      12'hB07, 12'hC07: rdata_o = mhpmcounter[7];
-      12'hB08, 12'hC08: rdata_o = mhpmcounter[8];
-      12'hB09, 12'hC09: rdata_o = mhpmcounter[9];
-      12'hB0A, 12'hC0A: rdata_o = mhpmcounter[10];
+      12'hB03, 12'hC03: result = mhpmcounter[3];
+      12'hB04, 12'hC04: result = mhpmcounter[4];
+      12'hB05, 12'hC05: result = mhpmcounter[5];
+      12'hB06, 12'hC06: result = mhpmcounter[6];
+      12'hB07, 12'hC07: result = mhpmcounter[7];
+      12'hB08, 12'hC08: result = mhpmcounter[8];
+      12'hB09, 12'hC09: result = mhpmcounter[9];
+      12'hB0A, 12'hC0A: result = mhpmcounter[10];
       // S-mode CSRs
-      kronos_pkg::CSR_STVEC:      rdata_o = {stvec[63:2], 2'b00};
-      kronos_pkg::CSR_SSCRATCH:   rdata_o = sscratch;
-      kronos_pkg::CSR_SEPC:       rdata_o = {sepc[63:1], 1'b0};
-      kronos_pkg::CSR_SCAUSE:     rdata_o = scause;
-      kronos_pkg::CSR_STVAL:      rdata_o = stval;
-      kronos_pkg::CSR_SATP:       rdata_o = satp;
-      kronos_pkg::CSR_SCOUNTEREN: rdata_o = {32'd0, scounteren};
-      kronos_pkg::CSR_SENVCFG:    rdata_o = senvcfg;
+      kronos_pkg::CSR_STVEC:      result = {stvec[63:2], 2'b00};
+      kronos_pkg::CSR_SSCRATCH:   result = sscratch;
+      kronos_pkg::CSR_SEPC:       result = {sepc[63:1], 1'b0};
+      kronos_pkg::CSR_SCAUSE:     result = scause;
+      kronos_pkg::CSR_STVAL:      result = stval;
+      kronos_pkg::CSR_SATP:       result = satp;
+      kronos_pkg::CSR_SCOUNTEREN: result = {32'd0, scounteren};
+      kronos_pkg::CSR_SENVCFG:    result = senvcfg;
       // SSTATUS: S-visible bits + SD computed from FS (mstatus[63] is never
       // written; the SD bit must be derived from FS == 2'b11 just like the
       // master mstatus read above).
-      kronos_pkg::CSR_SSTATUS:    rdata_o = {(mstatus[14:13] == 2'b11),
+      kronos_pkg::CSR_SSTATUS:    result = {(mstatus[14:13] == 2'b11),
                                   63'(mstatus[62:0] & SSTATUS_RD_MASK)};
-      kronos_pkg::CSR_SIE:        rdata_o = mie & SMODE_IRQ_MASK;            // SSIE/STIE/SEIE
-      kronos_pkg::CSR_SIP:        rdata_o = (mip | mip_sw) & SMODE_IRQ_MASK;
-      default: rdata_o = trig_csr_match_i ? trig_csr_rdata_i : 64'hDEAD_C5A0_DEAD_C5A0;
+      kronos_pkg::CSR_SIE:        result = mie & SMODE_IRQ_MASK;            // SSIE/STIE/SEIE
+      kronos_pkg::CSR_SIP:        result = (mip | mip_sw) & SMODE_IRQ_MASK;
+      default: result = trig_csr_match_i ? trig_csr_rdata_i : 64'hDEAD_C5A0_DEAD_C5A0;
     endcase
-  end
+    return result;
+  endfunction
+
+  // EX1-cycle read (legacy port).  Drives csr_rdata at EX1 and feeds the
+  // EX1-stage csr_new_val computation below.
+  assign rdata_o        = read_csr(addr_i);
+  // RR-cycle speculative read.  Captured into rr_ex1_q.csr_rdata at the
+  // RR/EX1 boundary; rr_csr_read_en_i is observation-only here (the consumer
+  // selects whether to use the value).
+  assign rr_csr_rdata_o = read_csr(rr_csr_addr_i);
 
   always_comb begin
     csr_wdata   = use_imm_i ? {59'b0, rs1_addr_i} : rs1_data_i;
@@ -797,8 +820,13 @@ module kronos_csr
     end
   end
 
+  // rr_csr_read_en_i is observation-only inside u_csr (the consumer at the
+  // RR/EX1 flop decides whether to use the value).  Sink it into the unused
+  // collector so verilator UNUSEDSIGNAL stays quiet without forcing the top
+  // to wire a separate gate.
   assign _unused = ^{funct3_i[2],
                      irq_eff[63:12], irq_eff[10], irq_eff[8], irq_eff[6],
-                     irq_eff[4], irq_eff[2], irq_eff[0]};
+                     irq_eff[4], irq_eff[2], irq_eff[0],
+                     rr_csr_read_en_i};
 
 endmodule
