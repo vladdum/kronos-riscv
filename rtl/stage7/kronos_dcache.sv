@@ -203,6 +203,16 @@ module kronos_dcache
   logic [kronos_pkg::XLEN-1:0]               prev_write_data_q;
   logic [kronos_pkg::XLEN_BYTES-1:0]         prev_write_mask_q;
   logic                                      prev_write_active_q;
+  // 2-deep RAW bypass tier — needed in the MEM1/MEM2 split because the LD's
+  // pre-launch ram_re fires the same cycle the SD's ram_we commits. With
+  // WRITE_MODE_B="no_change" the LD's ram_rdata captures stale data and the
+  // 1-deep tier is consumed by the next instruction's pre-launch before the
+  // LD reaches MEM2. Keeping a 2-cycle history covers the SD-NOP-LD case.
+  logic [NUM_WAYS-1:0]                       prev2_write_way_oh_q;
+  logic [RAM_ADDR_W-1:0]                     prev2_write_addr_q;
+  logic [kronos_pkg::XLEN-1:0]               prev2_write_data_q;
+  logic [kronos_pkg::XLEN_BYTES-1:0]         prev2_write_mask_q;
+  logic                                      prev2_write_active_q;
 
   // PTW hit lookup state — captured at DC_IDLE entry on a PTW hit so that
   // DC_PTW_LOOKUP can way-mux ram_rdata[ptw_lookup_way_q] as the response.
@@ -542,6 +552,16 @@ module kronos_dcache
     for (int w = 0; w < NUM_WAYS; w++) begin
       if (hit_way_oh[w]) begin
         hit_beat = ram_rdata[w];
+        // Apply older (2-deep) tier first; newer (1-deep) tier overrides
+        // per-byte for the freshest value.
+        if (prev2_write_active_q & prev2_write_way_oh_q[w] &
+            (prev2_write_addr_q == {set_idx, beat_idx})) begin
+          for (int b = 0; b < kronos_pkg::XLEN_BYTES; b++) begin
+            if (prev2_write_mask_q[b]) begin
+              hit_beat[b*8 +: 8] = prev2_write_data_q[b*8 +: 8];
+            end
+          end
+        end
         if (prev_write_active_q & prev_write_way_oh_q[w] &
             (prev_write_addr_q == {set_idx, beat_idx})) begin
           for (int b = 0; b < kronos_pkg::XLEN_BYTES; b++) begin
@@ -875,6 +895,11 @@ module kronos_dcache
       prev_write_data_q    <= {kronos_pkg::XLEN{1'b0}};
       prev_write_mask_q    <= {kronos_pkg::XLEN_BYTES{1'b0}};
       prev_write_active_q  <= 1'b0;
+      prev2_write_way_oh_q <= {NUM_WAYS{1'b0}};
+      prev2_write_addr_q   <= {RAM_ADDR_W{1'b0}};
+      prev2_write_data_q   <= {kronos_pkg::XLEN{1'b0}};
+      prev2_write_mask_q   <= {kronos_pkg::XLEN_BYTES{1'b0}};
+      prev2_write_active_q <= 1'b0;
       prev_tag_write_q     <= 1'b0;
       prev_tag_set_q       <= {SET_IDX_W{1'b0}};
       prev_tag_way_oh_q    <= {NUM_WAYS{1'b0}};
@@ -904,6 +929,16 @@ module kronos_dcache
       prev_write_addr_q   <= ram_waddr;
       prev_write_data_q   <= ram_wdata;
       prev_write_mask_q   <= ram_wmask;
+      // 2-deep tier: shift the prior cycle's snapshot one stage further so
+      // an LD that reaches MEM2 two cycles after an SD's commit still gets
+      // the bypassed bytes. Required by the MEM1/MEM2 split — the LD's
+      // pre-launch fires the cycle the SD writes BRAM, so ram_rdata is
+      // stale by an extra cycle vs. the 7b single-MEM pipeline.
+      prev2_write_active_q <= prev_write_active_q;
+      prev2_write_way_oh_q <= prev_write_way_oh_q;
+      prev2_write_addr_q   <= prev_write_addr_q;
+      prev2_write_data_q   <= prev_write_data_q;
+      prev2_write_mask_q   <= prev_write_mask_q;
       // 1-deep RAW bypass for the tag RAM: capture the tag write that fires
       // this cycle so the next cycle's tag-compare sees the new value
       // (xpm SDP "no_change" returns the OLD tag on a same-cycle write+read).
@@ -1455,7 +1490,17 @@ module kronos_dcache
                         | bypass_valid_q | store_done_q | amo_done_q
                         | nc_rsp_valid_q | nc_b_done_q;
   assign rsp_rdata_int  = amo_done_q ? amo_old_val_q : load_data_full;
-  assign sc_success_int = sc_success_q;
+  // sc_success_int: the registered sc_success_q lags by one cycle after the
+  // SC fires (it captures at the next posedge), but the LSU samples
+  // sc_success_o the same cycle data_valid_o pulses (via `hit` in the
+  // rsp_valid_int OR-tree).  In the MEM1/MEM2 pipeline, the SC at MEM2
+  // advances to WB on the very next edge unless an unrelated stall holds
+  // it — without combinational coverage, mem_wb_q.lsu_rdata captures
+  // ~sc_success_q == 1 (failure) for an SC that actually hit and matched
+  // its reservation.  Fold sc_hit_write_fire (the same combinational
+  // predicate that fires the BRAM write) into sc_success_int so the LSU
+  // sees the correct success bit in the same cycle data_valid pulses.
+  assign sc_success_int = sc_success_q | sc_hit_write_fire;
 
   // route the response to either LSU or PTW.
   // - PTW hits land in DC_PTW_LOOKUP — owner is PTW.

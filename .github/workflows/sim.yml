@@ -318,6 +318,40 @@ jobs:
             --max-delta 0.05 \
             --ignore-x10
 
+  compliance-cycle-diff-s7c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: compliance-cycle-diff-s7c
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need ed9c144 (stage7b baseline) in history
+          submodules: recursive
+
+      - name: Install Verilator 5.046
+        uses: ./.github/actions/setup-verilator
+
+      - name: Install RISC-V GCC toolchain
+        run: |
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+
+      - name: Clone PULP AXI
+        run: git clone --depth=1 https://github.com/vladdum/axi /tmp/pulp_axi
+
+      - name: Build dhrystone hex
+        run: make -C sw/perf/dhrystone all
+
+      - name: Cycle-diff vs stage7b baseline (ed9c144), budget +12%
+        env:
+          PULP_AXI_ROOT: /tmp/pulp_axi
+        run: |
+          python3 tools/cycle_diff.py \
+            --baseline-commit ed9c144 \
+            --prog sw/perf/dhrystone/build/dhrystone.hex \
+            --max-delta 0.12 \
+            --ignore-x10
+
   dcache-stress-s6:
     runs-on: ubuntu-latest
     timeout-minutes: 10

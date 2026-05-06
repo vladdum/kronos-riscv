@@ -17,7 +17,7 @@
 extern int dhry_run(int Number_Of_Runs);
 
 #define NUMBER_OF_RUNS   1000U
-// captured 2026-05-02 on stage6f branch @ commit 3734769 against the CI
+// captured 2026-05-06 on stage7b branch @ commit c7f59f8 against the CI
 // toolchain (Ubuntu 24.04 apt gcc-riscv64-unknown-elf v13/14, the
 // reference for sim-perf-baseline-s6).  Local builds with a different
 // riscv64-unknown-elf-gcc version (e.g. v15.x) emit different dhry_run
@@ -25,7 +25,13 @@ extern int dhry_run(int Number_Of_Runs);
 // only the CI value is authoritative.  Re-bake on any RTL change that
 // affects integer IPC by setting BASELINE_CYCLES=0 (capture mode) and
 // reading x10 from the CI halt line.
-#define BASELINE_CYCLES  992151U
+#define BASELINE_CYCLES  992151U  /* s6i baseline; s7+ regression is policed by
+                                    * tools/cycle_diff.py via the
+                                    * compliance-cycle-diff-s7{b,c} CI gates
+                                    * (both run with --ignore-x10).  Keeping
+                                    * the s6 value lets sim-perf-baseline-s6
+                                    * use the same hex without per-stage build
+                                    * flags. */
 #define TOLERANCE_PCT    2U
 
 // ---------------------------------------------------------------------------
