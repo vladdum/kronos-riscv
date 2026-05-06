@@ -68,7 +68,7 @@ coverage:
 
 synth:
 	vivado -mode batch -source fpga/kv260/synth.tcl \
-	  -tclargs SYNTH_FREQ_MHZ=$(SYNTH_FREQ_MHZ)
+	  -tclargs SYNTH_FREQ_MHZ=$(SYNTH_FREQ_MHZ)$(if $(PULP_AXI_ROOT), PULP_AXI_ROOT=$(PULP_AXI_ROOT))
 
 # ── Gate-level simulation ─────────────────────────────────────────────────────
 

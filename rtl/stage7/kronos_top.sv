@@ -85,6 +85,12 @@ module kronos_top
   logic          ex1_ex2_en;
   logic          ex1_ex2_flush;
   ex_mem_reg_t  ex2_mem1_q;
+  // MEM1->MEM1B pipeline register (Stage 7d).  Layout mirrors mem1_mem2_reg_t
+  // plus a registered dtlb_perm_fail bit; PMP/PMA NC/page-fault production
+  // moves from MEM1 to MEM1B and reads dtlb_pa from this flop output.
+  mem1_mem1b_reg_t mem1_mem1b_q;
+  logic            mem1_mem1b_en;
+  logic            mem1_mem1b_flush;
   mem1_mem2_reg_t mem1_mem2_q;
   mem_wb_reg_t    mem_wb_q;
   logic [31:0] pc_q                              /* verilator public_flat_rd */;
@@ -237,19 +243,32 @@ module kronos_top
   logic [55:0]       pmp_fetch_fault_addr_raw;
   logic              pmp_data_fault_raw;
   logic [55:0]       pmp_data_fault_addr_raw;
-  // PMA AMO-on-NC trap detection at MEM1 stage (post-dTLB-translation).
-  logic              mem1_amo_nc_fault;
-  logic              mem1_addr_uncacheable;
-  // MEM1-cycle page-fault producers for load / store / AMO accesses.  Land in
-  // mem1_mem2_q.fault.{load,store}_page_fault at the MEM1->MEM2 edge.
+  // PMA AMO-on-NC trap detection.  Stage 7d runs PMP, PMA NC, and page-fault
+  // production at MEM1B (consumes mem1_mem1b_q.dtlb_pa); outputs are
+  // registered into mem1_mem2_q.fault.{pmp_data_fault, ex_amo_nc_fault,
+  // load_page_fault, store_page_fault} at the MEM1B->MEM2 edge.
+  logic              mem1b_amo_nc_fault;
+  logic              mem1b_addr_uncacheable;
+  // MEM1-cycle page-fault producers (legacy ties).  Live MEM1B producers
+  // resolve dtlb_perm_fail (now travelling in mem1_mem1b_q) into per-direction
+  // load/store_page_fault bits.
   logic              mem1_load_page_fault;
   logic              mem1_store_page_fault;
-  // MEM1->MEM2 fault next-state (registered into mem1_mem2_q.fault).  Folds
-  // every EX2-stage fault bit with the MEM1-cycle producers.
-  fault_t            mem1_fault_d;
-  // MEM1-class trap predicate — overrides mem1_mem2_q.pc_d to trap_vector at
-  // the MEM1->MEM2 edge so mem_redirect_target_q latches the correct vector.
+  logic              mem1b_load_page_fault;
+  logic              mem1b_store_page_fault;
+  // MEM1->MEM1B fault next-state (registered into mem1_mem1b_q.fault).  PMP /
+  // PMA NC / page-fault bits stay '0 here; MEM1B fills them in at the
+  // MEM1B->MEM2 edge.
+  fault_t            mem1_mem1b_fault_d;
+  // MEM1B->MEM2 fault next-state (registered into mem1_mem2_q.fault).  Adds
+  // the PMP / PMA / page-fault bits produced in MEM1B on top of the bits
+  // already registered in mem1_mem1b_q.fault.
+  fault_t            mem1_mem2_fault_d;
+  // MEM1-class trap predicate — overrides mem1_mem1b_q.pc_d / mem1_mem2_q.pc_d
+  // to trap_vector at the appropriate boundary so mem_redirect_target_q
+  // latches the correct vector.
   logic              mem1_trap_redirect;
+  logic              mem1b_trap_redirect;
 
   // -------------------------------------------------------------------------
   // TLB / PTW / translation-control wires.
@@ -313,6 +332,7 @@ module kronos_top
   // compare from each forward arm at the consumer.
   logic        ex1_ex2_csr_q;
   logic        ex2_mem_csr_q;
+  logic        mem1_mem1b_csr_q;
   logic        mem1_mem2_csr_q;
   // Stage 7a — csr_new_val pipeline.  u_csr.csr_new_val_o is computed
   // combinationally from rr_ex1_q at the EX1 cycle.  The architectural CSR
@@ -327,12 +347,14 @@ module kronos_top
   // ACT4-s5 F-/D- test as bad fflags=0 vs expected NX/NV/etc.).
   logic [4:0]                  ex1_ex2_fflags_q;
   logic [4:0]                  ex2_mem_fflags_q;
+  logic [4:0]                  mem1_mem1b_fflags_q;
   logic [4:0]                  mem1_mem2_fflags_q;
   logic [4:0]                  mem_wb_fflags_q;
   // Stage 7a — FP-arith retire flag pipe so the CSR's fflags-accumulate gate
   // can fire only when the retiring instruction is an FP arithmetic op.
   logic                        ex1_ex2_is_fp_arith_q;
   logic                        ex2_mem_is_fp_arith_q;
+  logic                        mem1_mem1b_is_fp_arith_q;
   logic                        mem1_mem2_is_fp_arith_q;
   logic                        mem_wb_is_fp_arith_q;
 
@@ -507,6 +529,7 @@ module kronos_top
   // correct post-write value.
   logic [kronos_pkg::XLEN-1:0] csr_new_val_post;
   logic [kronos_pkg::XLEN-1:0] ex2_mem_csr_new_val_q;
+  logic [kronos_pkg::XLEN-1:0] mem1_mem1b_csr_new_val_q;
   logic [kronos_pkg::XLEN-1:0] mem1_mem2_csr_new_val_q;
   logic [kronos_pkg::XLEN-1:0] mem_wb_csr_new_val_q;
 
@@ -673,14 +696,25 @@ module kronos_top
     .ex1_ex2_rd_fp_i    (ex1_ex2_q.dec.rd_fp),
     .ex1_ex2_is_load_i  (ex1_ex2_q.dec.wb_sel == WB_MEM),
     .ex1_ex2_valid_i    (ex1_ex2_q.valid),
-    // MEM1 producer (ex2_mem1_q).  No load-suppression here: a load producer
-    // in MEM1 at ID-time T becomes the MEM2 producer at consumer-RR-time T+1,
-    // and FWD_MEM2 picks lsu_rdata combinationally for that case.
-    .ex2_mem1_rd_i      (ex2_mem1_q.dec.rd),
-    .ex2_mem1_rd_wen_i  (ex2_mem1_q.dec.rd_wen),
-    .ex2_mem1_rd_fp_i   (ex2_mem1_q.dec.rd_fp),
-    .ex2_mem1_valid_i   (ex2_mem1_q.valid),
-    // MEM2 producer (mem1_mem2_q) — load value combinational via lsu_rdata.
+    // MEM1 producer (ex2_mem1_q).  Loads suppressed in 7d: a load producer
+    // in MEM1 at ID-time T is in MEM1B at consumer-RR-time T+1; the load
+    // value isn't formed yet (it lands in lsu_rdata at MEM2).  FWD_MEM1B
+    // carries alu_result; the loader's rd is filled at MEM2 via FWD_MEM2.
+    .ex2_mem1_rd_i        (ex2_mem1_q.dec.rd),
+    .ex2_mem1_rd_wen_i    (ex2_mem1_q.dec.rd_wen),
+    .ex2_mem1_rd_fp_i     (ex2_mem1_q.dec.rd_fp),
+    .ex2_mem1_is_load_i   (ex2_mem1_q.dec.wb_sel == WB_MEM),
+    .ex2_mem1_valid_i     (ex2_mem1_q.valid),
+    // MEM1B producer (mem1_mem1b_q) — Stage 7d new slot.  Producer at MEM1B at
+    // T advances to MEM2 at T+1, where the bypass mux reads mem1_mem2_q
+    // (alu_result for ALU producers, lsu_rdata combinational for loads).
+    // Loads NOT suppressed here.
+    .mem1_mem1b_rd_i      (mem1_mem1b_q.dec.rd),
+    .mem1_mem1b_rd_wen_i  (mem1_mem1b_q.dec.rd_wen),
+    .mem1_mem1b_rd_fp_i   (mem1_mem1b_q.dec.rd_fp),
+    .mem1_mem1b_valid_i   (mem1_mem1b_q.valid),
+    // MEM2 producer (mem1_mem2_q) — at T+1 in WB, writeback mux carries the
+    // load value via mem_wb_q.alu_result.
     .mem1_mem2_rd_i     (mem1_mem2_q.dec.rd),
     .mem1_mem2_rd_wen_i (mem1_mem2_q.dec.rd_wen & mem1_mem2_q.valid),
     .mem1_mem2_rd_fp_i  (mem1_mem2_q.dec.rd_fp),
@@ -858,6 +892,14 @@ module kronos_top
     .ex2_mem1_rd_i         (ex2_mem1_q.dec.rd),
     .ex2_mem1_rd_wen_i     (ex2_mem1_q.dec.rd_wen & ex2_mem1_q.valid),
     .ex2_mem1_valid_i      (ex2_mem1_q.valid),
+    // MEM1B producer (mem1_mem1b_q) — Stage 7d new slot.  Carries the same
+    // load / csr / rd predicates so load-use, csr-raw, and jalr-fwd stalls
+    // observe the MEM1B occupant alongside the existing slots.
+    .mem1_mem1b_is_load_i  (mem1_mem1b_q.dec.wb_sel == WB_MEM),
+    .mem1_mem1b_is_csr_i   (mem1_mem1b_q.dec.is_csr),
+    .mem1_mem1b_rd_i       (mem1_mem1b_q.dec.rd),
+    .mem1_mem1b_rd_wen_i   (mem1_mem1b_q.dec.rd_wen & mem1_mem1b_q.valid),
+    .mem1_mem1b_valid_i    (mem1_mem1b_q.valid),
     // MEM2 producer (mem1_mem2_q).
     .mem1_mem2_is_csr_i    (mem1_mem2_q.dec.is_csr),
     .mem1_mem2_rd_i        (mem1_mem2_q.dec.rd),
@@ -891,15 +933,18 @@ module kronos_top
     .id_rr_en_o            (id_rr_en),
     .rr_ex1_en_o           (rr_ex1_en),
     .ex2_mem1_en_o         (ex2_mem1_en),
+    .mem1_mem1b_en_o       (mem1_mem1b_en),
     .mem1_mem2_en_o        (mem1_mem2_en),
     .mem_wb_en_o           (mem_wb_en),
     .if_id_flush_o         (if_id_flush),
     .id_rr_flush_o         (id_rr_flush),
     .rr_ex1_flush_o        (rr_ex1_flush),
-    // ex2_mem1_flush / mem1_mem2_flush are driven by kronos_top assigns from
-    // mem_redirect_q | mem_redirect_d (see lines below).  hazard's flush
-    // outputs for these stages are always 0 and intentionally unconnected.
+    // ex2_mem1_flush / mem1_mem1b_flush / mem1_mem2_flush are driven by
+    // kronos_top assigns from mem_redirect_q | mem_redirect_d (see below).
+    // hazard's flush outputs for these stages are always 0 and intentionally
+    // unconnected.
     .ex2_mem1_flush_o      (),
+    .mem1_mem1b_flush_o    (),
     .mem1_mem2_flush_o     ()
   );
 
@@ -1163,60 +1208,80 @@ module kronos_top
   assign pmp_fetch_fault      = pmp_s1_fetch_fault_q;
   assign pmp_fetch_fault_addr = pmp_s1_fetch_fault_addr_q;
 
+  // Stage 7d — PMP relocated to a dedicated MEM1B stage (between MEM1 and
+  // MEM2).  Plan A (commit f934715) had relocated PMP from MEM1 to MEM2 so it
+  // consumed the registered mem1_mem2_q.dtlb_pa, but the chain just shifted
+  // forward — pmp_data_fault still gated 60 downstream consumers in the
+  // LSU/PTW/dcache state, ending at the FPU iter's hold-mux on the RR/EX1
+  // register.  The 7d split makes the PMP comparator chain truly flop-to-flop:
+  //   - MEM1:   dTLB lookup -> register dtlb_pa into mem1_mem1b_q.
+  //   - MEM1B: PMP region match + PMA NC-region check + page-fault aggregation
+  //            on the registered mem1_mem1b_q.dtlb_pa.  Outputs flop into
+  //            mem1_mem2_q.fault.{pmp_data_fault, ex_amo_nc_fault,
+  //            load_page_fault, store_page_fault} at the MEM1B->MEM2 edge.
+  //   - MEM2:   trap-redirect formation reads mem1_mem2_q.fault.* registered
+  //            bits only; no live PMP comparator in the MEM2 cone.
   kronos_pmp #(.N(16)) u_pmp_data (
     .pmpcfg_i     (pmpcfg),
     .pmpaddr_i    (pmpaddr),
     .priv_i       (priv_q),
-    // valid_i must NOT depend on combined_stall.  combined_stall includes
-    // mem_stall, which depends on lsu_mem_stall, which depends on pmp_fault_i
-    // (suppressed by lsu when pmp_fault_i is high) — gating valid_i on
-    // ~combined_stall would close a comb loop pmp_fault -> mem_stall ->
-    // combined_stall -> valid_i -> pmp_fault.  The fault flag is meaningful
-    // whenever a load/store sits in MEM1; the trap path gates trap_i with
-    // ~combined_stall so the trap only fires when the pipeline advances.
-    .valid_i      (ex2_mem1_q.valid &
-                   (ex2_mem1_q.dec.is_load | ex2_mem1_q.dec.is_store |
-                    ex2_mem1_q.dec.is_amo)),
-    // PMP runs against the dTLB-translated PA at MEM1 (eff_data_pa).  Under
-    // Bare/M-mode translation eff_data_pa == ex2_mem1_q.alu_result[31:0].
-    .addr_i       ({24'b0, eff_data_pa[31:0]}),
+    // valid_i context now MEM1B (mem1_mem1b_q).  combined_stall must not
+    // gate valid_i (back-edge avoidance — same constraint as the 7c
+    // MEM1-cycle live PMP).
+    .valid_i      (mem1_mem1b_q.valid &
+                   (mem1_mem1b_q.dec.is_load | mem1_mem1b_q.dec.is_store |
+                    mem1_mem1b_q.dec.is_amo)),
+    // PA is the registered MEM1->MEM1B dTLB output — guaranteed flopped
+    // before reaching the PMP comparator chain.
+    .addr_i       ({24'b0, mem1_mem1b_q.dtlb_pa[31:0]}),
     .size_i       (pmp_data_size),
     .is_fetch_i   (1'b0),
-    .is_load_i    (ex2_mem1_q.dec.is_load |
-                   (ex2_mem1_q.dec.is_amo & ex2_mem1_q.dec.is_lr)),
-    .is_store_i   (ex2_mem1_q.dec.is_store |
-                   (ex2_mem1_q.dec.is_amo & ~ex2_mem1_q.dec.is_lr)),
+    .is_load_i    (mem1_mem1b_q.dec.is_load |
+                   (mem1_mem1b_q.dec.is_amo & mem1_mem1b_q.dec.is_lr)),
+    .is_store_i   (mem1_mem1b_q.dec.is_store |
+                   (mem1_mem1b_q.dec.is_amo & ~mem1_mem1b_q.dec.is_lr)),
     .fault_o      (pmp_data_fault_raw),
     .fault_addr_o (pmp_data_fault_addr_raw)
   );
 
-  // pmp_data_fault / pmp_data_fault_addr are produced live at MEM1 by
-  // u_pmp_data and consumed combinationally at the MEM1->MEM2 register edge,
-  // where they are flopped into mem1_mem2_q.fault.pmp_data_fault.  The 7b
-  // pmp_s1_data_fault_q snapshot is no longer needed: the MEM1->MEM2 register
-  // itself provides the flop barrier that breaks the post-PMP combinational
-  // cone into the dcache hit-mux.
+  // pmp_data_fault is now a MEM1B-cycle producer that flops into
+  // mem1_mem2_q.fault.pmp_data_fault at the MEM1B->MEM2 edge.  Every
+  // downstream consumer (mem_redirect_d, mem_trap_*_d, ex1_trap_*,
+  // mem_wb_q.fault, LSU req gating) reads the registered
+  // mem1_mem2_q.fault.pmp_data_fault directly; the live `pmp_data_fault`
+  // wire below is kept only to feed the MEM1B->MEM2 fault aggregator.
   assign pmp_data_fault      = pmp_data_fault_raw & pmp_any_active;
   assign pmp_data_fault_addr = pmp_data_fault_addr_raw;
 
-  // PMA AMO-on-NC trap detection at MEM1 stage.  The check runs against the
-  // dTLB-translated PA (eff_data_pa) so PMA decisions follow PMP — both work
-  // off the same translated address.  Registered into
-  // mem1_mem2_q.fault.ex_amo_nc_fault at the MEM1->MEM2 edge.
+  // PMA AMO-on-NC trap detection — also at MEM1B, on mem1_mem1b_q.dtlb_pa.
+  // Output flops into mem1_mem2_q.fault.ex_amo_nc_fault at the MEM1B->MEM2
+  // edge.
   always_comb begin
-    mem1_addr_uncacheable = 1'b0;
+    mem1b_addr_uncacheable = 1'b0;
     for (int r = 0; r < NUM_NC_REGIONS; r++) begin
-      if (({32'b0, eff_data_pa[31:0]} >= NC_REGION_BASE[r]) &&
-          ({32'b0, eff_data_pa[31:0]} <= NC_REGION_LIMIT[r])) begin
-        mem1_addr_uncacheable = 1'b1;
+      if (({32'b0, mem1_mem1b_q.dtlb_pa[31:0]} >= NC_REGION_BASE[r]) &&
+          ({32'b0, mem1_mem1b_q.dtlb_pa[31:0]} <= NC_REGION_LIMIT[r])) begin
+        mem1b_addr_uncacheable = 1'b1;
       end
     end
   end
-  assign mem1_amo_nc_fault = ex2_mem1_q.valid &
-                             (ex2_mem1_q.dec.is_amo |
-                              ex2_mem1_q.dec.is_lr |
-                              ex2_mem1_q.dec.is_sc) &
-                             mem1_addr_uncacheable;
+  assign mem1b_amo_nc_fault = mem1_mem1b_q.valid &
+                              (mem1_mem1b_q.dec.is_amo |
+                               mem1_mem1b_q.dec.is_lr |
+                               mem1_mem1b_q.dec.is_sc) &
+                              mem1b_addr_uncacheable;
+
+  // Page-fault aggregation at MEM1B from the registered dtlb_perm_fail bit
+  // travelling in mem1_mem1b_q.  Resolved into per-direction load/store bits
+  // and flopped into mem1_mem2_q.fault.{load,store}_page_fault.
+  assign mem1b_load_page_fault  = mem1_mem1b_q.valid &
+                                  mem1_mem1b_q.dec.is_load &
+                                  mem1_mem1b_q.dtlb_perm_fail;
+  assign mem1b_store_page_fault = mem1_mem1b_q.valid &
+                                  (mem1_mem1b_q.dec.is_store |
+                                   mem1_mem1b_q.dec.is_amo) &
+                                  mem1_mem1b_q.dtlb_perm_fail;
+
 
 
   // -------------------------------------------------------------------------
@@ -1306,14 +1371,18 @@ module kronos_top
   assign eff_fetch_pa = translate_fetch ? itlb_pa[31:0] : icache_fetch_addr;
   assign eff_data_pa  = translate_data  ? dtlb_pa[31:0] : ex2_mem1_q.alu_result[31:0];
 
-  // dcache pre-launch fires from MEM1 (VIPT, VA-indexed): set + offset = 12
+  // dcache pre-launch fires from MEM1B (VIPT, VA-indexed): set + offset = 12
   // bits <= page-offset width, so the dcache index is alias-free under any
-  // translation.  The BRAM ram_rdata is registered at the MEM1->MEM2 boundary
-  // so MEM2 consumes a flop output for the way-mux + load_data_full chain.
-  assign dcache_early_addr = {{(64-32){1'b0}}, ex2_mem1_q.alu_result[31:0]};
+  // translation.  Stage 7d: launching at MEM1B (instead of MEM1) lines up the
+  // BRAM read latency with the new pipeline depth — ram_rdata is registered
+  // at the MEM1B->MEM2 boundary inside the SDP RAM, so MEM2 consumes a flop
+  // output for the way-mux + load_data_full chain.  Launching at MEM1 would
+  // make the BRAM read complete at MEM1B and be overwritten by the next
+  // instruction's MEM1 launch on the same cycle MEM2 needs the data.
+  assign dcache_early_addr = {{(64-32){1'b0}}, mem1_mem1b_q.alu_result[31:0]};
   assign dcache_early_req_valid =
-    ex2_mem1_q.valid &
-    (ex2_mem1_q.dec.is_load | ex2_mem1_q.dec.is_store | ex2_mem1_q.dec.is_amo);
+    mem1_mem1b_q.valid &
+    (mem1_mem1b_q.dec.is_load | mem1_mem1b_q.dec.is_store | mem1_mem1b_q.dec.is_amo);
 
   // itlb_perm_fail back-edge cut.  itlb_perm_fail is gated inside u_itlb by
   // lookup_valid_i = translate_fetch & align_needs_fetch, and the latter is
@@ -1345,10 +1414,14 @@ module kronos_top
   // is automatically zero in M-mode / Bare and only fires under active
   // translation.
   // instr_page_fault stays an iTLB-driven fetch-side signal (no dTLB / MEM1
-  // dependency).  load_page_fault and store_page_fault are now MEM1-cycle
-  // producers that consume the registered ex2_mem1_q opcode + the live MEM1
-  // dTLB perm-fail / PTW page-fault, and land in
-  // mem1_mem2_q.fault.{load,store}_page_fault at the MEM1->MEM2 edge.
+  // dependency).  Stage 7d — load/store_page_fault aggregation moves to
+  // MEM1B (mem1b_load_page_fault / mem1b_store_page_fault drive
+  // mem1_mem2_q.fault.{load,store}_page_fault at the MEM1B->MEM2 edge).
+  // The live MEM1-cycle predicate `mem1_load_page_fault` / `mem1_store_page_fault`
+  // is retained here only for: (a) the dtlb_miss exemption in
+  // combined_stall_no_muldiv, and (b) the MEM1->MEM1B pc_d override that
+  // forwards the trap_vector to mem1_mem1b_q.pc_d so the eventual MEM2
+  // redirect target captures correctly.
   assign instr_page_fault     = itlb_s1_perm_fail_q |
                                 (ptw_pf & (ptw_pf_which == TLB_FETCH)) |
                                 cross_page_fault;
@@ -1358,12 +1431,11 @@ module kronos_top
   assign mem1_store_page_fault =
       (dtlb_perm_fail | (ptw_pf & (ptw_pf_which == TLB_STORE))) &
       (ex2_mem1_q.dec.is_store | ex2_mem1_q.dec.is_amo);
-  // Legacy combinational aliases of the MEM1-produced page-fault bits.  Kept
-  // as wires so legacy consumers (mem_trap_cause_d / ex1_trap_cause read
-  // sites that are being routed to mem1_mem2_q.fault.*) still resolve until
-  // the corresponding sites switch to the registered fault aggregate.
-  assign load_page_fault  = mem1_load_page_fault;
-  assign store_page_fault = mem1_store_page_fault;
+  // Legacy combinational aliases.  Now sourced from the registered MEM1B
+  // outputs so all downstream consumers (ex1_trap_cause, mem_trap_cause_d,
+  // mem_redirect_d, mem_wb_q.fault) read the same flop-output bits.
+  assign load_page_fault  = mem1_mem2_q.fault.load_page_fault;
+  assign store_page_fault = mem1_mem2_q.fault.store_page_fault;
 
   // STAGE5f: 64-bit LSU — thin adapter to kronos_dcache.  Runs at MEM2: every
   // input comes from the mem1_mem2_q register.  PA is mem1_mem2_q.dtlb_pa
@@ -1375,10 +1447,10 @@ module kronos_top
     .req_i              (mem1_mem2_q.valid & (mem1_mem2_q.dec.is_load |
                          mem1_mem2_q.dec.is_store | mem1_mem2_q.dec.is_amo)
                          & ~mem_done_q),
-    // PMP data-port permission-violation flag.  The MEM1->MEM2 register
-    // captures pmp_data_fault into mem1_mem2_q.fault.pmp_data_fault, so the
-    // LSU at MEM2 reads a flop output that breaks the dTLB+PMP -> dcache
-    // hit-mux + load_data_full cone (master spec §1).
+    // Stage 7d — PMP runs at MEM1B and its output flops into
+    // mem1_mem2_q.fault.pmp_data_fault at the MEM1B->MEM2 edge.  The LSU
+    // sees the registered fault at MEM2, suppressing the dcache request on
+    // a trap.
     .pmp_fault_i        (mem1_mem2_q.fault.pmp_data_fault),
     // dcache-raised faults — AMO to non-cacheable region and AXI
     // bus error.  Both suppress the dcache request and unstall the pipeline
@@ -2134,7 +2206,8 @@ module kronos_top
     unique case (id_rr_q.fwd_rs1_sel)
       FWD_EX1_NOW: rs1_bypassed = ex_result;
       FWD_EX1:     rs1_bypassed = ex1_ex2_csr_q  ? ex1_ex2_q.csr_rdata  : ex1_ex2_q.alu_result;
-      FWD_EXMEM:    rs1_bypassed = ex2_mem_csr_q  ? ex2_mem1_q.csr_rdata : ex2_mem1_q.alu_result;
+      FWD_EXMEM:   rs1_bypassed = ex2_mem_csr_q  ? ex2_mem1_q.csr_rdata : ex2_mem1_q.alu_result;
+      FWD_MEM1B:   rs1_bypassed = mem1_mem1b_csr_q ? mem1_mem1b_q.csr_rdata : mem1_mem1b_q.alu_result;
       FWD_MEM2:    rs1_bypassed = (mem1_mem2_q.dec.wb_sel == WB_MEM) ? mem2_dcache_val
                                 : (mem1_mem2_csr_q ? mem1_mem2_q.csr_rdata
                                                    : mem1_mem2_q.alu_result);
@@ -2144,7 +2217,8 @@ module kronos_top
     unique case (id_rr_q.fwd_rs2_sel)
       FWD_EX1_NOW: rs2_bypassed = ex_result;
       FWD_EX1:     rs2_bypassed = ex1_ex2_csr_q  ? ex1_ex2_q.csr_rdata  : ex1_ex2_q.alu_result;
-      FWD_EXMEM:    rs2_bypassed = ex2_mem_csr_q  ? ex2_mem1_q.csr_rdata : ex2_mem1_q.alu_result;
+      FWD_EXMEM:   rs2_bypassed = ex2_mem_csr_q  ? ex2_mem1_q.csr_rdata : ex2_mem1_q.alu_result;
+      FWD_MEM1B:   rs2_bypassed = mem1_mem1b_csr_q ? mem1_mem1b_q.csr_rdata : mem1_mem1b_q.alu_result;
       FWD_MEM2:    rs2_bypassed = (mem1_mem2_q.dec.wb_sel == WB_MEM) ? mem2_dcache_val
                                 : (mem1_mem2_csr_q ? mem1_mem2_q.csr_rdata
                                                    : mem1_mem2_q.alu_result);
@@ -2298,8 +2372,11 @@ module kronos_top
     else if (mem1_mem2_q.fault.instr_page_fault) mem_trap_tval_d = mem1_mem2_q.pc;
     else if (mem1_mem2_q.fault.load_page_fault | mem1_mem2_q.fault.store_page_fault)
                                               mem_trap_tval_d = mem1_mem2_q.alu_result[31:0];
-    else if (mem1_mem2_q.fault.pmp_data_fault)  mem_trap_tval_d = mem_wb_pmp_data_addr_q[31:0];
-    else if (mem1_mem2_q.fault.ex_amo_nc_fault) mem_trap_tval_d = mem1_mem2_q.alu_result[31:0];
+    else if (mem1_mem2_q.fault.pmp_data_fault) begin
+      mem_trap_tval_d = mem_wb_pmp_data_addr_q[31:0];
+    end else if (mem1_mem2_q.fault.ex_amo_nc_fault) begin
+      mem_trap_tval_d = mem1_mem2_q.alu_result[31:0];
+    end
     else if (dcache_bus_err_fault)              mem_trap_tval_d = mem1_mem2_q.dtlb_pa[31:0];
     else if (mem1_mem2_q.fault.illegal | mem1_mem2_q.fault.csr_illegal |
              mem1_mem2_q.fault.mret_priv_fail | mem1_mem2_q.fault.sret_priv_fail |
@@ -2321,15 +2398,19 @@ module kronos_top
     end
   end
 
-  // Snapshot the PMP fault addresses at the EX2→MEM boundary so the trap_tval
-  // snapshot reads a registered offender PA matching mem_wb_q.fault.pmp_*.
+  // Snapshot the PMP fault addresses at the MEM2->WB boundary so the
+  // trap_tval snapshot reads a registered offender PA matching
+  // mem_wb_q.fault.pmp_*.  Stage 7d — pmp_data_fault is now produced at
+  // MEM1B and registered into mem1_mem2_q.fault.pmp_data_fault; the
+  // matching offender PA is the dTLB-translated PA carried in
+  // mem1_mem2_q.dtlb_pa (zero-extended to 56 bits).
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       mem_wb_pmp_fetch_addr_q <= 56'h0;
       mem_wb_pmp_data_addr_q  <= 56'h0;
     end else if (mem_wb_en) begin
       mem_wb_pmp_fetch_addr_q <= pmp_fetch_fault_addr;
-      mem_wb_pmp_data_addr_q  <= pmp_data_fault_addr;
+      mem_wb_pmp_data_addr_q  <= {24'h0, mem1_mem2_q.dtlb_pa[31:0]};
     end
   end
 
@@ -2373,31 +2454,50 @@ module kronos_top
   // and a MEM1-trap fires mem_redirect_d / mem_redirect_q which flushes the
   // EX1 instruction anyway.
   always_comb begin
+    // Stage 7d — pmp_data_fault, ex_amo_nc_fault, and load/store_page_fault
+    // are MEM1B-cycle producers; their live signals must feed trap_class /
+    // trap_cause so trap_vector_o reflects the correct delegation at the
+    // MEM1B->MEM2 register edge (where mem1_mem2_q.pc_d captures the
+    // trap_vector for the eventual mem_redirect at MEM2).  The registered
+    // mem1_mem2_q.fault.* bits cover the MEM2 cycle (one stage later) so the
+    // older MEM2-class flush + retire paths still see a consistent class.
     ex1_trap_class = (rr_ex1_q.valid & (rr_ex1_q.dec.is_ecall |
                        rr_ex1_q.dec.is_ebreak | rr_ex1_q.dec.illegal |
                        csr_illegal | mret_priv_fail | sret_priv_fail |
                        satp_tvm_fail | wfi_priv_fail | irq_pending)) |
-                     trig_hit | pmp_fetch_fault | pmp_data_fault |
-                     mem1_amo_nc_fault | dcache_bus_err_fault |
-                     instr_page_fault | mem1_load_page_fault |
-                     mem1_store_page_fault;
+                     trig_hit | pmp_fetch_fault |
+                     pmp_data_fault | mem1_mem2_q.fault.pmp_data_fault |
+                     mem1b_amo_nc_fault | mem1_mem2_q.fault.ex_amo_nc_fault |
+                     dcache_bus_err_fault |
+                     instr_page_fault |
+                     mem1b_load_page_fault | mem1_mem2_q.fault.load_page_fault |
+                     mem1b_store_page_fault | mem1_mem2_q.fault.store_page_fault;
 
-    // Priority: MEM1-class faults (older instruction) first, then EX1-class.
-    if (mem1_load_page_fault) begin
+    // Priority: MEM1B/MEM2 faults (older instruction) first, then EX1-class.
+    // Each MEM-class arm matches on the live MEM1B signal first, then the
+    // registered MEM2-cycle bit, with the MEM-cycle dec coming from the
+    // appropriate stage register.
+    if (mem1b_load_page_fault | mem1_mem2_q.fault.load_page_fault) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_PAGE_FAULT};
-    end else if (pmp_data_fault & ex2_mem1_q.dec.is_load) begin
+    end else if ((pmp_data_fault & mem1_mem1b_q.dec.is_load) |
+                 (mem1_mem2_q.fault.pmp_data_fault & mem1_mem2_q.dec.is_load)) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};
-    end else if (mem1_amo_nc_fault & ex2_mem1_q.dec.is_load) begin
+    end else if ((mem1b_amo_nc_fault & mem1_mem1b_q.dec.is_load) |
+                 (mem1_mem2_q.fault.ex_amo_nc_fault & mem1_mem2_q.dec.is_load)) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};
-    end else if (mem1_store_page_fault) begin
+    end else if (mem1b_store_page_fault | mem1_mem2_q.fault.store_page_fault) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_PAGE_FAULT};
-    end else if (pmp_data_fault & ex2_mem1_q.dec.is_store) begin
+    end else if ((pmp_data_fault & mem1_mem1b_q.dec.is_store) |
+                 (mem1_mem2_q.fault.pmp_data_fault & mem1_mem2_q.dec.is_store)) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
-    end else if (mem1_amo_nc_fault & ex2_mem1_q.dec.is_store) begin
+    end else if ((mem1b_amo_nc_fault & mem1_mem1b_q.dec.is_store) |
+                 (mem1_mem2_q.fault.ex_amo_nc_fault & mem1_mem2_q.dec.is_store)) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
-    end else if (pmp_data_fault & ex2_mem1_q.dec.is_amo) begin
+    end else if ((pmp_data_fault & mem1_mem1b_q.dec.is_amo) |
+                 (mem1_mem2_q.fault.pmp_data_fault & mem1_mem2_q.dec.is_amo)) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
-    end else if (mem1_amo_nc_fault & ex2_mem1_q.dec.is_amo) begin
+    end else if ((mem1b_amo_nc_fault & mem1_mem1b_q.dec.is_amo) |
+                 (mem1_mem2_q.fault.ex_amo_nc_fault & mem1_mem2_q.dec.is_amo)) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_STORE_ACCESS_FAULT};
     end else if (dcache_bus_err_fault & mem1_mem2_q.dec.is_load) begin
       ex1_trap_cause = {27'b0, kronos_pkg::CAUSE_LOAD_ACCESS_FAULT};
@@ -2647,9 +2747,15 @@ module kronos_top
     if (!rst_ni)         ex2_mem_csr_q <= 1'b0;
     else if (ex2_mem1_en) ex2_mem_csr_q <= (ex1_ex2_q.dec.wb_sel == WB_CSR);
   end
+  // Stage 7d MEM1B — insert one more shadow flop so the chain travels in
+  // lockstep with the new mem1_mem1b_q register.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)            mem1_mem1b_csr_q <= 1'b0;
+    else if (mem1_mem1b_en) mem1_mem1b_csr_q <= ex2_mem_csr_q;
+  end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)          mem1_mem2_csr_q <= 1'b0;
-    else if (mem1_mem2_en) mem1_mem2_csr_q <= ex2_mem_csr_q;
+    else if (mem1_mem2_en) mem1_mem2_csr_q <= mem1_mem1b_csr_q;
   end
 
   // Stage 7a — csr_new_val pipeline.  u_csr.csr_new_val_o (= csr_new_val_post)
@@ -2665,9 +2771,15 @@ module kronos_top
     if (!rst_ni)         ex2_mem_csr_new_val_q <= {kronos_pkg::XLEN{1'b0}};
     else if (ex2_mem1_en) ex2_mem_csr_new_val_q <= ex1_ex2_csr_new_val_q;
   end
+  // Stage 7d MEM1B — insert MEM1->MEM1B shadow so the post-write CSR value
+  // travels in lockstep with the instruction across MEM1B.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)            mem1_mem1b_csr_new_val_q <= {kronos_pkg::XLEN{1'b0}};
+    else if (mem1_mem1b_en) mem1_mem1b_csr_new_val_q <= ex2_mem_csr_new_val_q;
+  end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)          mem1_mem2_csr_new_val_q <= {kronos_pkg::XLEN{1'b0}};
-    else if (mem1_mem2_en) mem1_mem2_csr_new_val_q <= ex2_mem_csr_new_val_q;
+    else if (mem1_mem2_en) mem1_mem2_csr_new_val_q <= mem1_mem1b_csr_new_val_q;
   end
 
   // propagate the post-write CSR value MEM2→WB, mirroring the
@@ -2702,13 +2814,23 @@ module kronos_top
     if (!rst_ni)         ex2_mem_is_fp_arith_q <= 1'b0;
     else if (ex2_mem1_en) ex2_mem_is_fp_arith_q <= ex1_ex2_is_fp_arith_q;
   end
+  // Stage 7d MEM1B — insert MEM1->MEM1B shadow flops so fflags / fp-arith
+  // tags travel in lockstep with the instruction across MEM1B.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)            mem1_mem1b_fflags_q       <= 5'b0;
+    else if (mem1_mem1b_en) mem1_mem1b_fflags_q       <= ex2_mem_fflags_q;
+  end
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)            mem1_mem1b_is_fp_arith_q  <= 1'b0;
+    else if (mem1_mem1b_en) mem1_mem1b_is_fp_arith_q  <= ex2_mem_is_fp_arith_q;
+  end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)          mem1_mem2_fflags_q       <= 5'b0;
-    else if (mem1_mem2_en) mem1_mem2_fflags_q       <= ex2_mem_fflags_q;
+    else if (mem1_mem2_en) mem1_mem2_fflags_q       <= mem1_mem1b_fflags_q;
   end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)          mem1_mem2_is_fp_arith_q  <= 1'b0;
-    else if (mem1_mem2_en) mem1_mem2_is_fp_arith_q  <= ex2_mem_is_fp_arith_q;
+    else if (mem1_mem2_en) mem1_mem2_is_fp_arith_q  <= mem1_mem1b_is_fp_arith_q;
   end
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)        mem_wb_fflags_q       <= 5'b0;
@@ -2765,32 +2887,101 @@ module kronos_top
 
   assign ex2_mem1_flush = mem_redirect_q | mem_redirect_d;
 
-  // MEM1->MEM2 fault next-state.  Carries every EX2-stage fault bit forward
-  // and OR-folds in the MEM1-cycle producers (pmp_data_fault, mem1_amo_nc_fault,
-  // mem1_load/store_page_fault, instr_page_fault) so the registered aggregate
-  // is the source of truth for mem_redirect_d at MEM2.
+  // MEM1->MEM1B fault next-state.  Carries every EX2-stage fault bit forward
+  // and OR-folds the MEM1-cycle instr_page_fault producer plus the PTW-pulse
+  // arm of load/store_page_fault (covers ptw_pf when the walk completes with
+  // an invalid PTE — independent of the dTLB perm-fail bit, which is forwarded
+  // separately via mem1_mem1b_q.dtlb_perm_fail and resolved at MEM1B).  PMP /
+  // PMA NC bits stay '0 here; MEM1B fills them in at the MEM1B->MEM2 edge.
   always_comb begin
-    mem1_fault_d                    = ex2_mem1_q.fault;
-    mem1_fault_d.pmp_data_fault     = ex2_mem1_q.fault.pmp_data_fault |
-                                      (pmp_data_fault_raw & pmp_any_active);
-    mem1_fault_d.ex_amo_nc_fault    = ex2_mem1_q.fault.ex_amo_nc_fault |
-                                      mem1_amo_nc_fault;
-    mem1_fault_d.load_page_fault    = ex2_mem1_q.fault.load_page_fault  |
-                                      mem1_load_page_fault;
-    mem1_fault_d.store_page_fault   = ex2_mem1_q.fault.store_page_fault |
-                                      mem1_store_page_fault;
-    mem1_fault_d.instr_page_fault   = ex2_mem1_q.fault.instr_page_fault |
-                                      instr_page_fault;
+    mem1_mem1b_fault_d                  = ex2_mem1_q.fault;
+    mem1_mem1b_fault_d.instr_page_fault = ex2_mem1_q.fault.instr_page_fault |
+                                          instr_page_fault;
+    mem1_mem1b_fault_d.load_page_fault  = ex2_mem1_q.fault.load_page_fault  |
+                                          (ptw_pf & (ptw_pf_which == TLB_LOAD) &
+                                           ex2_mem1_q.dec.is_load);
+    mem1_mem1b_fault_d.store_page_fault = ex2_mem1_q.fault.store_page_fault |
+                                          (ptw_pf & (ptw_pf_which == TLB_STORE) &
+                                           (ex2_mem1_q.dec.is_store | ex2_mem1_q.dec.is_amo));
   end
 
-  // MEM1-class faults that cause a trap-vector redirect (vs a direction
-  // mispredict).  These override mem1_mem2_q.pc_d to trap_vector at the
-  // MEM1->MEM2 edge so mem_redirect_target_q latches the right vector.
+  // MEM1-class faults that override pc_d to trap_vector at the MEM1->MEM1B
+  // boundary so mem_redirect_target_q (captured at MEM2) sees the correct
+  // vector for the dTLB-perm-fail path.  PMP / PMA NC bits redirect at the
+  // MEM1B->MEM2 edge via mem1b_trap_redirect.
   assign mem1_trap_redirect =
-      (pmp_data_fault_raw & pmp_any_active) |
-      mem1_amo_nc_fault   |
       mem1_load_page_fault |
       mem1_store_page_fault;
+
+  // MEM1B-class trap predicate — overrides pc_d to trap_vector at the
+  // MEM1B->MEM2 boundary.  Covers the live MEM1B producers (PMP, PMA NC,
+  // page-fault) so mem_redirect_target_q latches the correct vector.
+  assign mem1b_trap_redirect =
+      pmp_data_fault         |
+      mem1b_amo_nc_fault     |
+      mem1b_load_page_fault  |
+      mem1b_store_page_fault;
+
+  // MEM1->MEM1B passthrough register.  Captures dTLB outputs (PA + perm-fail
+  // + hit indicator) so MEM1B can run u_pmp_data + PMA NC + page-fault
+  // aggregation flop-to-flop.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      mem1_mem1b_q <= MEM1_MEM1B_REG_ZERO;
+    end else if (mem1_mem1b_flush) begin
+      mem1_mem1b_q <= MEM1_MEM1B_REG_ZERO;
+    end else if (mem1_mem1b_en) begin
+      mem1_mem1b_q.pc          <= ex2_mem1_q.pc;
+      mem1_mem1b_q.dec         <= ex2_mem1_q.dec;
+      mem1_mem1b_q.alu_result  <= ex2_mem1_q.alu_result;
+      mem1_mem1b_q.rs2_data    <= ex2_mem1_q.rs2_data;
+      // pc_d carries either the EX1-cycle ex_pc_d (for non-trap or
+      // EX1-class trap), or trap_vector when a MEM1-class fault overrides.
+      mem1_mem1b_q.pc_d        <= mem1_trap_redirect
+                                  ? trap_vector[31:0]
+                                  : ex2_mem1_q.pc_d;
+      mem1_mem1b_q.csr_rdata   <= ex2_mem1_q.csr_rdata;
+      mem1_mem1b_q.csr_wdata   <= ex2_mem1_q.csr_wdata;
+      mem1_mem1b_q.is_16b      <= ex2_mem1_q.is_16b;
+      mem1_mem1b_q.pred_taken  <= ex2_mem1_q.pred_taken;
+      mem1_mem1b_q.pred_target <= ex2_mem1_q.pred_target;
+      mem1_mem1b_q.instr       <= ex2_mem1_q.instr;
+      mem1_mem1b_q.redirect    <= 1'b0;
+      // Wrong-path kill at MEM1->MEM1B boundary mirrors the 7c MEM1->MEM2
+      // semantics: only MEM2-class redirects kill the MEM1 occupant; the
+      // EX2 direction-mispredict (ex_redirect_q) cone targets ID/RR/EX1
+      // followers, not MEM1.
+      mem1_mem1b_q.valid       <= ex2_mem1_q.valid &
+                                  ~mem_redirect_d & ~mem_redirect_q;
+      mem1_mem1b_q.fault       <= mem1_mem1b_fault_d;
+      mem1_mem1b_q.dtlb_pa     <= eff_data_pa[31:0];
+      mem1_mem1b_q.dtlb_was_hit <= ~dtlb_miss;
+      mem1_mem1b_q.dcache_pre_launched <= dcache_early_req_valid;
+      // Carry the raw dTLB perm-fail bit forward; MEM1B aggregates it into
+      // load/store_page_fault using the registered dec.is_load / is_store /
+      // is_amo bits.
+      mem1_mem1b_q.dtlb_perm_fail <= dtlb_perm_fail;
+    end
+  end
+
+  assign mem1_mem1b_flush = (mem_redirect_q | mem_redirect_d) & ~combined_stall;
+
+  // MEM1B->MEM2 fault next-state.  Carries every fault bit registered in
+  // mem1_mem1b_q forward and OR-folds the live MEM1B-cycle producers
+  // (pmp_data_fault, ex_amo_nc_fault, load/store_page_fault) into the
+  // matching mem1_mem2_q.fault.* fields so mem_redirect_d / ex1_trap_cause /
+  // mem_trap_cause_d / mem_wb_q.fault all read flop outputs only.
+  always_comb begin
+    mem1_mem2_fault_d                    = mem1_mem1b_q.fault;
+    mem1_mem2_fault_d.pmp_data_fault     = mem1_mem1b_q.fault.pmp_data_fault    |
+                                           pmp_data_fault;
+    mem1_mem2_fault_d.ex_amo_nc_fault    = mem1_mem1b_q.fault.ex_amo_nc_fault   |
+                                           mem1b_amo_nc_fault;
+    mem1_mem2_fault_d.load_page_fault    = mem1_mem1b_q.fault.load_page_fault   |
+                                           mem1b_load_page_fault;
+    mem1_mem2_fault_d.store_page_fault   = mem1_mem1b_q.fault.store_page_fault  |
+                                           mem1b_store_page_fault;
+  end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -2798,34 +2989,32 @@ module kronos_top
     end else if (mem1_mem2_flush) begin
       mem1_mem2_q <= MEM1_MEM2_REG_ZERO;
     end else if (mem1_mem2_en) begin
-      mem1_mem2_q.pc          <= ex2_mem1_q.pc;
-      mem1_mem2_q.dec         <= ex2_mem1_q.dec;
-      mem1_mem2_q.alu_result  <= ex2_mem1_q.alu_result;
-      mem1_mem2_q.rs2_data    <= ex2_mem1_q.rs2_data;
-      // pc_d carries either the EX1-cycle ex_pc_d (for non-trap or EX1-class
-      // trap), or trap_vector when a MEM1-class fault overrides.
-      mem1_mem2_q.pc_d        <= mem1_trap_redirect
+      mem1_mem2_q.pc          <= mem1_mem1b_q.pc;
+      mem1_mem2_q.dec         <= mem1_mem1b_q.dec;
+      mem1_mem2_q.alu_result  <= mem1_mem1b_q.alu_result;
+      mem1_mem2_q.rs2_data    <= mem1_mem1b_q.rs2_data;
+      // pc_d: trap_vector wins when a MEM1B-class fault fires this cycle;
+      // otherwise pass through whatever mem1_mem1b_q.pc_d carries
+      // (already overridden to trap_vector at the MEM1->MEM1B edge for
+      // dTLB-perm-fail or EX1-class traps).
+      mem1_mem2_q.pc_d        <= mem1b_trap_redirect
                                  ? trap_vector[31:0]
-                                 : ex2_mem1_q.pc_d;
-      mem1_mem2_q.csr_rdata   <= ex2_mem1_q.csr_rdata;
-      mem1_mem2_q.csr_wdata   <= ex2_mem1_q.csr_wdata;
-      mem1_mem2_q.is_16b      <= ex2_mem1_q.is_16b;
-      mem1_mem2_q.pred_taken  <= ex2_mem1_q.pred_taken;
-      mem1_mem2_q.pred_target <= ex2_mem1_q.pred_target;
-      mem1_mem2_q.instr       <= ex2_mem1_q.instr;
+                                 : mem1_mem1b_q.pc_d;
+      mem1_mem2_q.csr_rdata   <= mem1_mem1b_q.csr_rdata;
+      mem1_mem2_q.csr_wdata   <= mem1_mem1b_q.csr_wdata;
+      mem1_mem2_q.is_16b      <= mem1_mem1b_q.is_16b;
+      mem1_mem2_q.pred_taken  <= mem1_mem1b_q.pred_taken;
+      mem1_mem2_q.pred_target <= mem1_mem1b_q.pred_target;
+      mem1_mem2_q.instr       <= mem1_mem1b_q.instr;
       mem1_mem2_q.redirect    <= 1'b0;
-      // Wrong-path kill at MEM1->MEM2 boundary: only MEM2-class redirects
-      // kill an instruction that's already past EX2.  ex_redirect_q (EX2
-      // direction-mispredict) does NOT kill MEM1: by the time the EX2
-      // redirect fires, the MEM1 occupant is the JAL/branch itself, which
-      // must commit its writeback (e.g. JAL's link write to ra).  The
-      // ex_redirect cone targets ID/RR/EX1 wrong-path followers, not MEM1.
-      mem1_mem2_q.valid       <= ex2_mem1_q.valid &
+      // Wrong-path kill at MEM1B->MEM2 boundary mirrors the MEM1->MEM1B
+      // semantics: only MEM2-class redirects gate.
+      mem1_mem2_q.valid       <= mem1_mem1b_q.valid &
                                   ~mem_redirect_d & ~mem_redirect_q;
-      mem1_mem2_q.fault       <= mem1_fault_d;
-      mem1_mem2_q.dtlb_pa     <= eff_data_pa[31:0];
-      mem1_mem2_q.dtlb_was_hit <= ~dtlb_miss;
-      mem1_mem2_q.dcache_pre_launched <= dcache_early_req_valid;
+      mem1_mem2_q.fault       <= mem1_mem2_fault_d;
+      mem1_mem2_q.dtlb_pa     <= mem1_mem1b_q.dtlb_pa;
+      mem1_mem2_q.dtlb_was_hit <= mem1_mem1b_q.dtlb_was_hit;
+      mem1_mem2_q.dcache_pre_launched <= mem1_mem1b_q.dcache_pre_launched;
     end
   end
 
@@ -2879,13 +3068,13 @@ module kronos_top
       mem1_mem2_q.fault.is_mret          |
       mem1_mem2_q.fault.is_sret          |
       mem1_mem2_q.fault.pmp_fetch_fault  |
-      mem1_mem2_q.fault.pmp_data_fault   |
-      mem1_mem2_q.fault.ex_amo_nc_fault  |
+      mem1_mem2_q.fault.pmp_data_fault   |   // 7d: registered MEM1B output
+      mem1_mem2_q.fault.ex_amo_nc_fault  |   // 7d: registered MEM1B output
       mem1_mem2_q.fault.trig_hit         |
       mem1_mem2_q.fault.instr_page_fault |
       mem1_mem2_q.fault.load_page_fault  |
       mem1_mem2_q.fault.store_page_fault |
-      bpred_mispredict_target          |
+      bpred_mispredict_target            |
       dcache_bus_err_fault);
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -2894,10 +3083,12 @@ module kronos_top
     else                     mem_redirect_q <= mem_redirect_d;
   end
 
-  // Capture the MEM2 redirect target alongside mem_redirect_q.  Sampled from
-  // `mem1_mem2_q.pc_d` at the edge that registers the fault, since the
-  // mem1_mem2_q register is overwritten by the next instruction at the same
-  // edge and its `pc_d` field becomes stale.
+  // Capture the MEM2 redirect target alongside mem_redirect_q.  Stage 7d:
+  // every MEM1B-class fault (PMP, PMA NC, load/store page-fault) overrides
+  // mem1_mem2_q.pc_d to trap_vector at the MEM1B->MEM2 edge via
+  // mem1b_trap_redirect; MEM1-class faults override at the MEM1->MEM1B
+  // edge via mem1_trap_redirect.  By the time the MEM2 redirect fires the
+  // pc_d field already carries the correct vector — no extra mux here.
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if      (!rst_ni)        mem_redirect_target_q <= 32'h0;
     else if (combined_stall) mem_redirect_target_q <= mem_redirect_target_q;
@@ -2951,9 +3142,11 @@ module kronos_top
       mem_wb_q.mem_addr   <= mem1_mem2_q.alu_result;
       mem_wb_q.mem_wdata  <= mem1_mem2_q.rs2_data;
       mem_wb_q.csr_wdata  <= mem1_mem2_q.csr_wdata;
-      // Full fault aggregate at retire.  Every MEM1-class bit is already in
-      // mem1_mem2_q.fault.*; add live MEM2 producers (target mispredict,
-      // dcache bus error).
+      // Full fault aggregate at retire.  Stage 7d — every MEM1B/MEM1-class
+      // bit is already registered in mem1_mem2_q.fault.* (PMP/PMA NC and
+      // page-fault bits are produced at MEM1B and registered at the
+      // MEM1B->MEM2 edge); only the two live MEM2 producers
+      // (bpred_mispredict_target, dcache_bus_err_fault) join here.
       mem_wb_q.fault <= '{
         ecall:                   mem1_mem2_q.fault.ecall,
         ebreak:                  mem1_mem2_q.fault.ebreak,
