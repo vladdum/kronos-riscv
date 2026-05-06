@@ -2829,7 +2829,17 @@ module kronos_top
     end
   end
 
-  assign mem1_mem2_flush = mem_redirect_q | mem_redirect_d;
+  // mem1_mem2_flush gated on ~combined_stall: when combined_stall fires the
+  // same cycle mem_redirect_d asserts (e.g., an icache miss stalls the
+  // pipeline at the mret/sret cycle), mem_wb_en is 0 so mem_wb_q cannot
+  // capture the trap-causer.  Without this gate the flush would zero
+  // mem1_mem2_q before the stall lifts and the mret/sret commit would be
+  // lost — visible as test_priv_smoke regressing to x10=60 (M handler
+  // sees mcause=ECALL_M instead of ECALL_U because the mret never
+  // actually transitioned priv to U).  Holding the flush off under
+  // stall keeps the trap-causer in mem1_mem2_q until the stall lifts,
+  // at which edge mem_wb_q captures and mem1_mem2_q is zeroed together.
+  assign mem1_mem2_flush = (mem_redirect_q | mem_redirect_d) & ~combined_stall;
 
   // PA pipeline: dTLB lookup runs at MEM1 (consuming ex2_mem1_q.alu_result as
   // VA), the translated PA flops into mem1_mem2_q.dtlb_pa at the MEM1->MEM2
