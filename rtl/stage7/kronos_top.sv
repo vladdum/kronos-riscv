@@ -2524,14 +2524,23 @@ module kronos_top
   end
 
   assign ex1_ex2_en    = ~combined_stall;
-  // Stage 7a — flush ex1_ex2_q on mem_redirect_d (live, same cycle as the
-  // trap-causing instruction sits in ex2_mem1_q) as well as the registered _q
-  // bits.  Without the _d term, the wrong-path follower in rr_ex1_q latches
-  // into ex1_ex2_q at the same edge mem_redirect_q goes high; one cycle later
+  // Flush ex1_ex2_q on mem_redirect_d (live, same cycle as the trap-causing
+  // instruction sits in ex2_mem1_q) as well as the registered _q bits.
+  // Without the _d term, the wrong-path follower in rr_ex1_q latches into
+  // ex1_ex2_q at the same edge mem_redirect_q goes high; one cycle later
   // that follower's bpred_dir_mispredict can raise ex_redirect_q and override
-  // the IFU's trap_vector / xRET reload — visible as test_csr_priv jumping to
-  // the wrong-path j-target 0x5a instead of mtvec=0x88.
-  assign ex1_ex2_flush = ex_redirect_q | mem_redirect_q | mem_redirect_d;
+  // the IFU's trap_vector / xRET reload.
+  //
+  // The (ex_redirect_d & ex1_ex2_en) term is the JAL/branch analog: when a
+  // JAL or mispredicting branch sits in ex1_ex2_q (ex_redirect_d=1), the
+  // wrong-path follower in rr_ex1_q must NOT advance into ex1_ex2_q at the
+  // same edge.  ex_redirect_q lags by one cycle, so without this live term
+  // the follower captures into ex1_ex2_q at edge T+1->T+2 (while JAL
+  // advances to ex2_mem1_q), then leaks past EX2 because ex2_mem1_q sampled
+  // ex1_ex2_q's *pre-flush* value at edge T+2->T+3.  Gated on ex1_ex2_en so
+  // a stall holds the JAL in ex1_ex2_q intact rather than zeroing it.
+  assign ex1_ex2_flush = ex_redirect_q | mem_redirect_q | mem_redirect_d
+                       | (ex_redirect_d & ex1_ex2_en);
 
   // Stage 7a — EX2 fault next-state.  Carries EX1 bits forward verbatim.
   // EX2 fault next-state.  Carries every EX1-stage fault bit forward verbatim
@@ -2725,8 +2734,9 @@ module kronos_top
       // the EX2 instruction ITSELF (the JAL/branch that detected the
       // mispredict) must still commit its rd write at WB. Killing it here
       // would suppress JAL's link write to ra and break ret semantics.
-      // ex1_ex2_flush already drains any wrong-path instruction from EX1
-      // before it reaches EX2.
+      // ex1_ex2_flush picks up the wrong-path follower at the EX1->EX2
+      // edge via its (ex_redirect_d & ex1_ex2_en) term — see ex1_ex2_flush
+      // assign above for the timing argument.
       ex2_mem1_q.valid       <= ex1_ex2_q.valid &
                                 ~mem_redirect_d & ~mem_redirect_q;
       ex2_mem1_q.is_16b      <= ex1_ex2_q.is_16b;
