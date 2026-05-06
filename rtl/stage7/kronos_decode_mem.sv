@@ -109,13 +109,15 @@ module kronos_decode_mem
 
         unique case (funct7[6:2])
           5'b00010: begin
-            decoded_o.is_load = 1'b1;
-            decoded_o.is_lr   = 1'b1;
+            decoded_o.is_load    = 1'b1;
+            decoded_o.is_lr      = 1'b1;
+            decoded_o.amo_funct5 = funct7[6:2];
           end
           5'b00011: begin
-            decoded_o.is_store = 1'b1;
-            decoded_o.is_sc    = 1'b1;
-            decoded_o.rs2_used = 1'b1;
+            decoded_o.is_store   = 1'b1;
+            decoded_o.is_sc      = 1'b1;
+            decoded_o.rs2_used   = 1'b1;
+            decoded_o.amo_funct5 = funct7[6:2];
           end
           default: begin
             decoded_o.is_amo     = 1'b1;

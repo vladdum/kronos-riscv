@@ -1490,7 +1490,17 @@ module kronos_dcache
                         | bypass_valid_q | store_done_q | amo_done_q
                         | nc_rsp_valid_q | nc_b_done_q;
   assign rsp_rdata_int  = amo_done_q ? amo_old_val_q : load_data_full;
-  assign sc_success_int = sc_success_q;
+  // sc_success_int: the registered sc_success_q lags by one cycle after the
+  // SC fires (it captures at the next posedge), but the LSU samples
+  // sc_success_o the same cycle data_valid_o pulses (via `hit` in the
+  // rsp_valid_int OR-tree).  In the MEM1/MEM2 pipeline, the SC at MEM2
+  // advances to WB on the very next edge unless an unrelated stall holds
+  // it — without combinational coverage, mem_wb_q.lsu_rdata captures
+  // ~sc_success_q == 1 (failure) for an SC that actually hit and matched
+  // its reservation.  Fold sc_hit_write_fire (the same combinational
+  // predicate that fires the BRAM write) into sc_success_int so the LSU
+  // sees the correct success bit in the same cycle data_valid pulses.
+  assign sc_success_int = sc_success_q | sc_hit_write_fire;
 
   // route the response to either LSU or PTW.
   // - PTW hits land in DC_PTW_LOOKUP — owner is PTW.

@@ -131,6 +131,7 @@ module kronos_top
   logic [kronos_pkg::XLEN-1:0] rr_csr_rdata_combinational;
   // Bypassed RS1/RS2 captured into rr_ex1_q at the RR/EX1 flop boundary.
   logic [kronos_pkg::XLEN-1:0] rs1_bypassed, rs2_bypassed;
+  logic [kronos_pkg::XLEN-1:0] mem2_dcache_val;
 
   // -------------------------------------------------------------------------
   // EX-stage wires (64-bit datapath)
@@ -822,7 +823,12 @@ module kronos_top
 
   kronos_hazard u_hazard (
     // RR producer (id_rr_q) — load-use, csr-raw, and uses_csr arms.
-    .id_rr_is_load_i       (id_rr_q.dec.is_load),
+    // is_load mirrors u_forward's wb_sel==WB_MEM predicate so AMO/LR/SC
+    // (which write rd from lsu_rdata at MEM2) are also stalled, not just
+    // raw loads.  Without this, the consumer reads stale regfile via
+    // FWD_NONE — visible as test_mem_amo_split sub-test 1 (bnez after
+    // sc.d sees x29=0 instead of the SC success/fail code).
+    .id_rr_is_load_i       (id_rr_q.dec.wb_sel == WB_MEM),
     .id_rr_is_fp_load_i    (id_rr_q.dec.fp_load),
     .id_rr_is_csr_i        (id_rr_q.dec.is_csr),
     .id_rr_rd_i            (id_rr_q.dec.rd),
@@ -832,21 +838,21 @@ module kronos_top
                                               id_rr_q.dec.is_sret | id_rr_q.dec.is_wfi |
                                               id_rr_q.dec.is_ecall | id_rr_q.dec.is_ebreak)),
     // EX1 producer (rr_ex1_q).
-    .rr_ex1_is_load_i      (rr_ex1_q.dec.is_load),
+    .rr_ex1_is_load_i      (rr_ex1_q.dec.wb_sel == WB_MEM),
     .rr_ex1_is_fp_load_i   (rr_ex1_q.dec.fp_load),
     .rr_ex1_is_csr_i       (rr_ex1_q.dec.is_csr),
     .rr_ex1_is_frm_write_i (id_ex_is_frm_write),
     .rr_ex1_rd_i           (rr_ex1_q.dec.rd),
     .rr_ex1_valid_i        (rr_ex1_q.valid),
     // EX2 producer (ex1_ex2_q).
-    .ex1_ex2_is_load_i     (ex1_ex2_q.dec.is_load),
+    .ex1_ex2_is_load_i     (ex1_ex2_q.dec.wb_sel == WB_MEM),
     .ex1_ex2_is_fp_load_i  (ex1_ex2_q.dec.fp_load),
     .ex1_ex2_is_csr_i      (ex1_ex2_q.dec.is_csr),
     .ex1_ex2_rd_i          (ex1_ex2_q.dec.rd),
     .ex1_ex2_rd_wen_i      (ex1_ex2_q.dec.rd_wen),
     .ex1_ex2_valid_i       (ex1_ex2_q.valid),
     // MEM1 producer (ex2_mem1_q).
-    .ex2_mem1_is_load_i    (ex2_mem1_q.dec.is_load),
+    .ex2_mem1_is_load_i    (ex2_mem1_q.dec.wb_sel == WB_MEM),
     .ex2_mem1_is_fp_load_i (ex2_mem1_q.dec.fp_load),
     .ex2_mem1_is_csr_i     (ex2_mem1_q.dec.is_csr),
     .ex2_mem1_rd_i         (ex2_mem1_q.dec.rd),
@@ -2114,12 +2120,22 @@ module kronos_top
   //                 lsu_rdata combinationally from the dcache hit-mux).
   //   FWD_MEMWB   : wb_result_64 (writeback mux output).
   //   default     : RR-cycle source (FP mux or int regfile/WB-bypass mux).
+  // FWD_MEM2 dcache value: covers loads, AMO, LR, SC (anything with
+  // wb_sel == WB_MEM whose result lands in lsu_rdata at MEM2).  When the
+  // LSU is currently asserting valid, lsu_rdata is the freshest value;
+  // otherwise the held lsu_rdata_latch carries it across a stall (the
+  // dcache rsp_valid_int pulses for one cycle and clears once mem_done_q
+  // gates req_i back off, so live lsu_rdata returns to 0 the cycle
+  // after — without the latch fallback the bypass captures 0 when the
+  // consumer's RR/EX1 capture is held by combined_stall).
+  assign mem2_dcache_val = lsu_valid ? lsu_rdata : lsu_rdata_latch;
+
   always_comb begin
     unique case (id_rr_q.fwd_rs1_sel)
       FWD_EX1_NOW: rs1_bypassed = ex_result;
       FWD_EX1:     rs1_bypassed = ex1_ex2_csr_q  ? ex1_ex2_q.csr_rdata  : ex1_ex2_q.alu_result;
       FWD_EXMEM:    rs1_bypassed = ex2_mem_csr_q  ? ex2_mem1_q.csr_rdata : ex2_mem1_q.alu_result;
-      FWD_MEM2:    rs1_bypassed = mem1_mem2_q.dec.is_load ? lsu_rdata
+      FWD_MEM2:    rs1_bypassed = (mem1_mem2_q.dec.wb_sel == WB_MEM) ? mem2_dcache_val
                                 : (mem1_mem2_csr_q ? mem1_mem2_q.csr_rdata
                                                    : mem1_mem2_q.alu_result);
       FWD_MEMWB:   rs1_bypassed = wb_result_64;
@@ -2129,7 +2145,7 @@ module kronos_top
       FWD_EX1_NOW: rs2_bypassed = ex_result;
       FWD_EX1:     rs2_bypassed = ex1_ex2_csr_q  ? ex1_ex2_q.csr_rdata  : ex1_ex2_q.alu_result;
       FWD_EXMEM:    rs2_bypassed = ex2_mem_csr_q  ? ex2_mem1_q.csr_rdata : ex2_mem1_q.alu_result;
-      FWD_MEM2:    rs2_bypassed = mem1_mem2_q.dec.is_load ? lsu_rdata
+      FWD_MEM2:    rs2_bypassed = (mem1_mem2_q.dec.wb_sel == WB_MEM) ? mem2_dcache_val
                                 : (mem1_mem2_csr_q ? mem1_mem2_q.csr_rdata
                                                    : mem1_mem2_q.alu_result);
       FWD_MEMWB:   rs2_bypassed = wb_result_64;
