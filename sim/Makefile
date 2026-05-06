@@ -131,7 +131,8 @@ SIM_BIN_S2 := $(OBJ_DIR)/s2/Vkronos_top
         sim-crv-% sim-crv-smoke sim-crv-deep \
         sim-crv-s6-% sim-crv-smoke-s6 sim-crv-deep-s6 \
         sim-crv-cov-build sim-crv-coverage \
-        sim-crv-assists
+        sim-crv-assists \
+        sim-stage7c-asm run-s7c-%
 
 # ── Sail differential-trace harness ─────────────────────────────────────────
 TRACE_DIR := $(OBJ_DIR)/trace
@@ -1178,6 +1179,42 @@ $(SIM_BIN_S7A): $(SV_FILES_S7A) $(abspath sim_main.cpp)
 run-s7a-%: build-s7a
 	$(MAKE) -C $(SW_DIR_S7A) build/$*.hex
 	./$(SIM_BIN_S7A) $(SW_DIR_S7A)/build/$*.hex
+
+# ── Stage 7c directed asm tests (MEM1/MEM2 split) ─────────────────────────────
+# Stage 7c reuses files_rtl_s7a (fileset name stayed at s7a after the s7b
+# merge edited files in place — same pattern continues for 7c). The s7c asm
+# tests therefore run against SIM_BIN_S7A / build-s7a.
+SW_DIR_S7C := ../sw/stage7c
+
+run-s7c-%: build-s7a
+	$(MAKE) -C $(SW_DIR_S7C) build/$*.hex
+	./$(SIM_BIN_S7A) $(SW_DIR_S7C)/build/$*.hex
+
+sim-stage7c-asm: build-s7a
+	@$(MAKE) -C $(SW_DIR_S7C) all > /dev/null 2>&1; \
+	tmpdir=$$(mktemp -d); pids=""; \
+	for hex in $(SW_DIR_S7C)/build/*.hex; do \
+	  [ -f "$$hex" ] || continue; \
+	  name=$$(basename $$hex .hex); \
+	  { out=$$(timeout 30 ./$(SIM_BIN_S7A) $$hex 2>&1); \
+	    x10=$$(echo "$$out" | grep -oP 'x10 = \K[0-9]+'); \
+	    echo "$$hex $$x10"; } > $$tmpdir/$$name & \
+	  pids="$$pids $$!"; \
+	done; \
+	wait $$pids; \
+	pass=0; fail=0; \
+	for f in $$tmpdir/*; do \
+	  [ -f "$$f" ] || continue; \
+	  read hex x10 < $$f; \
+	  if [ "$$x10" = "0" ]; then \
+	    pass=$$((pass+1)); echo "PASS  $$hex"; \
+	  else \
+	    echo "FAIL  $$hex (x10=$$x10)"; fail=$$((fail+1)); \
+	  fi; \
+	done; \
+	rm -rf $$tmpdir; \
+	echo "Stage 7c asm: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]
 
 # ── Lint: kronos RTL only, with UNOPTFLAT enabled. ────────────────────────────
 # Detects RTL combinational loops (closes #89 detection gap).  Lints the

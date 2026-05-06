@@ -301,20 +301,20 @@ package kronos_pkg;
   // Stage 1 / Stage 7a: forwarding and pipeline register types
   // -------------------------------------------------------------------------
 
-  // Stage 7b — fwd_sel_e gains FWD_EX1_NOW for the same-cycle bypass from the
-  // combinational EX1 alu_result_d into the RR/EX1 flop.  Names of the older
-  // sources keep their semantic meaning ("the source is in this register"),
-  // even though the consumer cycle moved one stage later by inserting RR:
+  // fwd_sel_e — forwarding source select for rs1/rs2 bypass mux at RR stage.
+  // Five producer slots, freshest first:
   //   FWD_EX1_NOW  - same cycle (combinational alu_result_d at EX1)
   //   FWD_EX1      - 1-cycle-old (ex1_ex2_q.alu_result)
-  //   FWD_EXMEM    - 2-cycle-old (ex2_mem_q.alu_result)
-  //   FWD_MEMWB    - 3-cycle-old (mem_wb_q via writeback mux)
+  //   FWD_EXMEM         - 2-cycle-old (ex2_mem1_q.alu_result; was FWD_EXMEM     in 7b)
+  //   FWD_MEM2     - 3-cycle-old (mem1_mem2_q.alu_result, or lsu_rdata for loads)
+  //   FWD_MEMWB    - 4-cycle-old (mem_wb_q via writeback mux)
   typedef enum logic [2:0] {
-    FWD_NONE     = 3'd0,   // use register-file value
-    FWD_EX1_NOW  = 3'd1,   // Stage 7b — same-cycle EX1 alu_result_d
+    FWD_NONE     = 3'd0,   // use regfile rdata
+    FWD_EX1_NOW  = 3'd1,   // 7b — same-cycle EX1 alu_result_d (combinational)
     FWD_EX1      = 3'd2,   // 1-cycle-old: ex1_ex2_q.alu_result
-    FWD_EXMEM    = 3'd3,   // 2-cycle-old: ex2_mem_q.alu_result
-    FWD_MEMWB    = 3'd4    // 3-cycle-old: WB mux output
+    FWD_EXMEM         = 3'd3,   // 2-cycle-old: ex2_mem1_q.alu_result   (was FWD_EXMEM     in 7b)
+    FWD_MEM2     = 3'd4,   // 3-cycle-old: mem1_mem2_q.alu_result OR lsu_rdata for loads
+    FWD_MEMWB    = 3'd5    // 4-cycle-old: mem_wb_q via writeback mux
   } fwd_sel_e;
 
   // -------------------------------------------------------------------------
@@ -388,7 +388,7 @@ package kronos_pkg;
     logic [63:0]    rs2_data;
     logic [31:0]    pc_d;
     logic [63:0]    csr_rdata;
-    logic           redirect;    // Stage 6 — kept for backward compat; unused in Stage 7a.
+    logic           redirect;    // kept for backward compat; unused in Stage 7+.
     logic           valid;
     // Stage 3+
     logic           is_16b;      // needed so WB computes correct pc4 link address
@@ -398,11 +398,32 @@ package kronos_pkg;
     // into kronos_csr (snapshot of the CSR write source operand).
     logic [31:0]    instr;
     logic [63:0]    csr_wdata;
-    // Stage 7a — registered fault bits.  Stage 7a forms mem_redirect_d
-    // from these + MEM-cycle producers; Stage 6 leaves this field at '0
-    // and continues using the older `redirect` field above.
+    // Registered fault bits.  Forms mem_redirect_d together with MEM-cycle
+    // producers.
     fault_t         fault;
   } ex_mem_reg_t;
+
+  typedef struct packed {
+    // mirror of ex_mem_reg_t (passed through MEM1->MEM2)
+    logic [31:0]    pc;
+    decoded_instr_t dec;
+    logic [63:0]    alu_result;
+    logic [63:0]    rs2_data;
+    logic [31:0]    pc_d;
+    logic [63:0]    csr_rdata;
+    logic           redirect;       // legacy — kept for backward compat; unused
+    logic           valid;
+    logic           is_16b;
+    logic           pred_taken;
+    logic [31:0]    pred_target;
+    logic [31:0]    instr;
+    logic [63:0]    csr_wdata;
+    fault_t         fault;          // includes MEM1-produced bits
+    // MEM1-stage outputs
+    logic [31:0]    dtlb_pa;        // translated PA (or eff_data_pa under translate_data=0)
+    logic           dtlb_was_hit;   // 1=lookup hit (or translation off); 0=dtlb_miss path
+    logic           dcache_pre_launched; // metadata for retire trace
+  } mem1_mem2_reg_t;
 
   typedef struct packed {
     decoded_instr_t dec;
@@ -436,6 +457,18 @@ package kronos_pkg;
     wb_sel:    WB_ALU,
     fp_op:     FP_FSGNJ,
     default:   '0
+  };
+
+  localparam ex_mem_reg_t EX_MEM_REG_ZERO = '{
+    dec:     DECODED_INSTR_ZERO,
+    fault:   FAULT_ZERO,
+    default: '0
+  };
+
+  localparam mem1_mem2_reg_t MEM1_MEM2_REG_ZERO = '{
+    dec:     DECODED_INSTR_ZERO,
+    fault:   FAULT_ZERO,
+    default: '0
   };
 
   localparam id_ex_reg_t ID_EX_REG_ZERO = '{
