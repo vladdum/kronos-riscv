@@ -302,19 +302,21 @@ package kronos_pkg;
   // -------------------------------------------------------------------------
 
   // fwd_sel_e — forwarding source select for rs1/rs2 bypass mux at RR stage.
-  // Five producer slots, freshest first:
+  // Six producer slots, freshest first:
   //   FWD_EX1_NOW  - same cycle (combinational alu_result_d at EX1)
   //   FWD_EX1      - 1-cycle-old (ex1_ex2_q.alu_result)
-  //   FWD_EXMEM         - 2-cycle-old (ex2_mem1_q.alu_result; was FWD_EXMEM     in 7b)
-  //   FWD_MEM2     - 3-cycle-old (mem1_mem2_q.alu_result, or lsu_rdata for loads)
-  //   FWD_MEMWB    - 4-cycle-old (mem_wb_q via writeback mux)
+  //   FWD_EXMEM    - 2-cycle-old (ex2_mem1_q.alu_result; legacy name from 7b/7c)
+  //   FWD_MEM1B    - 3-cycle-old (mem1_mem1b_q.alu_result; new in 7d)
+  //   FWD_MEM2     - 4-cycle-old (mem1_mem2_q.alu_result, or lsu_rdata for loads)
+  //   FWD_MEMWB    - 5-cycle-old (mem_wb_q via writeback mux)
   typedef enum logic [2:0] {
     FWD_NONE     = 3'd0,   // use regfile rdata
     FWD_EX1_NOW  = 3'd1,   // 7b — same-cycle EX1 alu_result_d (combinational)
     FWD_EX1      = 3'd2,   // 1-cycle-old: ex1_ex2_q.alu_result
-    FWD_EXMEM         = 3'd3,   // 2-cycle-old: ex2_mem1_q.alu_result   (was FWD_EXMEM     in 7b)
-    FWD_MEM2     = 3'd4,   // 3-cycle-old: mem1_mem2_q.alu_result OR lsu_rdata for loads
-    FWD_MEMWB    = 3'd5    // 4-cycle-old: mem_wb_q via writeback mux
+    FWD_EXMEM    = 3'd3,   // 2-cycle-old: ex2_mem1_q.alu_result
+    FWD_MEM1B    = 3'd4,   // 3-cycle-old: mem1_mem1b_q.alu_result   (new in 7d)
+    FWD_MEM2     = 3'd5,   // 4-cycle-old: mem1_mem2_q.alu_result OR lsu_rdata for loads
+    FWD_MEMWB    = 3'd6    // 5-cycle-old: mem_wb_q via writeback mux
   } fwd_sel_e;
 
   // -------------------------------------------------------------------------
@@ -403,8 +405,12 @@ package kronos_pkg;
     fault_t         fault;
   } ex_mem_reg_t;
 
+  // Stage 7d — pipeline register between MEM1 and MEM1B.  Carries the dTLB
+  // outputs (PA + perm-fail + hit indicator) flopped at the end of MEM1 so
+  // MEM1B can run u_pmp_data + PMA NC + page-fault aggregation flop-to-flop.
+  // Layout matches mem1_mem2_reg_t plus the raw dtlb_perm_fail bit (MEM1B
+  // resolves it to load_page_fault / store_page_fault).
   typedef struct packed {
-    // mirror of ex_mem_reg_t (passed through MEM1->MEM2)
     logic [31:0]    pc;
     decoded_instr_t dec;
     logic [63:0]    alu_result;
@@ -418,9 +424,30 @@ package kronos_pkg;
     logic [31:0]    pred_target;
     logic [31:0]    instr;
     logic [63:0]    csr_wdata;
-    fault_t         fault;          // includes MEM1-produced bits
-    // MEM1-stage outputs
-    logic [31:0]    dtlb_pa;        // translated PA (or eff_data_pa under translate_data=0)
+    fault_t         fault;          // PMP/PMA/page-fault bits all '0 at this edge
+    logic [31:0]    dtlb_pa;        // translated PA from MEM1 dTLB lookup
+    logic           dtlb_was_hit;   // 1=lookup hit (or translation off); 0=dtlb_miss path
+    logic           dcache_pre_launched; // metadata for retire trace
+    logic           dtlb_perm_fail; // raw dTLB perm-fail; MEM1B aggregates into page_fault bits
+  } mem1_mem1b_reg_t;
+
+  typedef struct packed {
+    // mirror of mem1_mem1b_reg_t (passed through MEM1B->MEM2 with PMP/PMA bits filled in)
+    logic [31:0]    pc;
+    decoded_instr_t dec;
+    logic [63:0]    alu_result;
+    logic [63:0]    rs2_data;
+    logic [31:0]    pc_d;
+    logic [63:0]    csr_rdata;
+    logic           redirect;       // legacy — kept for backward compat; unused
+    logic           valid;
+    logic           is_16b;
+    logic           pred_taken;
+    logic [31:0]    pred_target;
+    logic [31:0]    instr;
+    logic [63:0]    csr_wdata;
+    fault_t         fault;          // includes MEM1B-produced bits (pmp_data_fault, ex_amo_nc_fault, load/store_page_fault)
+    logic [31:0]    dtlb_pa;        // translated PA, passed through from mem1_mem1b_q.dtlb_pa
     logic           dtlb_was_hit;   // 1=lookup hit (or translation off); 0=dtlb_miss path
     logic           dcache_pre_launched; // metadata for retire trace
   } mem1_mem2_reg_t;
@@ -460,6 +487,12 @@ package kronos_pkg;
   };
 
   localparam ex_mem_reg_t EX_MEM_REG_ZERO = '{
+    dec:     DECODED_INSTR_ZERO,
+    fault:   FAULT_ZERO,
+    default: '0
+  };
+
+  localparam mem1_mem1b_reg_t MEM1_MEM1B_REG_ZERO = '{
     dec:     DECODED_INSTR_ZERO,
     fault:   FAULT_ZERO,
     default: '0

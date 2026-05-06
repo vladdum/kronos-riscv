@@ -100,36 +100,51 @@ if {$TOP eq "kronos_kv260_top"} {
 }
 
 # ============================================================================
-# Source files — RTL from files_rtl_s5 (matches kronos_riscv.core)
+# Source files — RTL from files_rtl_s7a (matches sim/Makefile SV_FILES_S7A
+# at the s7c-mem1-mem2 merge).  Stage 7c reuses the s7a fileset name; only
+# the file contents inside rtl/stage7/ change between sub-stages.
 # ============================================================================
 set RTL_PKG [list \
   $REPO_ROOT/rtl/kronos_pkg.sv \
 ]
 
 set RTL_FILES [list \
+  $REPO_ROOT/rtl/common/kronos_ram.sv \
+  $REPO_ROOT/rtl/common/kronos_alu.sv \
+  $REPO_ROOT/rtl/stage7/kronos_decode.sv \
+  $REPO_ROOT/rtl/stage7/kronos_decode_int.sv \
+  $REPO_ROOT/rtl/stage7/kronos_decode_ctrl.sv \
+  $REPO_ROOT/rtl/stage7/kronos_decode_mem.sv \
+  $REPO_ROOT/rtl/stage7/kronos_decode_sys.sv \
+  $REPO_ROOT/rtl/stage7/kronos_decode_fp.sv \
   $REPO_ROOT/rtl/stage0/kronos_regfile.sv \
-  $REPO_ROOT/rtl/stage1/kronos_forward.sv \
-  $REPO_ROOT/rtl/stage1/kronos_hazard.sv \
-  $REPO_ROOT/rtl/stage3/kronos_align.sv \
-  $REPO_ROOT/rtl/stage3/kronos_bpred.sv \
-  $REPO_ROOT/rtl/stage5/kronos_alu.sv \
-  $REPO_ROOT/rtl/stage5/kronos_decode.sv \
-  $REPO_ROOT/rtl/stage5/kronos_regfile_fp.sv \
-  $REPO_ROOT/rtl/stage5/kronos_csr.sv \
-  $REPO_ROOT/rtl/stage5/kronos_lsu.sv \
-  $REPO_ROOT/rtl/stage5/kronos_muldiv.sv \
-  $REPO_ROOT/rtl/stage5/kronos_decompress.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_scoreboard.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_fmisc.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_fcvt.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_fadd.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_fmul.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_fma.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_fdiv_core.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_fsqrt_core.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_iter.sv \
-  $REPO_ROOT/rtl/stage5/fpu/kronos_fpu_top.sv \
-  $REPO_ROOT/rtl/stage5/kronos_top.sv \
+  $REPO_ROOT/rtl/stage7/kronos_icache.sv \
+  $REPO_ROOT/rtl/stage7/kronos_csr.sv \
+  $REPO_ROOT/rtl/stage7/kronos_pmp.sv \
+  $REPO_ROOT/rtl/stage7/kronos_tlb.sv \
+  $REPO_ROOT/rtl/stage7/kronos_ptw.sv \
+  $REPO_ROOT/rtl/common/kronos_trigger.sv \
+  $REPO_ROOT/rtl/stage7/kronos_lsu.sv \
+  $REPO_ROOT/rtl/stage7/kronos_dcache.sv \
+  $REPO_ROOT/rtl/stage7/kronos_forward.sv \
+  $REPO_ROOT/rtl/stage7/kronos_hazard.sv \
+  $REPO_ROOT/rtl/common/kronos_muldiv.sv \
+  $REPO_ROOT/rtl/common/kronos_decompress.sv \
+  $REPO_ROOT/rtl/common/kronos_predecode.sv \
+  $REPO_ROOT/rtl/common/kronos_fetch_buffer.sv \
+  $REPO_ROOT/rtl/common/kronos_bpred.sv \
+  $REPO_ROOT/rtl/stage7/kronos_top.sv \
+  $REPO_ROOT/rtl/common/kronos_regfile_fp.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_scoreboard.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_fmisc.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_fcvt.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_fadd.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_fmul.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_fma.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_fdiv_core.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_fsqrt_core.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_iter.sv \
+  $REPO_ROOT/rtl/common/fpu/kronos_fpu_top.sv \
   $REPO_ROOT/fpga/kv260/kronos_cpu_synth_top.sv \
   $REPO_ROOT/fpga/kv260/kronos_kv260_top.sv \
 ]
@@ -165,9 +180,11 @@ if {$TOP eq "kronos_kv260_top"} {
   add_files -fileset constrs_1 -norecurse $XDC_FILE
 }
 
-# Multicycle path constraints
-set MCP_XDC [file join $REPO_ROOT rtl/stage5/kronos_kv260.xdc]
-add_files -fileset constrs_1 -norecurse $MCP_XDC
+# Multicycle path constraints — the legacy rtl/stage5/kronos_kv260.xdc
+# constrained an id_ex_q-rooted branch comparator; that path was retimed
+# into ex1_ex2_q.branch_taken (a flop output) by the s7a EX1/EX2 split, so
+# the MCP is no longer required for stage7.  Stage 7d may add fresh MCPs
+# rooted at the new register names if specific paths are exempted.
 
 # Synthesis-only directives (MAX_FANOUT on high-fan-out pipeline-control nets).
 # Must be processed EARLY — before synth_design flattens the combinational cone
@@ -201,7 +218,7 @@ puts " Synthesising $TOP at ${SYNTH_FREQ_MHZ} MHz (${CLK_PERIOD} ns)"
 puts "=========================================="
 set t0 [clock seconds]
 set_property XPM_LIBRARIES XPM_MEMORY [current_project]
-synth_design -top $TOP -part $PART -global_retiming on
+synth_design -top $TOP -part $PART -global_retiming off -flatten_hierarchy rebuilt
 set dt [expr {[clock seconds] - $t0}]
 puts [format "  Synthesis done in %d:%02d" [expr {$dt/60}] [expr {$dt%60}]]
 

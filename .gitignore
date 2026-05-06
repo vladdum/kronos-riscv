@@ -31,3 +31,7 @@ riscv-arch-test/*
 # per-machine, and fusesoc_libraries/ is a regenerable upstream cache.
 fusesoc.conf
 fusesoc_libraries/
+
+# Vivado scratch files dropped at the repo root (e.g., timing-analysis pin
+# lists emitted by report_timing / report_clock_interaction).
+tight_setup_hold_pins.txt

@@ -13,6 +13,11 @@
 # copy drives more than 32 loads.  ex_redirect/mem_redirect each reach the
 # hazard unit, muldiv gating, pc_next mux, align flush, fetch-stale tracker
 # and every id_ex/if_id flush bit (~110 sinks without replication).
-set_property MAX_FANOUT 32 [get_nets -hierarchical -filter {NAME =~ */ex_redirect}]
-set_property MAX_FANOUT 32 [get_nets -hierarchical -filter {NAME =~ */mem_redirect}]
+# Stage 7 renamed the live ex_redirect / mem_redirect nets to registered
+# `_q` outputs as part of the EX1/EX2/MEM1/MEM2 split.  Match the new
+# names; the fence_i_redirect_q net was added in 7a and shares the same
+# fan-out pattern (hazard unit, muldiv gating, pc_next mux, FB flush).
+set_property MAX_FANOUT 32 [get_nets -hierarchical -filter {NAME =~ */ex_redirect_q}]
+set_property MAX_FANOUT 32 [get_nets -hierarchical -filter {NAME =~ */mem_redirect_q}]
+set_property MAX_FANOUT 32 [get_nets -hierarchical -filter {NAME =~ */fence_i_redirect_q}]
 
