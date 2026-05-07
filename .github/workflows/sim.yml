@@ -342,14 +342,14 @@ jobs:
       - name: Build dhrystone hex
         run: make -C sw/perf/dhrystone all
 
-      - name: Cycle-diff vs stage7b baseline (ed9c144), budget +16% (s7d MEM1B split absorbs +1 load-use bubble)
+      - name: Cycle-diff vs stage7b baseline (ed9c144), budget +18% (s7d-closeout absorbs another +1 load-use bubble on top of MEM1B's +1)
         env:
           PULP_AXI_ROOT: /tmp/pulp_axi
         run: |
           python3 tools/cycle_diff.py \
             --baseline-commit ed9c144 \
             --prog sw/perf/dhrystone/build/dhrystone.hex \
-            --max-delta 0.16 \
+            --max-delta 0.18 \
             --ignore-x10
 
   dcache-stress-s6:
