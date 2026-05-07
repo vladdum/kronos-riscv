@@ -21,18 +21,22 @@
 //   * ex2_mem1_q (producer in MEM1 at T)  -> in MEM1B at T+1.  Bypass mux
 //     reads mem1_mem1b_q.alu_result.  Bypass key: FWD_MEM1B.
 //   * mem1_mem1b_q (producer in MEM1B at T) -> in MEM2 at T+1.  Bypass mux
-//     reads mem1_mem2_q.alu_result; for loads, lsu_rdata is selected
-//     combinationally at MEM2.  Bypass key: FWD_MEM2.
+//     reads mem1_mem2_q.alu_result.  Stage 7d-closeout: loads SUPPRESSED on
+//     this slot to break the post-MEM2 back-edge to rr_ex1_q.D — the live
+//     mem2_dcache_val (lsu_rdata) path no longer routes into the bypass mux.
+//     Load consumers fall through to FWD_MEMWB which reads mem_wb_q.alu_result
+//     (registered).  Bypass key: FWD_MEM2.
 //   * mem1_mem2_q (producer in MEM2 at T) -> in WB at T+1.  Writeback value is
 //     in wb_result (driven by mem_wb_q).  Bypass key: FWD_MEMWB.
 //
 // Freshest wins.  x0 is never forwarded.  rd_fp suppresses bypass so a shared
 // rd index between FP and integer regfiles does not poison an integer
-// consumer.  Loads in {RR, EX1, EX2, MEM1} suppress their bypass slot (the
-// load value isn't ready yet).  FWD_MEM2 is NOT suppressed for loads — the
-// bypass mux in kronos_top.sv selects lsu_rdata combinationally at MEM2 time.
-// FWD_MEMWB is also not suppressed for loads (mem_wb_q.alu_result already
-// holds the load value via the writeback result mux).
+// consumer.  Loads in {RR, EX1, EX2, MEM1, MEM1B} suppress their bypass slot
+// — the load value isn't ready until mem_wb_q.alu_result at WB.  Stage 7d-
+// closeout extended the suppression list to include MEM1B (the FWD_MEM2
+// lsu_rdata combinational path is the back-edge being severed).  FWD_MEMWB
+// is the only slot that supplies a load value (registered, via the
+// mem_wb_q.alu_result writeback result mux).
 module kronos_forward
   import kronos_pkg::*;
 (
@@ -67,12 +71,15 @@ module kronos_forward
   input  logic       ex2_mem1_rd_fp_i,
   input  logic       ex2_mem1_is_load_i,
   input  logic       ex2_mem1_valid_i,
-  // Producer in MEM1B (mem1_mem1b_q) — Stage 7d MEM1B split.  Loads permitted:
-  // at T+1 the producer is in MEM2 and lsu_rdata is selected combinationally
-  // by the bypass mux.
+  // Producer in MEM1B (mem1_mem1b_q) — Stage 7d-closeout: loads SUPPRESSED.
+  // 7d-MEM1B originally permitted loads on this slot (FWD_MEM2 read lsu_rdata
+  // combinationally at MEM2).  7d-closeout severs the post-MEM2 back-edge to
+  // rr_ex1_q.D by suppressing loads here so consumers fall through to FWD_MEMWB
+  // (mem_wb_q.alu_result, registered).
   input  logic [4:0] mem1_mem1b_rd_i,
   input  logic       mem1_mem1b_rd_wen_i,
   input  logic       mem1_mem1b_rd_fp_i,
+  input  logic       mem1_mem1b_is_load_i,
   input  logic       mem1_mem1b_valid_i,
   // Producer in MEM2 (mem1_mem2_q).  Loads permitted via writeback mux.
   input  logic [4:0] mem1_mem2_rd_i,
@@ -95,6 +102,7 @@ module kronos_forward
       else if (ex2_mem1_valid_i   & ex2_mem1_rd_wen_i   & ~ex2_mem1_rd_fp_i   &
                ~ex2_mem1_is_load_i & (ex2_mem1_rd_i   == if_id_rs1_i)) fwd_rs1_sel_o = FWD_MEM1B;
       else if (mem1_mem1b_valid_i & mem1_mem1b_rd_wen_i & ~mem1_mem1b_rd_fp_i &
+               ~mem1_mem1b_is_load_i &                                  // 7d-closeout: loads suppressed
                (mem1_mem1b_rd_i  == if_id_rs1_i))                      fwd_rs1_sel_o = FWD_MEM2;
       else if (                     mem1_mem2_rd_wen_i  & ~mem1_mem2_rd_fp_i  &
                (mem1_mem2_rd_i   == if_id_rs1_i))                      fwd_rs1_sel_o = FWD_MEMWB;
@@ -111,6 +119,7 @@ module kronos_forward
       else if (ex2_mem1_valid_i   & ex2_mem1_rd_wen_i   & ~ex2_mem1_rd_fp_i   &
                ~ex2_mem1_is_load_i & (ex2_mem1_rd_i   == if_id_rs2_i)) fwd_rs2_sel_o = FWD_MEM1B;
       else if (mem1_mem1b_valid_i & mem1_mem1b_rd_wen_i & ~mem1_mem1b_rd_fp_i &
+               ~mem1_mem1b_is_load_i &                                  // 7d-closeout: loads suppressed
                (mem1_mem1b_rd_i  == if_id_rs2_i))                      fwd_rs2_sel_o = FWD_MEM2;
       else if (                     mem1_mem2_rd_wen_i  & ~mem1_mem2_rd_fp_i  &
                (mem1_mem2_rd_i   == if_id_rs2_i))                      fwd_rs2_sel_o = FWD_MEMWB;
