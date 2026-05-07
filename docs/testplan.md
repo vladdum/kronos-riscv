@@ -220,6 +220,35 @@ per-stage section.
 | `test_fdiv_stall`        | `sw/stage5b/test_fdiv_stall.S`              | Pipeline stall during FDIV iteration  | `make run-s5-test_fdiv_stall`        |
 | `test_fdiv_irq`          | `sw/stage5b/test_fdiv_irq.S`                | FDIV results preserved after IRQ/MRET | `make run-s5b-test_fdiv_irq`         |
 
+## Stage 5c–5h, 6a–6i, 7a–7e — supplemental coverage
+
+Per-stage assembly programs live under `sw/stage<N>/` and are wired into
+the stage's `Makefile` `TESTS` list. Stage-level coverage at the integration
+level is gated by:
+
+- **ACT4 RV64IMAFDC compliance** — `make sim-arch-test-s5` (307/307),
+  `sim-arch-test-s6` (305/305), `sim-arch-test-s6-priv` (305/305 — adds
+  Sv39/Sv48, PMPSm, PMP-misaligned suites).
+- **`make sim-all`** — parallel regression of every unit testbench plus
+  Stage 4 integration suite (42 jobs).
+- **`make sim-cosim-deep TESTS=10000`** — 10 k random programs co-simulated
+  against `sail_riscv_sim` (CRV harness from Stage 5d).
+- **`compliance-cycle-diff-s7c`** — dhrystone cycle-budget gate vs the
+  `files_rtl_s7b@ed9c144` baseline (current budget 18%, raised to absorb
+  Stage 7d's load-use bubble).
+- **`perf-baseline-s6`** — dhrystone perf gate baked at the s6i baseline
+  (992 151 cycles); CI cycle-diff is the source of truth for ongoing drift.
+
+Newer stage-specific test programs are not enumerated row-by-row in this
+testplan — see the per-stage directories:
+
+- `sw/stage6/` — privileged-mode + PMP + MMU smoke (`test_csr_priv`,
+  `test_priv_smoke`, `test_pmp_basic`, `test_dcache_raw`, etc.)
+- `sw/stage7c/` — MEM1/MEM2 split correctness (`test_mem_amo_split`,
+  `test_mem_csr_raw_5slot`, `test_mem_jalr_load_fwd`,
+  `test_mem_load_use_3cycle`, `test_mem_pmp_pf`,
+  `test_mem_target_mispredict`)
+
 ## Cross-cutting verification
 
 ### Sail differential trace (Phase 1 P1.1)

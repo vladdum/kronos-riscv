@@ -23,6 +23,12 @@ One row per stage. The core pipeline structure (5 stages, AXI4 bus, bimodal bran
 | 4 | RV64IMAC | `kronos_alu` (64-bit), `kronos_muldiv` (64-bit), `kronos_decompress` (RV64C), `kronos_lsu` (LR/SC + AMO), `kronos_csr` (64-bit) | 64-bit datapath widening, atomic operations |
 | 5a | RV64IMAFD | `kronos_regfile_fp`, `kronos_fpu_top`, `kronos_fpu_scoreboard`, `kronos_fpu_fmisc`, `kronos_fpu_fcvt`, `kronos_fpu_fadd`, `kronos_fpu_fmul`, `kronos_fpu_fma` | Separate FP register file, multi-unit FPU dispatch, scoreboard hazard model |
 | 5b | RV64IMAFDC | `kronos_fpu_iter`, `kronos_fpu_fdiv_core`, `kronos_fpu_fsqrt_core` | Iterative FDIV/FSQRT (radix-2 SRT) |
+| 5c–5h | RV64IMAFDC | `kronos_icache`, `kronos_dcache`, `kronos_predecode`, `kronos_fetch_buffer`, `kronos_trigger` | Performance counters, CRV harness, I/D caches (4-way + tree-PLRU), FENCE.I, debug/trace layer |
+| 6a–6c | RV64IMAFDC | `kronos_pmp`, `kronos_tlb`, `kronos_ptw` | M/S/U privileged modes + trap delegation + PMP, Sv39/Sv48 MMU + iTLB/dTLB + HW PTW + sfence.vma, closeout |
+| 6d–6i | RV64IMAFDC | `kronos_ram` (SDP wrapper) | RAM wrapper infrastructure, PMA non-cacheable regions, dcache `data_q` BRAM-back, BOOM-style frontend rewrite, cache tag arrays + FP regfile in BRAM/LUTRAM, verification overhaul |
+| 7a–7c | RV64IMAFDC | (decoder split: `kronos_decode_int`, `kronos_decode_mem`, `kronos_decode_ctrl`, `kronos_decode_sys`, `kronos_decode_fp`) | In-order Fmax push: BOOM-style fault-bit propagation + EX1/EX2 split, RR (register-read) stage + bypass network rebuild, MEM1/MEM2 split (dTLB/PMP separated from dcache hit) |
+| 7d | RV64IMAFDC | (no new modules) | Stretch: MEM1B PMP retime + FWD_MEM2 load suppression + trap_vector retime; post-route WNS −3.128 → −2.872 ns on KV260 (xck26-2LV, Vivado 2025.2). RTL portion complete; Pblock floorplan deferred. |
+| 7e | RV64IMAFDC | (no new modules) | In progress: stall-network retime (`event_bus` register before `mhpmcounter` CE) + dTLB pipeline split |
 
 ---
 

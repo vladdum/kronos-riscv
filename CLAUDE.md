@@ -29,10 +29,11 @@ Development follows a staged learning progression:
 | 6g    | Dcache `data_q` BRAM-back (4 × `kronos_ram`, EX-stage pre-launch) | RV64IMAFDC | AXI4 | Complete |
 | 6h    | Cache tag arrays + FP regfile in BRAM/LUTRAM (closes #79)        | RV64IMAFDC | AXI4 | Complete |
 | 6i    | Verification overhaul: dcache RAW regression + CRV-s6 + cosim fuzzer | RV64IMAFDC | AXI4 | Complete |
-| 7a    | BOOM-style fault-bit propagation + EX1/EX2 split (in-order Fmax push) | RV64IMAFDC | AXI4 | In progress |
-| 7b    | RR (register-read) stage + bypass network rebuild               | RV64IMAFDC | AXI4 | Planned  |
-| 7c    | MEM1/MEM2 split (dTLB/PMP separated from dcache hit)            | RV64IMAFDC | AXI4 | Planned  |
-| 7d    | *(Stretch)* dcache tag→data retime + FPU FMA retime + manual physopt | RV64IMAFDC | AXI4 | Planned |
+| 7a    | BOOM-style fault-bit propagation + EX1/EX2 split (in-order Fmax push) | RV64IMAFDC | AXI4 | Complete |
+| 7b    | RR (register-read) stage + bypass network rebuild               | RV64IMAFDC | AXI4 | Complete |
+| 7c    | MEM1/MEM2 split (dTLB/PMP separated from dcache hit)            | RV64IMAFDC | AXI4 | Complete |
+| 7d    | *(Stretch)* MEM1B PMP retime + FWD_MEM2 load suppression + trap_vector retime (RTL-only; Pblock floorplan deferred) | RV64IMAFDC | AXI4 | Complete (RTL) |
+| 7e    | Stall-network retime (event_bus register) + dTLB pipeline split | RV64IMAFDC | AXI4 | In progress |
 | 8     | Out-of-order execution (BOOM-class rename + ROB + IQ + LSU)     | RV64IMAFDC | AXI4 | Planned  |
 
 All five completed stages pass the full `riscv-arch-test` (ACT4) compliance
