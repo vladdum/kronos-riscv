@@ -44,8 +44,9 @@ Stage 4 widens all datapath elements to 64 bits and adds the A extension.
 | 6i    | Verification overhaul: dcache RAW regression + CRV-s6 + cosim fuzzer | RV64IMAFDC | AXI4    | Complete    |
 | 7a    | BOOM-style fault-bit propagation + EX1/EX2 split (in-order Fmax push) | RV64IMAFDC | AXI4 | Complete    |
 | 7b    | RR (register-read) stage + bypass network rebuild | RV64IMAFDC       | AXI4    | Complete    |
-| 7c    | MEM1/MEM2 split (dTLB/PMP separated from dcache hit) | RV64IMAFDC    | AXI4    | In progress |
-| 7d    | *(Stretch)* dcache tag→data retime + FPU FMA retime + manual physopt | RV64IMAFDC | AXI4 | Planned |
+| 7c    | MEM1/MEM2 split (dTLB/PMP separated from dcache hit) | RV64IMAFDC    | AXI4    | Complete    |
+| 7d    | *(Stretch)* MEM1B PMP retime + FWD_MEM2 load suppression + trap_vector retime (RTL-only; Pblock floorplan deferred) | RV64IMAFDC | AXI4 | Complete (RTL) |
+| 7e    | Stall-network retime (event_bus register, mhpmcounter CE retime) + dTLB pipeline split | RV64IMAFDC | AXI4 | In progress |
 | 8     | Out-of-order execution (BOOM-class rename + ROB + IQ + LSU) | RV64IMAFDC | AXI4 | Planned     |
 
 Each stage lives in its own `rtl/stage<N>/` directory and exposes the same
