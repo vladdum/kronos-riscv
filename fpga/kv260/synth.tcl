@@ -195,6 +195,13 @@ set_property USED_IN_SYNTHESIS      true  [get_files $SYNTH_XDC]
 set_property USED_IN_IMPLEMENTATION false [get_files $SYNTH_XDC]
 set_property PROCESSING_ORDER       EARLY [get_files $SYNTH_XDC]
 
+# Stage 7e Pblock floorplan — compact u_core into a contiguous CLOCK_REGION
+# subset.  Impl-only; not loaded during synthesis.
+set FLOORPLAN_XDC [file join $REPO_ROOT fpga/kv260/floorplan.xdc]
+add_files -fileset constrs_1 -norecurse $FLOORPLAN_XDC
+set_property USED_IN_SYNTHESIS      false [get_files $FLOORPLAN_XDC]
+set_property USED_IN_IMPLEMENTATION true  [get_files $FLOORPLAN_XDC]
+
 # Clock constraint — generated from SYNTH_FREQ_MHZ so no manual XDC edit needed
 file mkdir $PROJ_DIR
 set CLK_XDC [file join $PROJ_DIR clk.xdc]
