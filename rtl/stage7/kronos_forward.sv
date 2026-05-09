@@ -31,12 +31,12 @@
 //
 // Freshest wins.  x0 is never forwarded.  rd_fp suppresses bypass so a shared
 // rd index between FP and integer regfiles does not poison an integer
-// consumer.  Loads in {RR, EX1, EX2, MEM1, MEM1B} suppress their bypass slot
-// — the load value isn't ready until mem_wb_q.alu_result at WB.  Stage 7d-
-// closeout extended the suppression list to include MEM1B (the FWD_MEM2
-// lsu_rdata combinational path is the back-edge being severed).  FWD_MEMWB
-// is the only slot that supplies a load value (registered, via the
-// mem_wb_q.alu_result writeback result mux).
+// consumer.  Loads in {RR, EX1, EX2, MEM1, MEM1B, MEM2} suppress their bypass
+// slot.  The load value isn't ready as a registered Q output until WB stage
+// (mem_wb_q.alu_result), so all earlier slots fall through to FWD_MEMWB.
+// MEM2 added because the bypass-mux clean enforces flop-
+// output reads at every FWD_* slot — FWD_MEMWB is the only path that
+// holds a registered load value.
 module kronos_forward
   import kronos_pkg::*;
 (

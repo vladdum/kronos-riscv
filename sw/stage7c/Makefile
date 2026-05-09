@@ -7,7 +7,7 @@ ARCH   := rv64imafdc_zicsr_zifencei
 ABI    := lp64
 CFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostdlib -static -T../stage0/link.ld
 
-TESTS  := test_mem_load_use_3cycle \
+TESTS  := test_mem_load_use_5cycle \
           test_mem_jalr_load_fwd \
           test_mem_amo_split \
           test_mem_pmp_pf \
