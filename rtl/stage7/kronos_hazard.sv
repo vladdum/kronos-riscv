@@ -48,6 +48,9 @@ module kronos_hazard
   input  logic       mem1_mem1b_rd_wen_i,
   input  logic       mem1_mem1b_valid_i,
   // Producer in MEM2 (mem1_mem2_q) — new slot for CSR-RAW.
+  // is_load_i / is_fp_load_i added to extend load-use to MEM2.
+  input  logic       mem1_mem2_is_load_i,
+  input  logic       mem1_mem2_is_fp_load_i,
   input  logic       mem1_mem2_is_csr_i,
   input  logic [4:0] mem1_mem2_rd_i,
   input  logic       mem1_mem2_valid_i,
@@ -97,14 +100,13 @@ module kronos_hazard
   // through an unused signal so Verilator lint stays happy.
   assign ex2_mem1_unused = ex2_mem1_rd_wen_i & ex2_mem1_rd_i[0];
 
-  // Load-use: load can be in {RR, EX1, EX2, MEM1, MEM1B}; consumer in ID.
-  // Total stall is 4 cycles in ID — the load advances RR -> EX1 -> EX2 ->
-  // MEM1 -> MEM1B -> MEM2, where the MEM2 result reaches the consumer via
-  // FWD_MEMWB at the next cycle's RR (loaded from mem_wb_q.alu_result,
-  // registered).  Stage 7d-MEM1B added the MEM1 (ex2_mem1_q) slot.  Stage
-  // 7d-closeout added the MEM1B (mem1_mem1b_q) slot — FWD_MEM2 used to
-  // forward lsu_rdata combinationally for loads, but that path is the
-  // back-edge being severed (see kronos_forward.sv FWD_MEM2 suppression).
+  // Load can be in {RR, EX1, EX2, MEM1, MEM1B, MEM2}; consumer
+  // in ID.  Total stall is 5 cycles in ID — the load advances RR -> EX1 ->
+  // EX2 -> MEM1 -> MEM1B -> MEM2 -> WB, where the WB result reaches the
+  // consumer via FWD_MEMWB at the next cycle's RR (loaded from
+  // mem_wb_q.alu_result, registered).  FWD_MEM2 (one cycle faster) was
+  // suppressed for loads in 7d-closeout; FWD_MEMWB is the only load-value
+  // forwarding path now and adds +1 ID bubble vs 7d-closeout.
   assign load_use =
     (id_rr_valid_i     & id_rr_is_load_i     & (id_rr_rd_i     != 5'd0) &
      ((if_id_rs1_used_i & (if_id_rs1_i == id_rr_rd_i)) |
@@ -120,7 +122,10 @@ module kronos_hazard
       (if_id_rs2_used_i & (if_id_rs2_i == ex2_mem1_rd_i)))) |
     (mem1_mem1b_valid_i & mem1_mem1b_is_load_i & (mem1_mem1b_rd_i != 5'd0) &
      ((if_id_rs1_used_i & (if_id_rs1_i == mem1_mem1b_rd_i)) |
-      (if_id_rs2_used_i & (if_id_rs2_i == mem1_mem1b_rd_i))));
+      (if_id_rs2_used_i & (if_id_rs2_i == mem1_mem1b_rd_i)))) |
+    (mem1_mem2_valid_i  & mem1_mem2_is_load_i  & (mem1_mem2_rd_i  != 5'd0) &
+     ((if_id_rs1_used_i & (if_id_rs1_i == mem1_mem2_rd_i)) |
+      (if_id_rs2_used_i & (if_id_rs2_i == mem1_mem2_rd_i))));
 
   // FP load-use: same shape, FP consumer keys.
   assign fp_load_use =
@@ -143,7 +148,11 @@ module kronos_hazard
     (mem1_mem1b_valid_i & mem1_mem1b_is_fp_load_i & (mem1_mem1b_rd_i != 5'd0) &
      ((if_id_rs1_fp_i & (if_id_rs1_i == mem1_mem1b_rd_i)) |
       (if_id_rs2_fp_i & (if_id_rs2_i == mem1_mem1b_rd_i)) |
-      (if_id_rs3_fp_i & (if_id_rs3_i == mem1_mem1b_rd_i))));
+      (if_id_rs3_fp_i & (if_id_rs3_i == mem1_mem1b_rd_i)))) |
+    (mem1_mem2_valid_i & mem1_mem2_is_fp_load_i & (mem1_mem2_rd_i != 5'd0) &
+     ((if_id_rs1_fp_i & (if_id_rs1_i == mem1_mem2_rd_i)) |
+      (if_id_rs2_fp_i & (if_id_rs2_i == mem1_mem2_rd_i)) |
+      (if_id_rs3_fp_i & (if_id_rs3_i == mem1_mem2_rd_i))));
 
   // JALR-load-fwd stall: JALR in ID with rs1 matching a load in MEM1
   // (ex2_mem1_q) OR MEM1B (mem1_mem1b_q).  In both cases the load value

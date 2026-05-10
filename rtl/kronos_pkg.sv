@@ -307,7 +307,7 @@ package kronos_pkg;
   //   FWD_EX1      - 1-cycle-old (ex1_ex2_q.alu_result)
   //   FWD_EXMEM    - 2-cycle-old (ex2_mem1_q.alu_result; legacy name from 7b/7c)
   //   FWD_MEM1B    - 3-cycle-old (mem1_mem1b_q.alu_result; new in 7d)
-  //   FWD_MEM2     - 4-cycle-old (mem1_mem2_q.alu_result, or lsu_rdata for loads)
+  //   FWD_MEM2     - 4-cycle-old (mem1_mem2_q.alu_result; suppressed for loads)
   //   FWD_MEMWB    - 5-cycle-old (mem_wb_q via writeback mux)
   typedef enum logic [2:0] {
     FWD_NONE     = 3'd0,   // use regfile rdata
@@ -315,7 +315,7 @@ package kronos_pkg;
     FWD_EX1      = 3'd2,   // 1-cycle-old: ex1_ex2_q.alu_result
     FWD_EXMEM    = 3'd3,   // 2-cycle-old: ex2_mem1_q.alu_result
     FWD_MEM1B    = 3'd4,   // 3-cycle-old: mem1_mem1b_q.alu_result   (new in 7d)
-    FWD_MEM2     = 3'd5,   // 4-cycle-old: mem1_mem2_q.alu_result OR lsu_rdata for loads
+    FWD_MEM2     = 3'd5,   // 4-cycle-old: mem1_mem2_q.alu_result (loads suppressed)
     FWD_MEMWB    = 3'd6    // 5-cycle-old: mem_wb_q via writeback mux
   } fwd_sel_e;
 
@@ -405,11 +405,12 @@ package kronos_pkg;
     fault_t         fault;
   } ex_mem_reg_t;
 
-  // Stage 7d — pipeline register between MEM1 and MEM1B.  Carries the dTLB
-  // outputs (PA + perm-fail + hit indicator) flopped at the end of MEM1 so
-  // MEM1B can run u_pmp_data + PMA NC + page-fault aggregation flop-to-flop.
-  // Layout matches mem1_mem2_reg_t plus the raw dtlb_perm_fail bit (MEM1B
-  // resolves it to load_page_fault / store_page_fault).
+  // Pipeline register between MEM1 and MEM1B.  Carries instruction context
+  // through the MEM1->MEM1B->MEM2 stack.  The kronos_tlb module is internally
+  // split into S0 (CAM) / S1 (encode) sub-stages — dTLB outputs (PA,
+  // perm_fail, miss/a_zero/d_zero/hit) are flop outputs of the dTLB-S1
+  // stage at the MEM1B edge, so they live in mem1_mem2_reg_t (registered
+  // MEM1B->MEM2) rather than mem1_mem1b_reg_t.
   typedef struct packed {
     logic [31:0]    pc;
     decoded_instr_t dec;
@@ -425,10 +426,7 @@ package kronos_pkg;
     logic [31:0]    instr;
     logic [63:0]    csr_wdata;
     fault_t         fault;          // PMP/PMA/page-fault bits all '0 at this edge
-    logic [31:0]    dtlb_pa;        // translated PA from MEM1 dTLB lookup
-    logic           dtlb_was_hit;   // 1=lookup hit (or translation off); 0=dtlb_miss path
     logic           dcache_pre_launched; // metadata for retire trace
-    logic           dtlb_perm_fail; // raw dTLB perm-fail; MEM1B aggregates into page_fault bits
   } mem1_mem1b_reg_t;
 
   typedef struct packed {
@@ -446,8 +444,15 @@ package kronos_pkg;
     logic [31:0]    pred_target;
     logic [31:0]    instr;
     logic [63:0]    csr_wdata;
-    fault_t         fault;          // includes MEM1B-produced bits (pmp_data_fault, ex_amo_nc_fault, load/store_page_fault)
-    logic [31:0]    dtlb_pa;        // translated PA, passed through from mem1_mem1b_q.dtlb_pa
+    // Fault aggregate.  Includes MEM2-produced bits: pmp_data_fault,
+    // ex_amo_nc_fault, load_page_fault, store_page_fault.
+    fault_t         fault;
+    logic [31:0]    dtlb_pa;        // translated PA from dTLB-S1 (registered MEM1B->MEM2)
+    logic           dtlb_perm_fail; // raw dTLB perm-fail (registered MEM1B->MEM2)
+    logic           dtlb_miss;      // dTLB-driven miss (~hit & ~perm_fail | a_zero | d_zero)
+    logic           dtlb_a_zero;    // hit with A=0 -> PTW re-walk to set A
+    logic           dtlb_d_zero;    // hit with D=0 on a store -> PTW re-walk to set D
+    logic           dtlb_hit;       // dTLB lookup hit indicator
     logic           dtlb_was_hit;   // 1=lookup hit (or translation off); 0=dtlb_miss path
     logic           dcache_pre_launched; // metadata for retire trace
   } mem1_mem2_reg_t;
