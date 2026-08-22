@@ -59,6 +59,23 @@ kronos-riscv/
 └── kronos_riscv.core                        # FuseSoC core descriptor
 ```
 
+## Documentation Ownership
+
+| Document | Owns |
+|---|---|
+| `docs/architecture.md` | The **current** machine: pipeline, hazards, memory subsystem, FPU, privilege/MMU, CSR map, timing, counters. One design-evolution table (§1) is the only stage-keyed content. |
+| `docs/testplan.md` | Verification truth: per-stage coverage, gates (GLS table moves here), CRV, how-to-add-a-test. |
+| `README.md` | Build/run/compliance/status: stage table (the single source of stage numbering), ACT4, FPGA flow. |
+| Master spec + per-stage specs | Design intent and history; the master spec gains a dated **amendment log** and is never silently edited. |
+
+A stage-closing PR is not done until every document its changes falsified
+is true again — the same rule `docs/testplan.md` already states for tests,
+extended to all four documents. Stage numbers appear in exactly three
+places: the README's Staged Development table (the single source of stage
+numbering), `docs/architecture.md` §1, and `docs/testplan.md` section
+headers. All other prose cites the reason for a design choice (the failure
+it prevents), never the stage that introduced it.
+
 ## Bus Interface
 
 **Stages 0–2:** OBI (Open Bus Interface) — req/gnt/rvalid handshake, one
