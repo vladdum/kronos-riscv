@@ -82,11 +82,11 @@ it prevents), never the stage that introduced it.
 outstanding transaction per port. Two ports: instruction fetch (read-only) and
 data (read/write).
 
-**Stages 3–5:** Native AXI4 — single-outstanding AXI4 master ports (one
-in-flight transaction per channel), instruction and data on separate ports.
-
-**Stage 6:** Native AXI4 with multiple outstanding IDs — the OOO LSU issues
-multiple in-flight memory requests with tagged, out-of-order responses.
+**Stage 3 onward:** Native AXI4, single-outstanding — one in-flight
+transaction per channel, instruction and data on separate master ports. As
+built: OBI stages 0–2; native AXI4 single-outstanding from stage 3; multiple
+outstanding IDs is the stage-8 OOO plan (not yet built — see
+`docs/architecture.md` §17).
 
 ## Build Commands
 

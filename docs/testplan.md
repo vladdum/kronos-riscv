@@ -248,7 +248,7 @@ Landed the `tools/crv/` generator + `tb/stage5/tb_crv_cov.sv` functional-coverag
 
 ## Stage 5g — FENCE.I → D-cache flush
 
-Added a flush FSM to `kronos_dcache` (`flush_i` / `flush_done_o` / `dirty_pending_o`) so FENCE.I drains dirty write-back lines before the I-cache invalidate propagates. Re-enabled the `Zifencei` ACT4 suite (previously excluded — `gen-arch-tests-s5` now runs with only `--exclude Zaamo,Zalrsc`). Also deleted `tb/stage5/tb_lsu_s5.sv` and `tb/stage5/tb_lsu_fp.sv` (and their `sim-lsu-s5` / `sim-lsu-fp` Makefile targets) as part of the same PR, since the LSU became a thin adapter with no independent FSM left to unit-test — see the note on stale rows under Stage 5 above.
+Added a flush FSM to `kronos_dcache` (`flush_i` / `flush_done_o` / `dirty_pending_o`) so FENCE.I drains dirty write-back lines before the I-cache invalidate propagates. Re-enabled the `Zifencei` ACT4 suite (previously excluded — `gen-arch-tests-s5` now runs with only `--exclude Zaamo,Zalrsc`). Also deleted `tb/stage5/tb_lsu_s5.sv` and `tb/stage5/tb_lsu_fp.sv` (and their `sim-lsu-s5` / `sim-lsu-fp` Makefile targets) as part of the same PR, since the LSU became a thin adapter with no independent FSM left to unit-test. The Stage-5 unit-TB table above still lists both `tb_lsu_s5.sv` and `tb_lsu_fp.sv`, which this stage's LSU TB cleanup deleted; those rows are retained pending a 0–5b cleanup pass over that table.
 
 ### Unit testbenches
 | Module              | TB file                    | Coverage focus                                                   | Run                |
@@ -457,7 +457,7 @@ Gated by `make ci-local`, `make sim-cosim-deep TESTS=10000`, and `compliance-cyc
 
 ## Stage 7d — MEM1B pipeline-register split + timing retimes
 
-No new RTL modules. Splits MEM1B out as the dTLB's internal S0/S1 encode sub-stage (its own pipeline register, `mem1_mem2_q` — see the naming quirk noted in `docs/architecture.md` §0), retimes the PMP comparator chain, suppresses `FWD_MEM2` load forwarding, and retimes `trap_vector`. Landed as two sub-PRs (`stage7d-fmax` RTL, then `stage7d-closeout-rtl`). Post-route WNS improved from −3.128 ns to −2.872 ns on KV260 (xck26-2LV, Vivado 2025.2); the Pblock floorplan step was deferred to 7e.
+No new RTL modules. Splits MEM1B out as the dTLB's internal S0/S1 encode sub-stage (its own pipeline register, `mem1_mem2_q` — see the naming-quirk note in `docs/architecture.md`'s preamble), retimes the PMP comparator chain, suppresses `FWD_MEM2` load forwarding, and retimes `trap_vector`. Landed as two sub-PRs (`stage7d-fmax` RTL, then `stage7d-closeout-rtl`). Post-route WNS improved from −3.128 ns to −2.872 ns on KV260 (xck26-2LV, Vivado 2025.2); the Pblock floorplan step was deferred to 7e.
 
 No new directed assembly programs (reuses `sw/stage7c/`). Gated by `make ci-local`, ACT4 s5 (307/307) and s6 (305/305) as recorded at landing, `make sim-all`, and a dhrystone completion check plus the Vivado synth+impl WNS gate.
 

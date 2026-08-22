@@ -2,7 +2,7 @@
 
 **ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 9-stage in-order pipeline — register-read stage and split EX/MEM boundaries for the Fmax push, see §1 &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB)
 
-kronos-riscv is a 9-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. A BOOM-style frontend — a pipelined instruction cache, a fetch buffer, and a predecode block that also owns RVC decompression — feeds Instruction Decode (ID) and Register-Read (RR); RR performs the integer and FP register-file reads and the operand-bypass mux, so Execute consumes only flop outputs. Execute is split into EX1 (ALU/AGU, muldiv dispatch, branch-direction compare, CSR read-modify-write, FPU dispatch) and EX2 (fault aggregation and direction-mispredict redirect formation). Memory access is split into MEM1 (dTLB lookup start), MEM1B (the dTLB's internal encode sub-stage, where the translated PA and perm-fail/miss/A/D-bit outputs become live), and MEM2 (data-side PMP check, dcache hit/data, target-mispredict and trap redirect formation), followed by Writeback (WB). Every fault source — illegal instruction, ECALL/EBREAK, CSR/privilege failures, PMP, page faults, trigger hits — writes exactly one bit into a `fault_t` struct that is registered one stage past its producer; the two redirect points (EX2 for direction mispredicts, MEM2 for everything else) OR-reduce only registered bits, so no fault ever reaches a consumer combinationally. A separate FPU with six pipelined units handles the F and D extensions and dispatches from EX1; a writeback-slot scoreboard, not the integer forwarding network, arbitrates its shared result port. `kronos_hazard` and `kronos_forward` sit outside the pipeline stages and manage stalls, flushes, and a six-producer-slot operand-forwarding network.
+kronos-riscv is a 9-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. A BOOM-style frontend — a pipelined instruction cache, a fetch buffer, and a predecode block that also owns RVC decompression — feeds Instruction Decode (ID) and Register-Read (RR); RR performs the integer and FP register-file reads and the operand-bypass mux, so Execute consumes only flop outputs. Execute is split into EX1 (ALU/AGU, muldiv dispatch, branch-direction compare, CSR read-modify-write, FPU dispatch) and EX2 (fault aggregation and direction-mispredict redirect formation). Memory access is split into MEM1 (dTLB lookup start), MEM1B (the dTLB's internal encode sub-stage, where the translated PA and perm-fail/miss/A/D-bit outputs become live), and MEM2 (data-side PMP check, dcache hit/data, target-mispredict and trap redirect formation), followed by Writeback (WB). Every fault source — illegal instruction, ECALL/EBREAK, CSR/privilege failures, PMP, page faults, trigger hits — writes exactly one bit into a `fault_t` struct that is registered one stage past its producer; the two redirect points (EX2 for direction mispredicts, MEM2 for everything else) OR-reduce registered bits — MEM2's redirect also folds in a handful of live, same-cycle producers (PMP data fault, AMO non-cacheable fault, page fault, target mispredict, D-cache bus error) that never leave MEM2's own narrow cone — so no fault ever reaches a consumer through a cross-stage combinational path. A separate FPU with six pipelined units handles the F and D extensions and dispatches from EX1; a writeback-slot scoreboard, not the integer forwarding network, arbitrates its shared result port. `kronos_hazard` and `kronos_forward` sit outside the pipeline stages and manage stalls, flushes, and a six-producer-slot operand-forwarding network.
 
 ```mermaid
 %% depicts: stage7e
@@ -21,7 +21,7 @@ flowchart LR
     WB -. "FP WB (FLW/FLD)" .-> regfile_fp
 ```
 
-The nine pipeline registers — `if_id_q`, `id_rr_q`, `rr_ex1_q`, `ex1_ex2_q`, `ex2_mem1_q`, `mem1_mem1b_q`, `mem1_mem2_q`, `mem_wb_q` — carry decoded instruction state across stages. Names follow a `{producer stage}_{consumer stage}` convention, with one quirk worth knowing when reading the RTL: the MEM1B→MEM2 register is `mem1_mem2_q`, not `mem1b_mem2_q` — MEM1B is the dTLB's internal S1 (encode) sub-stage rather than a distinct producer name, and its register type comment describes it as "passed through MEM1B→MEM2 with PMP/PMA bits filled in." Each register has an `en` enable and a `flush` (clear-to-NOP) control driven by `kronos_hazard`. Operand forwarding is handled by `kronos_forward`, which selects among six producer slots — `FWD_EX1_NOW`, `FWD_EX1`, `FWD_EXMEM`, `FWD_MEM1B`, `FWD_MEM2`, `FWD_MEMWB` — consumed by the bypass mux at the RR stage; see §5 for the full source map. FP operand hazards are managed by `kronos_fpu_scoreboard` rather than the integer forwarding network (§8 covers what that scoreboard actually arbitrates).
+The eight pipeline registers — `if_id_q`, `id_rr_q`, `rr_ex1_q`, `ex1_ex2_q`, `ex2_mem1_q`, `mem1_mem1b_q`, `mem1_mem2_q`, `mem_wb_q` — carry decoded instruction state across stages. Names follow a `{producer stage}_{consumer stage}` convention, with one quirk worth knowing when reading the RTL: the MEM1B→MEM2 register is `mem1_mem2_q`, not `mem1b_mem2_q` — MEM1B is the dTLB's internal S1 (encode) sub-stage rather than a distinct producer name, and its register type comment describes it as "passed through MEM1B→MEM2 with PMP/PMA bits filled in." Each register has an `en` enable and a `flush` (clear-to-NOP) control driven by `kronos_hazard`. Operand forwarding is handled by `kronos_forward`, which selects among six producer slots — `FWD_EX1_NOW`, `FWD_EX1`, `FWD_EXMEM`, `FWD_MEM1B`, `FWD_MEM2`, `FWD_MEMWB` — consumed by the bypass mux at the RR stage; see §5 for the full source map. FP operand hazards are managed by `kronos_fpu_scoreboard` rather than the integer forwarding network (§8 covers what that scoreboard actually arbitrates).
 
 ---
 
@@ -236,7 +236,7 @@ flowchart LR
 
 ID also generates the fault bits it owns — `ecall`, `ebreak`, `illegal`, `is_mret`, `is_sret` — directly into `id_rr_q.fault`, and computes `fwd_rs1_sel`/`fwd_rs2_sel` via `kronos_forward` (below) for capture into the same register. ID performs **no** register-file read, no bypass mux, and no CSR access — those all moved to RR so that EX1's ALU/AGU/FPU-dispatch/branch-compare/CSR-illegal logic starts from pure flop outputs (§6).
 
-**RR — register read and bypass.** `kronos_regfile` (32×64b, async read, sync write, `x0` reads-as-zero/writes-ignored) and `kronos_regfile_fp` (32×64b, three async read ports `fs1`/`fs2`/`fs3`, one write port `fd`) are both read from `id_rr_q.dec.rs1/rs2/rs3` at RR, one cycle later than the pre-7b design read them at ID. `kronos_csr` also gets a second, RR-only combinational read port (`rr_csr_addr_i`/`rr_csr_read_en_i`/`rr_csr_rdata_o`) driven from `id_rr_q.dec.csr_addr`, separate from the CSR read-modify-write that still executes at EX1 from `rr_ex1_q` — RR's CSR read is purely speculative, captured into `rr_ex1_q.csr_rdata` and safe to discard if the consumer is later flushed.
+**RR — register read and bypass.** `kronos_regfile` (32×64b, async read, sync write, `x0` reads-as-zero/writes-ignored) and `kronos_regfile_fp` (32×64b, three async read ports `fs1`/`fs2`/`fs3`, one write port `fd`) are both read from `id_rr_q.dec.rs1/rs2/rs3` at RR, one cycle later than the pre-restructure design read them at ID. `kronos_csr` also gets a second, RR-only combinational read port (`rr_csr_addr_i`/`rr_csr_read_en_i`/`rr_csr_rdata_o`) driven from `id_rr_q.dec.csr_addr`, separate from the CSR read-modify-write that still executes at EX1 from `rr_ex1_q` — RR's CSR read is purely speculative, captured into `rr_ex1_q.csr_rdata` and safe to discard if the consumer is later flushed.
 
 **Integer bypass.** `int_rs1_data_rr` picks `mem_wb_q`'s writeback result over the (possibly stale) `kronos_regfile` read when `mem_wb_q` is writing the same register this cycle — this is the WB→RR analogue of the old WB→ID bypass, shifted one register later.
 
@@ -253,6 +253,8 @@ ID also generates the fault bits it owns — `ecall`, `ebreak`, `illegal`, `is_m
 | `FWD_MEM2` | `mem1_mem2_q.alu_result` (or `.csr_rdata`) | MEM1B | ALU/CSR producers only — `kronos_forward` suppresses this slot for loads, so the live `lsu_rdata` path never reaches the bypass mux |
 | `FWD_MEMWB` | `wb_result_64` (the WB mux output, driven from `mem_wb_q`) | MEM2 | the only path that carries a registered **load** value — every load producer in an earlier slot falls through to here |
 | (default) | RR-cycle source (the FP mux above, or the integer regfile/WB-bypass mux) | — | no producer matched |
+
+**Known erratum (`FWD_EX1_NOW`).** A GPR consumer immediately following a CSR read receives `ex_result` (never `csr_rdata`) with no covering stall — confirmed bug, tracked upstream as issue #110; benches work around it with one scheduling gap.
 
 `kronos_forward` computes this per rs1/rs2 from the consumer's `if_id_rs1/rs2` addresses against all six producer slots, checked in the same freshest-first order as the table above. Five of the six slots (`id_rr_q`, `rr_ex1_q`, `ex1_ex2_q`, `ex2_mem1_q`, `mem1_mem1b_q`) have their own `valid` input port; the last, `mem1_mem2_q` (which can only resolve to `FWD_MEMWB`), does not — its valid gate is folded into `rd_wen_i` at the instantiation site instead (`.mem1_mem2_rd_wen_i (mem1_mem2_q.dec.rd_wen & mem1_mem2_q.valid)`). `rd = x0` and FP-destination producers (`rd_fp`) never match an integer consumer; loads are suppressed on every slot except the last one — `FWD_MEM2` also suppresses loads (per the note above), so `FWD_MEMWB` is the only slot that ever carries a load value.
 
@@ -354,6 +356,7 @@ flowchart TB
     end
     id_rr -. "consumer rs1, rs2" .-> forward
     id_rr & rr_ex1 & ex1_ex2 & ex2_mem1 & mem1_mem1b -. "rd, wen, is_load (producers)" .-> forward
+    mem1_mem2 -. "rd_wen∧valid folded at instantiation" .-> forward
     forward -. "fwd_rs1_sel, fwd_rs2_sel" .-> id_rr
     hazard["kronos_hazard<br>en / flush for 8 registers"]
     if_id & id_rr & rr_ex1 & ex1_ex2 & ex2_mem1 & mem1_mem1b & mem1_mem2 -. "rd / valid / is_load / is_csr" .-> hazard
@@ -365,7 +368,7 @@ flowchart TB
 
 `kronos_forward` and `kronos_hazard` both sit outside the pipeline stages. `kronos_forward`'s bypass-source computation is covered in §5 — it is a pure combinational function of the consumer's `rs1`/`rs2` against all six producer slots, with loads suppressed on every slot except the last, `FWD_MEMWB`.
 
-`kronos_hazard` drives `en` for the PC register plus all seven pipeline registers (8 `en` outputs total), and exposes 6 `flush` output ports (no `mem_wb_flush_o` exists) — but only 3 of those 6 (`if_id_flush_o`, `id_rr_flush_o`, `rr_ex1_flush_o`) are ever asserted by the module itself; the other 3 (`ex2_mem1_flush_o`, `mem1_mem1b_flush_o`, `mem1_mem2_flush_o`) are always-zero dead ports left unconnected at the instantiation, because `kronos_top` drives those three registers' actual flush conditions via separate combinational assigns (see priority 2 below). Fixed priority order (highest first):
+`kronos_hazard` drives `en` for the PC register plus seven of the eight pipeline registers (8 `en` outputs total), and exposes 6 `flush` output ports (no `mem_wb_flush_o` exists) — but only 3 of those 6 (`if_id_flush_o`, `id_rr_flush_o`, `rr_ex1_flush_o`) are ever asserted by the module itself; the other 3 (`ex2_mem1_flush_o`, `mem1_mem1b_flush_o`, `mem1_mem2_flush_o`) are always-zero dead ports left unconnected at the instantiation, because `kronos_top` drives those three registers' actual flush conditions via separate combinational assigns (see priority 2 below). Fixed priority order (highest first):
 
 | Priority | Condition | Effect |
 |---|---|---|
@@ -439,7 +442,7 @@ flowchart LR
 
 Address translation and the data cache occupy three of the pipeline's nine
 stages. That split is not original design — it is the result of three
-successive Fmax fixes (7c, 7d, 7e) chasing the same class of failure: a
+successive Fmax fixes (§1's last three rows) chasing the same class of failure: a
 combinational chain that starts at a `mem1_mem2_q`/`mem1_mem1b_q` flop,
 crosses two or three module boundaries (dTLB → PMP → PTW → dcache → bypass
 mux), and lands on another pipeline register's D-pin with no register in
@@ -464,17 +467,17 @@ between.
   (fanout 60+) → u_ptw FSM → u_dcache → bypass mux → rr_ex1_q.rs1_data`
   measured 19 logic levels / 7.374 ns. `kronos_tlb` itself was split
   internally into an S0 (CAM compare) / S1 (priority-encode + PA
-  reconstruct + permission check) pair (§9.2, §11.4), and the dTLB's live
+  reconstruct + permission check) pair (§9.2, §12.4), and the dTLB's live
   `dtlb_miss`/`dtlb_a_zero`/`dtlb_d_zero`/`dtlb_hit` outputs were registered
   at the MEM1→MEM1B edge so the PTW kicks off from a flop rather than a live
   TLB-internal wire. Because the dTLB-S1 encode now takes the whole MEM1B
-  cycle, PMP itself **moved a second time** — from MEM1B (7d's location) to
+  cycle, PMP itself **moved a second time** — from MEM1B (where the prior retiming step had placed it) to
   MEM2 — since the translated PA isn't ready until MEM1B's end; MEM2 now
   runs the PMP comparator and the dcache tag-compare in parallel, with PMP
   the longer of the two paths.
 
 `kronos_tlb` is a single physical module instantiated identically for both
-`u_itlb` and `u_dtlb` (§11.4); only the dTLB instance's internal S0→S1 flop
+`u_itlb` and `u_dtlb` (§12.4); only the dTLB instance's internal S0→S1 flop
 happens to coincide with the top-level MEM1→MEM1B pipeline register, which
 is why `mem1_mem2_reg_t`'s `dtlb_pa`/`dtlb_perm_fail`/etc. fields are
 captured one edge *later* than `mem1_mem1b_reg_t` — the type comment in
@@ -505,13 +508,13 @@ of the dTLB-S1 stage at the MEM1B edge, so they live in `mem1_mem2_reg_t`
   into `mem1_mem2_q` for MEM2's PMP/PMA/page-fault checks and for the
   LSU's PA input.
 
-See §11.4 for the dTLB/iTLB's internal S0/S1 mechanics, replacement policy,
-and refill/flush behaviour, and §11.3 for the PTW that services a miss.
+See §12.4 for the dTLB/iTLB's internal S0/S1 mechanics, replacement policy,
+and refill/flush behaviour, and §12.3 for the PTW that services a miss.
 
 ### 9.3 Data-side PMP and PMA
 
 `u_pmp_data` is instantiated at MEM2 on `mem1_mem2_q.dtlb_pa`
-(`kronos_top.sv:1254–1273`); §11.2 covers the shared region-matching logic
+(`kronos_top.sv:1254–1273`); §12.2 covers the shared region-matching logic
 (also used by `u_pmp_fetch` on the instruction side). The PMA non-cacheable
 region check (`mem2_addr_uncacheable`, against `MMIO_BASE` =
 `0x4000_0000`–`0x4FFF_FFFF` by default) runs at MEM2 against the same PA;
@@ -678,7 +681,7 @@ mem_wb_q.dec.is_csr & ~mem_wb_fault_any_trap & ~combined_stall`, using the
 registered EX1-cycle address/new-value snapshot carried in `mem_wb_q`
 (`retire_addr_i`/`retire_csr_new_val_i`). Trap entry (`trap_i`), MRET
 (`mret_i`), and SRET (`sret_i`) commit from the same `mem_wb_q.fault` bits
-at this edge (§11.1, §6's fault-bit table).
+at this edge (§12.1, §6's fault-bit table).
 
 ---
 
@@ -758,7 +761,7 @@ Not re-measured this pass (dropped rather than carried forward stale — no
 bench exists yet): not-taken branch, LR.W/LR.D and SC.W/SC.D as their own
 classes (distinct from AMO), FP load/store, FSGNJ/FMIN/FMAX/FCLASS/FCMP/FMV,
 FCVT, and the DIV/REM div-by-0/INT_MIN÷−1 fast-path. FSQRT.S/FSQRT.D are
-also not in this table (no bench was run for them), but §8.3 below has been
+also not in this table (no bench was run for them), but §8.3 above has been
 corrected from RTL evidence found while investigating the FDIV numbers.
 
 ---
@@ -871,7 +874,7 @@ fully-associative CAM, per-entry VPN + page size (4K/2M/1G/512G) + PPN +
 (8-entry 3-bit tree; a round-robin fallback exists in the RTL for `N != 8`
 but is unused — both instances are 8-entry).
 
-**Internal S0/S1 split (7e, §9.1).** S0 is combinational: per-entry CAM
+**Internal S0/S1 split (§9.1).** S0 is combinational: per-entry CAM
 compare against VPN+ASID+global, priority-encode the lowest hitting
 index, and a snapshot mux that reads the winning entry's fields. A
 snapshot register captures the hit vector, hit index, and the selected
@@ -885,7 +888,7 @@ faults), and A/D-zero detection. All five lookup outputs
 (`lookup_hit_o`, `lookup_pa_o`, `lookup_perm_fail_o`, `lookup_a_zero_o`,
 `lookup_d_zero_o`) are S1 flop outputs — the split costs one extra cycle
 of TLB latency to break the CAM→encode→PA→perm combinational chain that
-was the 7e critical path (§9.1).
+was the critical path chased down in §9.1.
 
 **Refill.** Before installing a new entry, the TLB invalidates any
 existing entry that already matches the incoming VPN/ASID at any page
@@ -1169,7 +1172,7 @@ TB).
 
 ### mem
 - `ex2_mem1_q.*` / `mem1_mem1b_q.*` / `mem1_mem2_q.*` — the three MEM-stage registers (§9)
-- `dtlb_hit` / `dtlb_perm_fail` / `dtlb_pa` — live dTLB-S1 outputs (§9.2, §11.4)
+- `dtlb_hit` / `dtlb_perm_fail` / `dtlb_pa` — live dTLB-S1 outputs (§9.2, §12.4)
 - `pmp_data_fault` / `mem2_amo_nc_fault` — MEM2 fault-producing wires (§9.3)
 - `dcache_stall` — D-cache FSM busy (§9.4)
 
