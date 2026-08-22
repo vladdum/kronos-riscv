@@ -11,6 +11,14 @@
 # taken, and the bimodal predictor (indexed by this branch's own PC) learns
 # that immediately, so after a short warm-up every iteration is a correctly
 # predicted taken branch.
+#
+# Caveat: because bnez never takes the not-taken path here, the `nop` at
+# label-local 2f never retires -- unlike bench_mispredict.S, where it
+# retires on the ~50% of iterations that resolve not-taken. That is a
+# real, small (~0.5 cycle/op average) asymmetry between the two benches'
+# instruction counts, on top of (not instead of) the misprediction cost
+# itself; it does not change the delta's sign or its use as the honest
+# comparison point (§11's caption).
 
 .section .data
 .balign 8
@@ -22,7 +30,11 @@ _bits_taken:
 .section .text
 .global main
 main:
-    # Prewarm the D$ line(s) backing the array before timing.
+    # Prewarm the D$ line(s) backing the array before timing. Endpoint-only
+    # (byte 0 and byte 99): this is sufficient here because the 100-byte
+    # array fits in exactly the two 64B lines those two addresses fall in,
+    # not because touching the ends of an arbitrary range warms everything
+    # between them in general.
     la      s2, _bits_taken
     lb      t5, 0(s2)
     lb      t5, 99(s2)

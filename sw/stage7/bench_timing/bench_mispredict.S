@@ -19,6 +19,13 @@
 # never has a load-use dependency on the same iteration's load, and the
 # two benches' totals are directly comparable (identical instruction
 # shape; only the array content differs).
+#
+# Caveat: the `nop` at label-local 2f retires on the ~50% of iterations
+# that resolve not-taken (unlike bench_taken_branch.S, where it never
+# retires) -- a real, small (~0.5 cycle/op average) instruction-count
+# asymmetry between the two benches, on top of (not instead of) the
+# misprediction cost itself; it does not change the delta's sign or its
+# use as the honest comparison point (§11's caption).
 
 .section .data
 .balign 8
@@ -30,7 +37,11 @@ _bits_mispredict:
 .section .text
 .global main
 main:
-    # Prewarm the D$ line(s) backing the array before timing.
+    # Prewarm the D$ line(s) backing the array before timing. Endpoint-only
+    # (byte 0 and byte 99): this is sufficient here because the 100-byte
+    # array fits in exactly the two 64B lines those two addresses fall in,
+    # not because touching the ends of an arbitrary range warms everything
+    # between them in general.
     la      s2, _bits_mispredict
     lb      t5, 0(s2)
     lb      t5, 99(s2)

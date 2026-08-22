@@ -189,7 +189,9 @@ flowchart LR
 
 Reset initializes every counter to `2'b01` (weakly not-taken) and clears the BTB.
 
-**Lookup (combinational):** Every cycle, `predecode_instr_pc` (predecode's emitted PC, not a dedicated fetch-address register) indexes both structures simultaneously. If the BTB entry is valid and the PHT counter MSB is `1`, the predictor asserts `pred_taken` and drives `pred_target` from the BTB; the frontend uses `pred_target` as the redirect target instead of `PC+2/4`. The predicted-taken redirect is registered (`pred_taken_q`) before it reaches the icache kill / fetch-buffer flush network, so the branch itself is already captured into `if_id_q` by the time the redirect fires — at most one extra wrong-path bubble per predicted-taken branch.
+**Lookup (combinational):** Every cycle, `predecode_instr_pc` (predecode's emitted PC, not a dedicated fetch-address register) indexes both structures simultaneously. If the BTB entry is valid and the PHT counter MSB is `1`, the predictor asserts `pred_taken` and drives `pred_target` from the BTB; the frontend uses `pred_target` as the redirect target instead of `PC+2/4`. The predicted-taken redirect is registered (`pred_taken_q`) before it reaches the icache kill / fetch-buffer flush network, so the branch itself is already captured into `if_id_q` by the time the redirect fires — at most one extra wrong-path bubble per predicted-taken branch *on top of the refill described next*.
+
+`pred_taken_q` is itself one of the signals OR'd into `redirect_load` (§4.1) — the same signal that also covers `mem_redirect_q`/`ex_redirect_q`/`fence_i_redirect_q` and drives both the icache S1/S2 kill and the `s0_pc_q` reload. A predicted-taken branch therefore reloads `s0_pc_q` and kills S1/S2 exactly like a genuine misprediction recovery: its target re-traverses the full S0→S1→S2→fetch-buffer→predecode pipeline every time, not only when the prediction turns out wrong. That refill, not the one-bubble redirect-timing quirk above, is why a correctly-predicted taken branch measures at 12 cycles/op in §11 rather than 1 — the sentence above describes the small *marginal* cost layered on top of an already-expensive redirect, not the branch's total cost.
 
 **Update (registered):** EX1 sends the resolved direction and target back to the predictor, keyed by `rr_ex1_q.pc` (the branch's own PC, one register earlier than its EX2 fault-aggregation point). The PHT counter increments on taken, decrements on not-taken, saturating at the extremes. A taken outcome writes the BTB with the resolved target; a not-taken outcome where the counter has saturated to `00` invalidates the BTB entry.
 
@@ -713,6 +715,18 @@ Loads/stores/AMO below are back-to-back, address-independent accesses
 (pipeline throughput, not a forwarded round-trip latency); load-use is the
 dependent-consumer case and is the number that matters for scheduling
 around a load.
+
+The two branch rows are not directly comparable to the other rows the way
+they read: every other row's bench isolates one instruction against the
+bare loop tail, but `bench_taken_branch`/`bench_mispredict`'s bodies also
+carry a software-pipelined load-and-carry-forward sequence (`lb`/`addi`/
+`mv`, ~3 cycles/op) needed to drive the branch condition without
+introducing a load-use hazard of its own (task-4-report.md §2c). Both
+benches carry the identical scaffolding, so the important, well-isolated
+number is the **3-cycle delta** between the two rows (15 − 12), not either
+row's absolute value in isolation — read "12" and "15" as "predictable
+branch, with scaffolding" and "mispredicted branch, with scaffolding",
+not as a scaffolding-free branch-resolution cost.
 
 | Instruction class | Cycles | Bench |
 |---|:---:|---|

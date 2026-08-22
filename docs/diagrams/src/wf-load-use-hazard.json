@@ -3,21 +3,21 @@
     { "name": "clk",              "wave": "P........." },
     {},
     ["Load (L)",
-      { "name": "stage",          "wave": "=.=.=.=.=.",
-        "data": ["ID", "RR", "EX1", "EX2", "MEM1", "MEM1B", "MEM2", "WB"] }
+      { "name": "stage",          "wave": "=========.",
+        "data": ["IF", "ID", "RR", "EX1", "EX2", "MEM1", "MEM1B", "MEM2", "WB"] }
     ],
     {},
     ["Consumer (C, rs1 = L.rd)",
-      { "name": "stage",          "wave": "=.5.....=.",
-        "data": ["ID (stall)", "RR"] }
+      { "name": "stage",          "wave": "x==.....==",
+        "data": ["IF", "ID", "RR", "EX1"] }
     ],
     {},
-    { "name": "load_use",         "wave": "0.1.....0." },
-    { "name": "id_rr_flush",      "wave": "0.1.....0." },
-    { "name": "pc_en / if_id_en", "wave": "1.0.....1." },
+    { "name": "load_use",         "wave": "001.....0." },
+    { "name": "id_rr_flush",      "wave": "001.....0." },
+    { "name": "pc_en / if_id_en", "wave": "110.....1." },
     {},
-    { "name": "fwd_rs1_sel (C)",  "wave": "x......=.=",
-      "data": ["FWD_NONE", "FWD_MEMWB"] }
+    { "name": "fwd_rs1_sel (C)",  "wave": "x.......=.",
+      "data": ["FWD_MEMWB"] }
   ],
   "config": { "hscale": 2 },
   "depicts": "stage7e",
@@ -26,6 +26,6 @@
     "tick": 0
   },
   "foot": {
-    "text": "The load occupies six producer slots (id_rr_q..mem1_mem2_q) before the only load-forwarding path, FWD_MEMWB (mem_wb_q.alu_result, registered), becomes valid — the consumer stalls in ID for 5 cycles (kronos_hazard priority 3a: load_use stalls pc/if_id/id_rr, bubbles into RR) until then (§7). Measured at stage 7e (bench_load_use_hit, §11): 7 cycles/op end-to-end (load issue + the 5-cycle stall + the consumer's own execute), consistent with this 5-cycle stall plus the load's own 1-cycle issue and the consumer's 1-cycle resolution. The Timing Table's pre-7e figure of 3 cycles (5-stage-pipeline era) is what this re-measurement replaces."
+    "text": "L is fetched at tick 0 and advances one stage per cycle, IF through WB. C is fetched one cycle behind L (tick 1) and decodes at tick 2, where it sees L's rd still live in the pipe (RR) — load_use goes high and stays high for ticks 2-7 (kronos_hazard priority 3a: stalls pc/if_id/id_rr, bubbles into RR) because the load occupies six producer slots and the only load-forwarding path, FWD_MEMWB (mem_wb_q.alu_result, registered), isn't valid until L reaches WB at tick 8. C is stalled in ID for tick 2's normal cycle plus 5 more (ticks 3-7) before advancing to RR at tick 8 — the worst-case 5-cycle stall (§7). Measured at stage 7e (bench_load_use_hit, §11): 7 cycles/op end-to-end (load issue + the 5-cycle stall + the consumer's own execute), consistent with this diagram. The Timing Table's pre-7e figure of 3 cycles (5-stage-pipeline era) is what this re-measurement replaces."
   }
 }

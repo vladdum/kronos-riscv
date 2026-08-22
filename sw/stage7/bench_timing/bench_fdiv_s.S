@@ -1,6 +1,9 @@
 # bench_fdiv_s.S — cycles/instr for a dependent FDIV.S chain
-# (kronos_fpu_fdiv_core via kronos_fpu_iter, single precision: <= 29
-# cycles). fa1 = 1.0f (identity) keeps fa0 stable across the chain.
+# (kronos_fpu_fdiv_core via kronos_fpu_iter). architecture.md previously
+# claimed <= 29 cycles for single precision -- doc-claimed, disproven: see
+# task-4-report.md sec.6 and architecture.md Sec.8.3 for the corrected,
+# RTL-sourced derivation (measured 62 cycles end-to-end here). fa1 = 1.0f
+# (identity) keeps fa0 stable across the chain.
 
 .section .data
 .balign 4

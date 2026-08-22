@@ -1,39 +1,38 @@
 {
   "signal": [
-    { "name": "clk",                "wave": "P.............." },
+    { "name": "clk",                "wave": "P......." },
     {},
     ["IF Stage",
-      { "name": "pc_q",             "wave": "=.=.=.=...=...=",
-        "data": ["PC_br", "PC_br+4", "PC_br+8", "T (redirect)", "T+4", "T+8"] },
-      { "name": "pred_taken",       "wave": "0.............." }
+      { "name": "pc_q",             "wave": "========",
+        "data": ["PC_br", "PC_br+4", "PC_br+8", "PC_br+12", "PC_br+16", "T", "T+4", "T+8"] },
+      { "name": "pred_taken",       "wave": "0......." }
     ],
     {},
     ["Pipeline registers",
-      { "name": "if_id_q.valid",    "wave": "01.....0..1...." },
-      { "name": "id_rr_q.valid",    "wave": "0.1.....0..1..." },
-      { "name": "rr_ex1_q.valid",   "wave": "0..1.....0..1.." },
-      { "name": "ex1_ex2_q.valid",  "wave": "0...1.....0...." }
+      { "name": "if_id_q.valid",    "wave": "01...01." },
+      { "name": "id_rr_q.valid",    "wave": "0.1..0.1" },
+      { "name": "rr_ex1_q.valid",   "wave": "0..1.0.." },
+      { "name": "ex1_ex2_q.valid",  "wave": "0...10.." }
     ],
     {},
-    ["EX1 / EX2",
-      { "name": "actual_taken",     "wave": "x...0...........",
-        "data": [] },
-      { "name": "ex1_ex2_q.fault.bpred_dir_mispredict", "wave": "0....1.........." },
-      { "name": "ex_redirect_d",    "wave": "0....1.........." }
+    ["EX1 resolves / EX2 forms the redirect",
+      { "name": "actual_taken",     "wave": "x..1x..." },
+      { "name": "ex1_ex2_q.fault.bpred_dir_mispredict", "wave": "0...10.." },
+      { "name": "ex_redirect_d (comb., EX2)",  "wave": "0...10.." },
+      { "name": "ex_redirect_q (registered)",  "wave": "0....10." }
     ],
     {},
-    { "name": "if_id_flush",        "wave": "0....10........." },
-    { "name": "id_rr_flush",        "wave": "0....10........." },
-    { "name": "rr_ex1_flush",       "wave": "0....10........." },
-    { "name": "ex1_ex2_q flush (kronos_top comb.)", "wave": "0....10........." }
+    { "name": "if_id_flush",        "wave": "0....10." },
+    { "name": "id_rr_flush",        "wave": "0....10." },
+    { "name": "rr_ex1_flush",       "wave": "0....10." }
   ],
   "config": { "hscale": 2 },
   "depicts": "stage7e",
   "head": {
-    "text": "Branch Predictor — direction misprediction, EX2 redirect (stage 7e: IF/ID/RR/EX1/EX2)",
+    "text": "Branch Predictor — direction misprediction (pred_taken=0, actual_taken=1), EX2 redirect (stage 7e: IF/ID/RR/EX1/EX2)",
     "tick": 0
   },
   "foot": {
-    "text": "EX1 folds bpred_dir_mispredict into ex1_ex2_q; EX2 reads it combinationally and forms ex_redirect_d, flushing if_id_q/id_rr_q/rr_ex1_q/ex1_ex2_q (the wrong-path follower) and redirecting IF to the resolved target T (§6). Measured at stage 7e (bench_mispredict vs bench_taken_branch, §11): a misprediction costs 15 cycles/branch against 12 for a correctly-predicted taken branch — 3 cycles more, not the simple single-bubble picture a 5-stage pipeline would suggest."
+    "text": "EX1 resolves actual_taken=1 against a not-taken prediction at tick 3 (branch in rr_ex1_q); the mismatch folds into ex1_ex2_q.fault.bpred_dir_mispredict at the EX1->EX2 edge, live at tick 4. ex_redirect_d reads that bit combinationally the same cycle (tick 4) — but kronos_hazard drives its flushes from the REGISTERED ex_redirect_q (kronos_top.sv:958), not ex_redirect_d, so if_id_q/id_rr_q/rr_ex1_q flush and pc_q redirects to T one cycle later, at tick 5. The mispredicting branch itself, already past EX1/EX2, continues to retire normally (ex1_ex2_q.valid pulses once for it at tick 4); only the wrong-path follower that would otherwise land in ex1_ex2_q is squashed. Measured at stage 7e (bench_mispredict vs. bench_taken_branch, §11): a misprediction measures 3 cycles/op more than a correctly-predicted taken branch (15 vs. 12) — both numbers include ~3 cycles/op of shared loop scaffolding (see §11's caption), so 3 is the honest marginal misprediction cost, not either row's absolute value."
   }
 }
