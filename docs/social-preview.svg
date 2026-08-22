@@ -98,76 +98,109 @@
         font-family="'Courier New',monospace"
         font-size="11" letter-spacing="5" fill="#00f0be" text-anchor="middle" opacity="0.35">PIPELINE</text>
 
-  <!-- 5-stage pipeline
-       Box: 88×46, gap: 24px
-       Total: 5×88 + 4×24 = 536px
-       Right-panel center: (558+1280)/2 = 919. Start: 919-268 = 651 -->
+  <!-- 9-stage pipeline (stage 7e machine)
+       Box: 51×46, gap: 10px
+       Total: 9×51 + 8×10 = 539px
+       Right-panel center: (558+1280)/2 = 919. Row center ~919.5 -->
 
   <!-- IF (active — teal stroke + glow) -->
-  <rect x="651" y="128" width="88" height="46" rx="3"
+  <rect x="650" y="128" width="51" height="46" rx="3"
         fill="#050e1a" stroke="#00f0be" stroke-width="1.5" filter="url(#boxglow)"/>
-  <text x="695" y="158"
+  <text x="675.5" y="156"
         font-family="'Courier New',monospace"
-        font-size="20" font-weight="700" fill="#00f0be" text-anchor="middle">IF</text>
+        font-size="14" font-weight="700" fill="#00f0be" text-anchor="middle">IF</text>
 
-  <line x1="739" y1="151" x2="762" y2="151"
+  <line x1="702" y1="151" x2="710" y2="151"
         stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
 
   <!-- ID -->
-  <rect x="763" y="128" width="88" height="46" rx="3"
+  <rect x="711" y="128" width="51" height="46" rx="3"
         fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
-  <text x="807" y="158"
+  <text x="736.5" y="156"
         font-family="'Courier New',monospace"
-        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">ID</text>
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">ID</text>
 
-  <line x1="851" y1="151" x2="874" y2="151"
+  <line x1="763" y1="151" x2="771" y2="151"
         stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
 
-  <!-- EX -->
-  <rect x="875" y="128" width="88" height="46" rx="3"
+  <!-- RR -->
+  <rect x="772" y="128" width="51" height="46" rx="3"
         fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
-  <text x="919" y="158"
+  <text x="797.5" y="156"
         font-family="'Courier New',monospace"
-        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">EX</text>
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">RR</text>
 
-  <line x1="963" y1="151" x2="986" y2="151"
+  <line x1="824" y1="151" x2="832" y2="151"
         stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
 
-  <!-- MEM -->
-  <rect x="987" y="128" width="88" height="46" rx="3"
+  <!-- EX1 -->
+  <rect x="833" y="128" width="51" height="46" rx="3"
         fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
-  <text x="1031" y="158"
+  <text x="858.5" y="156"
         font-family="'Courier New',monospace"
-        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">MEM</text>
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">EX1</text>
 
-  <line x1="1075" y1="151" x2="1098" y2="151"
+  <line x1="885" y1="151" x2="893" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- EX2 -->
+  <rect x="894" y="128" width="51" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="919.5" y="156"
+        font-family="'Courier New',monospace"
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">EX2</text>
+
+  <line x1="946" y1="151" x2="954" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- MEM1 -->
+  <rect x="955" y="128" width="51" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="980.5" y="156"
+        font-family="'Courier New',monospace"
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">MEM1</text>
+
+  <line x1="1007" y1="151" x2="1015" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- M1B -->
+  <rect x="1016" y="128" width="51" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="1041.5" y="156"
+        font-family="'Courier New',monospace"
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">M1B</text>
+
+  <line x1="1068" y1="151" x2="1076" y2="151"
+        stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- MEM2 -->
+  <rect x="1077" y="128" width="51" height="46" rx="3"
+        fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
+  <text x="1102.5" y="156"
+        font-family="'Courier New',monospace"
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">MEM2</text>
+
+  <line x1="1129" y1="151" x2="1137" y2="151"
         stroke="#00f0be" stroke-width="1.5" marker-end="url(#arr)"/>
 
   <!-- WB -->
-  <rect x="1099" y="128" width="88" height="46" rx="3"
+  <rect x="1138" y="128" width="51" height="46" rx="3"
         fill="#050e1a" stroke="#162540" stroke-width="1.5"/>
-  <text x="1143" y="158"
+  <text x="1163.5" y="156"
         font-family="'Courier New',monospace"
-        font-size="20" font-weight="700" fill="#b8cfe0" text-anchor="middle">WB</text>
+        font-size="14" font-weight="700" fill="#b8cfe0" text-anchor="middle">WB</text>
 
-  <!-- Stage name sublabels -->
-  <text x="695"  y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Fetch</text>
-  <text x="807"  y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Decode</text>
-  <text x="919"  y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Execute</text>
-  <text x="1031" y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Memory</text>
-  <text x="1143" y="190" font-family="'Courier New',monospace" font-size="10" fill="#1b2f45" text-anchor="middle">Writeback</text>
-
-  <!-- FPU dashed connection from EX bottom (center x=919, bottom y=174) -->
-  <line x1="919" y1="174" x2="919" y2="242"
+  <!-- FPU dashed connection, re-anchored under EX1/EX2 (midpoint x=889, box bottom y=174) -->
+  <line x1="889" y1="174" x2="889" y2="242"
         stroke="#162540" stroke-width="1.5" stroke-dasharray="5,3"/>
 
-  <!-- FPU block (centered at x=919, w=320) -->
-  <rect x="759" y="242" width="320" height="48" rx="3"
+  <!-- FPU block (centered under EX1/EX2 at x=889, w=300) -->
+  <rect x="739" y="242" width="300" height="48" rx="3"
         fill="#050e1a" stroke="#162540" stroke-width="1" stroke-dasharray="7,4"/>
-  <text x="919" y="261"
+  <text x="889" y="261"
         font-family="'Courier New',monospace"
         font-size="11" letter-spacing="2" fill="#00f0be" text-anchor="middle" opacity="0.65">FPU</text>
-  <text x="919" y="280"
+  <text x="889" y="280"
         font-family="'Courier New',monospace"
         font-size="11" fill="#243d58" text-anchor="middle">FADD · FMUL · FMA · FDIV · FSQRT</text>
 
