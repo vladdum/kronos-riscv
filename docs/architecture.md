@@ -1,6 +1,6 @@
 # kronos-riscv Architecture Reference
 
-**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 5-stage in-order pipeline &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 6h
+**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** in-order pipeline (stage-7 restructure — see §1) &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 7e (in progress)
 
 kronos-riscv is a 5-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. Instructions flow through Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). The IF stage includes an alignment unit that handles variable-width compressed instructions and a bimodal branch predictor that speculatively redirects fetch before branch resolution. The EX stage contains the 64-bit ALU, a multi-cycle 64-bit multiply/divide unit, branch resolution logic, and the CSR unit. The MEM stage drives an AXI4 load/store unit supporting atomic operations (LR/SC, AMO) and floating-point loads/stores. A separate FPU with six pipelined units handles the F and D extensions; the FPU uses a scoreboard rather than the integer forwarding network for hazard management. Hazard and forwarding control modules sit outside the pipeline stages and manage stalls, flushes, and operand forwarding.
 
@@ -20,6 +20,19 @@ flowchart LR
 ```
 
 The five pipeline registers — IF/ID, ID/EX, EX/MEM, MEM/WB — carry decoded instruction state across stages. Each register has an `en` enable and a `flush` (clear-to-NOP) control driven by `kronos_hazard`. Operand forwarding is handled by `kronos_forward`, which selects between the register-file read value, the EX/MEM result, and the MEM/WB result. FP operand hazards are managed by `kronos_fpu_scoreboard` rather than the integer forwarding network.
+
+> **Currency note (2026-08-22).** The narrative above and §2–§12 describe the
+> **stage-5-era machine** and have not yet been rewritten for later stages:
+> stages 6a–6i added M/S/U privilege + trap delegation, PMP, the Sv39/Sv48
+> MMU with iTLB/dTLB and a hardware PTW, and moved caches/regfiles to
+> BRAM/LUTRAM; stages 7a–7c restructured the pipeline itself (fault-bit
+> propagation, EX1/EX2 split, a new RR register-read stage with a rebuilt
+> bypass network, and a MEM1/MEM2 split). The diagram above likewise shows
+> the pre-restructure 5-stage pipeline. §1's per-stage rows are current;
+> for stage-6/7 detail see the per-stage design specs under
+> `docs/superpowers/specs/`. The full rewrite is tracked in
+> [#108](https://github.com/vladdum/kronos-riscv/issues/108); era notes
+> below mark the sections known to be superseded.
 
 ---
 
@@ -100,6 +113,11 @@ Smaller storage stays in flops or LUTRAM — iTLB/dTLB CAMs (8 entries each), br
 ## 4. IF Stage — Fetch, Alignment, Decompression, Branch Prediction
 
 ### 3a. Fetch FSM
+
+> **Era note:** stage ≤5d. This per-instruction fetch FSM was **replaced by
+> `kronos_icache`** in stage 5e (see the Instruction-cache section below) and
+> the frontend was further rewritten BOOM-style in stage 6f. Retained as
+> stage-5 reference until the [#108](https://github.com/vladdum/kronos-riscv/issues/108) refresh.
 
 The fetch FSM has two states: **FETCH_IDLE** and **FETCH_WAIT_R**.
 
@@ -378,6 +396,12 @@ stateDiagram-v2
     STORE_DONE --> IDLE : always
 ```
 
+> **Era note:** stage ≤5e. Since stage 5f the LSU is a thin (~175-line)
+> adapter and **`kronos_dcache` owns the AXI master, AMO arithmetic, and
+> LR/SC reservation** (see the Data-cache section below); stage 7c further
+> split MEM into MEM1/MEM2 (dTLB/PMP separated from the dcache hit path).
+> Retained as stage-5 reference until the [#108](https://github.com/vladdum/kronos-riscv/issues/108) refresh.
+
 The LSU is a seven-state FSM that drives the AXI4 data channel. All memory operations go through it; non-memory instructions pass through in one cycle with `mem_stall_o` deasserted.
 
 **Load path:** `IDLE → LOAD_ADDR → LOAD_DATA → LOAD_DONE`
@@ -489,6 +513,10 @@ FP hazards are managed entirely by the scoreboard. `kronos_forward` and `kronos_
 
 ## 11. Timing Table
 
+> **Era note:** stage-5 pipeline depths. The stage 7a–7c splits (EX1/EX2,
+> RR, MEM1/MEM2) re-price branch, load-use, and redirect costs; this table
+> has not been re-measured since. Tracked in [#108](https://github.com/vladdum/kronos-riscv/issues/108).
+
 Cycles measured from the instruction entering EX to its result being available in WB (or to the first valid instruction after a redirect for branches and traps). FPU latencies are measured from dispatch (EX) to writeback.
 
 | Instruction class | Cycles |
@@ -519,6 +547,11 @@ Cycles measured from the instruction entering EX to its result being available i
 ---
 
 ## 12. CSR Register Map
+
+> **Era note:** M-mode view through stage 5. Stages 6a–6b added S/U modes,
+> trap delegation (`medeleg`/`mideleg`), the S-mode CSR file, PMP
+> (`pmpcfg*`/`pmpaddr*`), and `satp` with Sv39/Sv48 translation — see the
+> 6a/6b design specs until the [#108](https://github.com/vladdum/kronos-riscv/issues/108) refresh lands them here.
 
 | Address | Name | Description |
 |---------|------|-------------|

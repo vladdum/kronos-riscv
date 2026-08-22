@@ -62,8 +62,9 @@ with one outstanding transaction per port (instruction fetch + data).
 in-flight transaction per channel). The `axi_from_mem` bridge used in earlier
 stages is removed; the core connects directly to the AXI crossbar.
 
-**Stage 6:** AXI4 with multiple outstanding IDs — the out-of-order LSU issues
-multiple in-flight memory requests with tagged, out-of-order responses.
+**Stage 8 (planned):** AXI4 with multiple outstanding IDs — the out-of-order
+LSU will issue multiple in-flight memory requests with tagged, out-of-order
+responses.
 
 ## Repository Structure
 
@@ -242,6 +243,14 @@ The 220 MHz gap is dominated by DSP48 cascade intrinsic delays on the 53×53
 FPU multipliers; closing it requires a Karatsuba-style decomposition tracked
 in issue #37.
 
+> **As-of note (added 2026-08-22):** the table above was measured on the
+> stage-5b-era netlist (2026-04-19, FPU timing closure). The stage-6
+> caches/MMU and the stage-7 pipeline restructure changed the netlist
+> substantially, and timing is currently in flux under the stage-7 Fmax
+> push — see `docs/architecture.md` §1 (7a–7e rows) for the WNS
+> trajectory. A current-numbers refresh is tracked in
+> [#108](https://github.com/vladdum/kronos-riscv/issues/108).
+
 ```bash
 make synth                     # synthesis + P&R at 200 MHz (default)
 make synth SYNTH_FREQ_MHZ=180  # sweep a different frequency
@@ -287,7 +296,7 @@ Actions matrix. Run locally before merging changes that touch the RTL.
 
 ## ACT4 compliance
 
-All five completed stages pass the official
+All completed stage configurations pass the official
 [`riscv-arch-test`](https://github.com/riscv-non-isa/riscv-arch-test) (ACT4)
 suite, tracked as a git submodule at `riscv-arch-test/`.
 

@@ -36,8 +36,8 @@ Development follows a staged learning progression:
 | 7e    | Stall-network retime (event_bus register) + dTLB pipeline split | RV64IMAFDC | AXI4 | In progress |
 | 8     | Out-of-order execution (BOOM-class rename + ROB + IQ + LSU)     | RV64IMAFDC | AXI4 | Planned  |
 
-All five completed stages pass the full `riscv-arch-test` (ACT4) compliance
-suite. See *ACT4 compliance* below.
+All completed stage configurations pass the full `riscv-arch-test` (ACT4)
+compliance suite. See *ACT4 compliance* below.
 
 ## Repository Structure
 
