@@ -171,6 +171,31 @@ SIM_DEBUG=1 make run-s5-<test>
 
 Never run a simulation twice in a row just to get different output — set the debug flags before the first run.
 
+## Subagent Models
+
+The main conversation (brainstorming, plan writing, orchestration) runs on the session model — never downgrade it.
+
+When dispatching subagents, always set the `model` parameter on the Agent call:
+
+- Implementation / execution subagents (task implementers, test writers, fix-up agents): `model: "sonnet"`.
+- Exploration and search subagents (Explore, codebase lookups): `model: "sonnet"`.
+- Code-review, spec-review, and plan-review subagents: omit the `model` parameter so they inherit the main-session model.
+
+Do not set `CLAUDE_CODE_SUBAGENT_MODEL` in settings — it would override the per-dispatch routing above.
+
+## Development Loop
+
+Stage implementation and debug follow this loop:
+
+1. **Brainstorm → spec → plan** (superpowers:brainstorming, vlad:spec-review against the master design spec, superpowers:writing-plans at full-runnable-code depth). Stop for user review after the spec and after the plan.
+2. **Execute with superpowers:subagent-driven-development**: fresh implementer subagent per task (sonnet, per Subagent Models above), task briefs extracted to files, TDD with *observed* fail-then-pass evidence quoted in a per-task report file.
+3. **Independent review after every task** (main-session model): spec compliance AND code quality, with the reviewer given the brief, the report, and the full diff as files. Findings enter scoped fix rounds (fix → scoped re-review), never silent discards; minors go to the ledger.
+4. **Ledger everything** in `.superpowers/sdd/<plan>/progress.md`: completions, fix rounds, deferred minors, carry-overs between tasks, and user decisions. The ledger survives context loss; trust it and `git log` over recollection.
+5. **Synthesis gates**: for any stage with Fmax or resource goals, re-synthesize after RTL-touching tasks. On a timing miss: analyze failing-path classes first, try zero-RTL directive escalation before RTL changes, and make every RTL timing fix behavior-identical and sim-gated.
+6. **Final whole-branch review** (most capable model) with the ledger's deferred-minors list for merge triage; ONE fix wave + one scoped re-review.
+7. **Hardware last**: the full sim regression, ACT4, and `make ci-local` must be green before any FPGA or GLS run, and every hardware scenario must already have an equivalent simulation twin at the same scale (same program, iteration, and loop counts). Run the stage-transition gates (GLS) before tagging a stage complete.
+8. **Update the checked-in documentation as part of closing the work** — a change is not done until the docs that describe it are true again (see Documentation Upkeep below). This is a closing step, not an optional follow-up.
+
 ## Worktrees
 
 Agent worktrees under `.claude/worktrees/` must be removed once the task is complete. Do not leave stale worktrees behind.
@@ -187,22 +212,19 @@ git worktree remove .claude/worktrees/<name>
 
 If the worktree has changes that should be discarded, use `--force`.
 
-## Waveforms
+## Diagrams
 
-Use WaveDrom for all timing diagrams in documentation. Embed diagrams as fenced
-code blocks with the `wavedrom` language tag — they render on GitHub and in most
-documentation tools without any extra setup:
+Two diagram tools, chosen by kind:
 
-````markdown
-```wavedrom
-{ "signal": [
-  { "name": "clk", "wave": "P..." },
-  { "name": "req", "wave": "0100" }
-]}
-```
-````
+- **Block diagrams, FSMs, dataflow**: inline Mermaid fenced code blocks
+  (` ```mermaid `) directly in the markdown — GitHub renders them natively,
+  no build step. Do not add pre-rendered SVGs or ASCII art for these.
+- **Timing/waveform diagrams**: WaveDrom JSON sources in
+  `docs/diagrams/src/wf-*.json`, rendered to SVG via `make -C docs/diagrams`
+  and embedded as images. Mermaid has no timing-diagram type, so waveforms
+  stay on this pipeline.
 
-Do not use ASCII art timing diagrams.
+Do not use ASCII art diagrams of either kind.
 
 ## Documentation Upkeep
 

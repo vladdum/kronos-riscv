@@ -4,7 +4,20 @@
 
 kronos-riscv is a 5-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. Instructions flow through Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). The IF stage includes an alignment unit that handles variable-width compressed instructions and a bimodal branch predictor that speculatively redirects fetch before branch resolution. The EX stage contains the 64-bit ALU, a multi-cycle 64-bit multiply/divide unit, branch resolution logic, and the CSR unit. The MEM stage drives an AXI4 load/store unit supporting atomic operations (LR/SC, AMO) and floating-point loads/stores. A separate FPU with six pipelined units handles the F and D extensions; the FPU uses a scoreboard rather than the integer forwarding network for hazard management. Hazard and forwarding control modules sit outside the pipeline stages and manage stalls, flushes, and operand forwarding.
 
-![Pipeline overview](diagrams/svg/top-level.svg)
+```mermaid
+flowchart LR
+    instr_axi{{Instr AXI4}} --> IF
+    IF --> if_id[IF/ID] --> ID --> id_ex[ID/EX] --> EX --> ex_mem[EX/MEM] --> MEM --> mem_wb[MEM/WB] --> WB
+    MEM --> data_axi{{Data AXI4}}
+    irq{{IRQ}} -. trap .-> EX
+    EX -. redirect .-> IF
+    mem_wb -. "fwd (EX/MEM, MEM/WB)" .-> EX
+    WB -. "wb / bypass" .-> ID
+    ctrl["Control<br>(hazard + forward)"] -.-> if_id & id_ex & ex_mem & mem_wb
+    EX -. dispatch .-> fpu["FPU<br>(6 units + scoreboard)"]
+    fpu -.-> regfile_fp["regfile_fp<br>32×64b FP"]
+    WB -. "FP WB (FLW/FLD)" .-> regfile_fp
+```
 
 The five pipeline registers — IF/ID, ID/EX, EX/MEM, MEM/WB — carry decoded instruction state across stages. Each register has an `en` enable and a `flush` (clear-to-NOP) control driven by `kronos_hazard`. Operand forwarding is handled by `kronos_forward`, which selects between the register-file read value, the EX/MEM result, and the MEM/WB result. FP operand hazards are managed by `kronos_fpu_scoreboard` rather than the integer forwarding network.
 
@@ -90,7 +103,23 @@ Smaller storage stays in flops or LUTRAM — iTLB/dTLB CAMs (8 entries each), br
 
 The fetch FSM has two states: **FETCH_IDLE** and **FETCH_WAIT_R**.
 
-![Fetch FSM](diagrams/svg/if-fetch-fsm.svg)
+```mermaid
+stateDiagram-v2
+    [*] --> FETCH_IDLE : rst_ni deasserted
+    FETCH_IDLE --> FETCH_WAIT_R : ar_valid & ar_ready
+    FETCH_WAIT_R --> FETCH_IDLE : r_valid
+    note right of FETCH_IDLE
+        ar_valid = align_needs_fetch
+        r_ready = 0
+    end note
+    note right of FETCH_WAIT_R
+        ar_valid = 0
+        r_ready = 1
+        rdata → kronos_align
+    end note
+```
+
+`instr_fetch_stall = ~align_instr_valid` — the PC is frozen until `r_valid`; in the alignment unit's BUFFERED state `align_needs_fetch` is 0, so no re-fetch is issued.
 
 In FETCH_IDLE the FSM asserts `arvalid` when a new fetch is needed (`align_needs_fetch` is high). It transitions to FETCH_WAIT_R on the same cycle that `arready` is seen, then waits for `rvalid`. When `rvalid` arrives, the 32-bit word is handed to the alignment unit and the FSM returns to FETCH_IDLE, immediately issuing the next fetch if `align_needs_fetch` is still asserted.
 
@@ -102,7 +131,33 @@ In FETCH_IDLE the FSM asserts `arvalid` when a new fetch is needed (`align_needs
 
 RVC instructions are 16 bits wide; RVI instructions are 32 bits wide. Both arrive from memory as 32-bit aligned words, so the alignment unit must extract instructions of varying width from a fixed-width stream.
 
-![Alignment unit states](diagrams/svg/if-align-states.svg)
+```mermaid
+stateDiagram-v2
+    [*] --> NORMAL : reset / flush (pc_offset=0)
+    NORMAL : NORMAL — buf_valid = 0
+    BUFFERED : BUFFERED — buf_valid = 1
+    NEED_UPPER : NEED_UPPER — buf holds lower 16b of 32b instr
+    SKIP_LOWER : SKIP_LOWER — post-flush halfword-align
+    NORMAL --> BUFFERED : rvalid & rdata[1:0] ≠ 11 (16b at lower half)
+    BUFFERED --> NORMAL : buf[1:0] ≠ 11 (emit buf as 16b)
+    BUFFERED --> NEED_UPPER : buf[1:0] == 11 (spanning 32b)
+    NEED_UPPER --> BUFFERED : rvalid (combine halves)
+    NORMAL --> SKIP_LOWER : flush & pc_offset=1
+    BUFFERED --> SKIP_LOWER : flush & pc_offset=1
+    NEED_UPPER --> SKIP_LOWER : flush & pc_offset=1
+    SKIP_LOWER --> BUFFERED : rvalid (buffer upper)
+```
+
+Per-state outputs:
+
+| State | `instr_valid` | `is_16b` | `needs_fetch` |
+|---|---|---|---|
+| NORMAL | `rvalid` | `rdata[1:0] ≠ 11` | 1 |
+| BUFFERED | 1 (if 16b) | 1 | 0 |
+| NEED_UPPER | `rvalid` | 0 | 1 |
+| SKIP_LOWER | 0 | — | 1 |
+
+SKIP_LOWER is the post-flush halfword-align state: after a redirect to a halfword-aligned PC, `rdata[15:0]` is skipped and the upper half buffered; `instr_valid = 0` for that cycle.
 
 The alignment unit operates as a three-state FSM:
 
@@ -127,9 +182,28 @@ Decompression is purely combinational. `kronos_decompress` accepts a 16-bit or 3
 The branch predictor combines a **bimodal pattern history table (PHT)** with a **branch target buffer (BTB)**.
 
 - **PHT:** 64 entries indexed by `PC[7:2]`, each holding a 2-bit saturating counter (00 = strongly not-taken, 11 = strongly taken).
-- **BTB:** 16 entries indexed by `PC[5:2]`, each holding a valid bit and a 64-bit target address. Direct-mapped; no tag, so aliasing is possible.
+- **BTB:** 16 entries indexed by `PC[5:2]`, each holding a valid bit, a tag (`PC[31:6]`), and a 64-bit target address. Direct-mapped; a hit requires `valid && tag match`.
 
-![Branch predictor internals](diagrams/svg/if-bpred.svg)
+```mermaid
+flowchart LR
+    subgraph lookup["Lookup path (combinational)"]
+        pc_in["PC input (pc_q)"] --> idx["Index logic<br>bimodal_idx = pc[7:2]<br>btb_idx = pc[5:2]<br>tag = pc[31:6]"]
+        idx --> bimodal["Bimodal table<br>64×2b sat-counters<br>pred_taken = counter[1]"]
+        idx --> btb["BTB — 16 entries<br>(valid | tag | target)<br>hit = valid & tag match"]
+        bimodal --> hit["Hit & prediction<br>pred_taken = btb_hit & counter[1]<br>pred_target = btb[idx].target"]
+        btb --> hit
+        hit --> pred_out["Prediction outputs<br>pred_taken_o / pred_target_o"]
+    end
+    subgraph update["Update path (registered)"]
+        upd_in["EX update<br>upd_valid / pc / taken / target / is_jal"] --> upd_idx["Update index logic<br>update_idx = upd_pc[7:2]<br>update_btb_idx = upd_pc[5:2]"]
+        upd_idx --> cupd["Counter update<br>taken → incr (max 11)<br>not-taken → decr (min 00)<br>(JAL skips counter)"]
+        upd_idx --> bupd["BTB update<br>taken/JAL → write entry<br>not-taken & cnt=00 → invalidate"]
+    end
+    cupd -.-> bimodal
+    bupd -.-> btb
+```
+
+Reset initializes every counter to `2'b01` (weakly not-taken) and clears the BTB.
 
 **Lookup (combinational):** On every cycle the current PC indexes both structures simultaneously. If the BTB entry is valid and the PHT counter MSB is `1`, the predictor asserts `pred_taken` and drives `pred_target` from the BTB. The IF stage uses `pred_target` as the next PC instead of `PC+2/4`.
 
@@ -145,7 +219,18 @@ The branch predictor combines a **bimodal pattern history table (PHT)** with a *
 
 ## 5. ID Stage — Decode and Register Read
 
-![ID stage block diagram](diagrams/svg/id-stage.svg)
+```mermaid
+flowchart LR
+    if_id[IF/ID] --> decode["kronos_decode<br>RV64IMAFDC decoder<br>(control + imm + rm)"]
+    if_id --> regfile["kronos_regfile<br>32×64b async read<br>(rs1, rs2)"]
+    if_id --> regfile_fp["kronos_regfile_fp<br>32×64b FP async read<br>(fs1, fs2, fs3)"]
+    decode --> regfile
+    decode --> id_ex[ID/EX]
+    regfile --> bypass["WB → ID bypass mux<br>sel = wb_wen & (rd == rs)"]
+    bypass --> id_ex
+    wb["WB stage<br>wb_result / wb_wen / rd"] -.-> bypass
+    regfile_fp -. fp ops .-> id_ex
+```
 
 `kronos_decode` is a purely combinational decoder. It accepts a 32-bit instruction word (already decompressed) and produces the `decoded_instr_t` struct carried by all downstream pipeline registers. It handles the full RV64IMAFDC instruction set. For FP instructions with `rm = 3'b111` (dynamic rounding mode), the rounding mode field is resolved at decode by reading `fcsr_frm_i`; the resolved rounding mode is carried in the pipeline register so that FPU units do not need CSR access.
 
@@ -159,7 +244,25 @@ A WB→ID bypass mux sits between the integer register file read ports and the I
 
 ## 6. EX Stage — Execute, Branch Resolution, Muldiv
 
-![EX stage block diagram](diagrams/svg/ex-stage.svg)
+```mermaid
+flowchart LR
+    id_ex[ID/EX] --> fwdA["FWD mux A<br>FWD_NONE | EXMEM | MEMWB"]
+    id_ex --> fwdB["FWD mux B<br>FWD_NONE | EXMEM | MEMWB"]
+    exmem_fwd["EX/MEM fwd<br>alu_result / rd"] -.-> fwdA & fwdB
+    memwb_fwd["MEM/WB fwd<br>wb_result / rd"] -.-> fwdA & fwdB
+    fwdA --> opA["Operand A mux<br>use_pc ? PC : fwd_rs1"] --> alu["kronos_alu"]
+    fwdB --> opB["Operand B mux<br>use_imm ? imm : fwd_rs2"] --> muldiv["kronos_muldiv<br>multi-cycle MUL/DIV"]
+    alu --> resmux["Result mux<br>is_muldiv ? muldiv_res : alu_res"]
+    muldiv --> resmux
+    alu --> branch["Branch resolution<br>cmp_lt / eq + mispredict check"]
+    trap["Trap priority<br>irq > illegal > ecall > ebreak"] --> csr["kronos_csr<br>traps / MRET / IRQ"]
+    resmux --> ex_mem[EX/MEM]
+    branch --> ex_mem
+    csr --> ex_mem
+    branch -. redirect .-> pc["IF PC register<br>(redirect target)"]
+```
+
+Both execution units receive both operands; the A/B cross-connections are omitted for clarity.
 
 **Forwarding muxes.** Two muxes, one for each source operand (RS1, RS2), select among three sources controlled by `fwd_rs1_sel` / `fwd_rs2_sel` from `kronos_forward`:
 
@@ -177,7 +280,29 @@ W-suffix instructions (ADDW, SUBW, SLLW, SRLW, SRAW, and their immediate variant
 
 In addition to `result_o`, the ALU exposes `adder_out_o` (raw adder output, before word-op extend), `cmp_lt_o` (signed-or-unsigned LT per `op_i`), and `eq_o` (`adder_out == 0`, valid whenever the adder is in subtract mode). The branch unit consumes `cmp_lt_o` and `eq_o` directly instead of duplicating the comparator on the same operands.
 
-![ALU structural decomposition](diagrams/svg/alu-structural.svg)
+```mermaid
+flowchart LR
+    a_i["a_i [63:0]"] --> premask
+    b_i["b_i [63:0]"] --> premask
+    op_i["op_i (alu_op_e)"] -.-> premask
+    word_op_i -.-> premask
+    word_op_i -.-> postext
+    premask["Word-op pre-mask<br>a_pre, b_pre, shamt<br>(SRA → sign-ext low 32;<br>else zero-ext low 32)"]
+    premask --> adder["Adder<br>a + (b ⊕ is_sub) + is_sub<br>(is_sub on SUB / SLT / SLTU)"]
+    premask --> cmp
+    premask --> shifter["Shifter<br>right-only barrel<br>SLL via bit-reverse<br>SRA: sign-fill from a_pre[63]"]
+    premask --> logicb["Logic<br>AND / OR / XOR / PASSB"]
+    adder == adder_out ==> cmp["Comparator (from adder)<br>LT = sign of (a−b), overflow-corrected<br>EQ = (adder_out == 0)"]
+    adder --> opmux["Op-class final mux<br>is_alu_shift → shift_out<br>is_alu_slt → {0…0, cmp_lt}<br>is_alu_logic → logic_out<br>ADD / SUB → adder_out<br>default → 0"]
+    cmp --> opmux
+    shifter --> opmux
+    logicb --> opmux
+    opmux --> postext["Post-extend<br>word_op_i ?<br>sext32→64 : passthrough"]
+    postext --> result_o["result_o [63:0]"]
+    adder --> adder_out_o["adder_out_o [63:0]"]
+    cmp --> cmp_lt_o
+    cmp --> eq_o
+```
 
 **Muldiv.** `kronos_muldiv` implements all eight M-extension operations for both 32-bit and 64-bit operands. MUL operations require **2 cycles**. DIV and REM operations require **34 cycles** (32-bit) or **66 cycles** (64-bit) in the normal case. Division by zero and `INT_MIN / -1` are detected early and produce a result in **2 cycles**. While `muldiv_stall` is asserted the entire pipeline freezes.
 
@@ -233,7 +358,25 @@ All units implement IEEE 754-2019 rounding and exception flag generation. The re
 
 ## 8. MEM Stage — AXI4 Load/Store Unit
 
-![LSU FSM](diagrams/svg/mem-lsu-fsm.svg)
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE : rst_ni
+    IDLE : IDLE — capture addr / wdata
+    LOAD_ADDR : LOAD_ADDR — ar_valid = 1
+    LOAD_DATA : LOAD_DATA — r_ready = 1
+    LOAD_DONE : LOAD_DONE — valid_o = 1, latch rdata
+    STORE_SEND : STORE_SEND — aw_valid = 1, w_valid = 1
+    STORE_RESP : STORE_RESP — b_ready = 1
+    STORE_DONE : STORE_DONE — valid_o = 1
+    IDLE --> LOAD_ADDR : req & ~is_store
+    LOAD_ADDR --> LOAD_DATA : ar_ready
+    LOAD_DATA --> LOAD_DONE : r_valid
+    LOAD_DONE --> IDLE : always
+    IDLE --> STORE_SEND : req & is_store
+    STORE_SEND --> STORE_RESP : aw_ready & w_ready
+    STORE_RESP --> STORE_DONE : b_valid
+    STORE_DONE --> IDLE : always
+```
 
 The LSU is a seven-state FSM that drives the AXI4 data channel. All memory operations go through it; non-memory instructions pass through in one cycle with `mem_stall_o` deasserted.
 
@@ -263,7 +406,19 @@ In STORE_SEND the FSM asserts both `awvalid` and `wvalid` simultaneously. Two fl
 
 ## 9. WB Stage — Writeback
 
-![Writeback mux](diagrams/svg/wb-mux.svg)
+```mermaid
+flowchart LR
+    subgraph memwb["MEM/WB register"]
+        alu_src["alu_result (WB_ALU)"]
+        lsu_src["lsu_rdata (WB_MEM)"]
+        pc_src["pc+2 | pc+4 (WB_PC4)"]
+        csr_src["csr_rdata (WB_CSR)"]
+    end
+    alu_src & lsu_src & pc_src & csr_src --> wbmux["WB mux<br>sel = wb_sel[1:0]"]
+    wbmux ==> rf["kronos_regfile write port<br>(rd ← wb_result)"]
+    wbmux -.-> byp["WB → ID bypass<br>(id_stage bypass_mux)"]
+    wbmux -.-> fwd["EX forwarding<br>FWD_MEMWB path"]
+```
 
 The integer writeback mux selects the value written to `kronos_regfile` based on `wb_sel` from the decoded instruction:
 
@@ -282,7 +437,28 @@ FP writeback is a separate path from `kronos_fpu_top` directly to `kronos_regfil
 
 ## 10. Hazard and Forwarding Control
 
-![Hazard and forwarding control plane](diagrams/svg/hazard-forward.svg)
+```mermaid
+flowchart TB
+    forward["kronos_forward<br>fwd_rs1_sel / fwd_rs2_sel<br>(FWD_NONE | EXMEM | MEMWB)"]
+    subgraph pipe["Pipeline registers"]
+        direction LR
+        PC --- if_id[IF/ID] --- id_ex[ID/EX] --- ex_mem[EX/MEM] --- mem_wb[MEM/WB]
+    end
+    id_ex -. "rs1, rs2" .-> forward
+    ex_mem -. "rd, wen" .-> forward
+    mem_wb -. "rd, wen" .-> forward
+    forward -. "fwd selects" .-> id_ex
+    hazard["kronos_hazard<br>stall / flush logic<br>out: pc_en, if_id/id_ex flush,<br>ex_mem/mem_wb enables"]
+    if_id -. "rs1, rs2" .-> hazard
+    id_ex -. "rd, is_load, valid" .-> hazard
+    hazard -. "en / flush" .-> PC & if_id & id_ex & ex_mem & mem_wb
+    stall_or["combined_stall =<br>mem_stall | muldiv_stall | instr_fetch_stall | fpu_stall"]
+    mem_stall["mem_stall<br>(LSU busy)"] --> stall_or
+    muldiv_stall["muldiv_stall<br>(MUL/DIV busy)"] --> stall_or
+    fetch_stall["instr_fetch_stall<br>(align empty)"] --> stall_or
+    fpu_stall["fpu_stall<br>(FPU scoreboard)"] --> stall_or
+    stall_or --> hazard
+```
 
 Two modules sit outside the pipeline stages and control all integer pipeline flow:
 
