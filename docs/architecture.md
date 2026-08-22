@@ -409,52 +409,207 @@ All units implement IEEE 754-2019 rounding and exception flag generation. The re
 `kronos_fpu_iter` wraps both cores in a 3-state FSM: `IDLE → RUNNING → DONE`. While in RUNNING, `iter_busy_o` is asserted; the scoreboard's `busy_o` propagates this, freezing new dispatch (and, via `fpu_stall`, the whole integer pipeline) for the duration. Both cores handle special cases (±0, ±Inf, NaN, subnormals) combinationally before the iteration begins and short-circuit to DONE when applicable. The iterative unit reserves its writeback slot late (`late_req_i`/`late_latency_i = 1`, at ROUND time) since its total latency isn't known at dispatch.
 
 ---
-
-## 8. MEM Stage — AXI4 Load/Store Unit
+## 9. MEM1 / MEM1B / MEM2 — Address Translation and the Data Cache
 
 ```mermaid
-stateDiagram-v2
-    [*] --> IDLE : rst_ni
-    IDLE : IDLE — capture addr / wdata
-    LOAD_ADDR : LOAD_ADDR — ar_valid = 1
-    LOAD_DATA : LOAD_DATA — r_ready = 1
-    LOAD_DONE : LOAD_DONE — valid_o = 1, latch rdata
-    STORE_SEND : STORE_SEND — aw_valid = 1, w_valid = 1
-    STORE_RESP : STORE_RESP — b_ready = 1
-    STORE_DONE : STORE_DONE — valid_o = 1
-    IDLE --> LOAD_ADDR : req & ~is_store
-    LOAD_ADDR --> LOAD_DATA : ar_ready
-    LOAD_DATA --> LOAD_DONE : r_valid
-    LOAD_DONE --> IDLE : always
-    IDLE --> STORE_SEND : req & is_store
-    STORE_SEND --> STORE_RESP : aw_ready & w_ready
-    STORE_RESP --> STORE_DONE : b_valid
-    STORE_DONE --> IDLE : always
+%% depicts: stage7e
+flowchart LR
+    ex2_mem1[ex2_mem1_q] --> MEM1["MEM1 — dTLB-S0 CAM launch<br>(VA = ex2_mem1_q.alu_result)"]
+    MEM1 --> mem1_mem1b[mem1_mem1b_q]
+    mem1_mem1b --> MEM1B["MEM1B — dTLB-S1 live outputs<br>(PA / perm_fail / hit / A-zero / D-zero)<br>+ dcache BRAM tag+data pre-launch (VIPT)"]
+    MEM1B -. "dtlb_miss (live)" .-> ptw["kronos_ptw — shared walker"]
+    ptw -. refill .-> tlbs["u_itlb / u_dtlb"]
+    ptw <-. "priority port (8B reads)" .-> dcache["kronos_dcache"]
+    MEM1B --> mem1_mem2[mem1_mem2_q]
+    mem1_mem2 --> MEM2["MEM2 — PMP data + PMA NC check<br>+ dcache S1 hit/way-mux<br>+ kronos_lsu adapter + AMO/LR-SC<br>+ trap / target-redirect formation"]
+    dcache -. "ram_rdata (registered)" .-> MEM2
+    MEM2 --> mem_wb[mem_wb_q]
+    MEM2 -. AXI4 .-> data_axi{{Data AXI4}}
 ```
 
-> **Era note:** stage ≤5e. Since stage 5f the LSU is a thin (~175-line)
-> adapter and **`kronos_dcache` owns the AXI master, AMO arithmetic, and
-> LR/SC reservation** (see the Data-cache section below); stage 7c further
-> split MEM into MEM1/MEM2 (dTLB/PMP separated from the dcache hit path).
-> Retained as stage-5 reference until the [#108](https://github.com/vladdum/kronos-riscv/issues/108) refresh.
+Address translation and the data cache occupy three of the pipeline's nine
+stages. That split is not original design — it is the result of three
+successive Fmax fixes (7c, 7d, 7e) chasing the same class of failure: a
+combinational chain that starts at a `mem1_mem2_q`/`mem1_mem1b_q` flop,
+crosses two or three module boundaries (dTLB → PMP → PTW → dcache → bypass
+mux), and lands on another pipeline register's D-pin with no register in
+between.
 
-The LSU is a seven-state FSM that drives the AXI4 data channel. All memory operations go through it; non-memory instructions pass through in one cycle with `mem_stall_o` deasserted.
+### 9.1 Why three stages
 
-**Load path:** `IDLE → LOAD_ADDR → LOAD_DATA → LOAD_DONE`
+- **7c** split the original single MEM stage into MEM1/MEM2 to separate the
+  dTLB lookup, the data-side PMP check, and the dcache BRAM-read launch from
+  the dcache hit-detect/load-data-extension path — the chain that motivated
+  it was `mem_wb_q.alu_result → muldiv → bpred → dtlb → dcache LUTRAM →
+  CSR/PMP → dtlb → ptw → dcache LUTRAM → …`.
+- **7d** found that even with MEM1/MEM2 separated, the PMP comparator itself
+  was not flop-to-flop: `mem1_mem2_q.dtlb_pa → 16-region PMP CARRY8 chain
+  (~12 levels) → pmp_data_fault (fanout 60) → CSR/PTW/dcache state → …  →
+  rr_ex1_q.rs2_data` measured 35 logic levels and −5.088 ns WNS. The fix was
+  structural: insert **MEM1B** as a dedicated stage whose only job is to run
+  PMP/PMA/page-fault production on a registered PA and register the result
+  before any consumer reads it.
+- **7e** then found the *dTLB's own internals* were the next bottleneck —
+  `ex2_mem1_q.alu_result → u_dtlb CAM+PLRU+hit_idx → live dTLB outputs
+  (fanout 60+) → u_ptw FSM → u_dcache → bypass mux → rr_ex1_q.rs1_data`
+  measured 19 logic levels / 7.374 ns. `kronos_tlb` itself was split
+  internally into an S0 (CAM compare) / S1 (priority-encode + PA
+  reconstruct + permission check) pair (§9.2, §11.4), and the dTLB's live
+  `dtlb_miss`/`dtlb_a_zero`/`dtlb_d_zero`/`dtlb_hit` outputs were registered
+  at the MEM1→MEM1B edge so the PTW kicks off from a flop rather than a live
+  TLB-internal wire. Because the dTLB-S1 encode now takes the whole MEM1B
+  cycle, PMP itself **moved a second time** — from MEM1B (7d's location) to
+  MEM2 — since the translated PA isn't ready until MEM1B's end; MEM2 now
+  runs the PMP comparator and the dcache tag-compare in parallel, with PMP
+  the longer of the two paths.
 
-The FSM asserts `arvalid` in LOAD_ADDR and waits for `arready`. It then waits for `rvalid` in LOAD_DATA. On `rvalid`, the returned data is sign- or zero-extended according to `funct3` and latched. The FSM moves to LOAD_DONE and drops `mem_stall_o` for one cycle to let the pipeline advance.
+`kronos_tlb` is a single physical module instantiated identically for both
+`u_itlb` and `u_dtlb` (§11.4); only the dTLB instance's internal S0→S1 flop
+happens to coincide with the top-level MEM1→MEM1B pipeline register, which
+is why `mem1_mem2_reg_t`'s `dtlb_pa`/`dtlb_perm_fail`/etc. fields are
+captured one edge *later* than `mem1_mem1b_reg_t` — the type comment in
+`kronos_pkg.sv` calls this out explicitly ("dTLB outputs … are flop outputs
+of the dTLB-S1 stage at the MEM1B edge, so they live in `mem1_mem2_reg_t`
+… rather than `mem1_mem1b_reg_t`").
 
-**Store path:** `IDLE → STORE_SEND → STORE_RESP → STORE_DONE`
+### 9.2 dTLB lookup and the PA hand-off
 
-In STORE_SEND the FSM asserts both `awvalid` and `wvalid` simultaneously. Two flags — `aw_acked_q` and `w_acked_q` — track which handshakes have completed. The FSM remains in STORE_SEND until both are acknowledged, then moves to STORE_RESP to wait for `bvalid`. STORE_DONE releases `mem_stall_o`.
+- **MEM1.** The dTLB-S0 lookup is issued combinationally against
+  `ex2_mem1_q.alu_result` (the VA). A VA mux (`dtlb_lookup_va`) substitutes
+  the held `mem1_mem1b_q.alu_result` instead whenever the MEM1B occupant is
+  frozen on a live `dtlb_miss` — otherwise the PTW's own re-walk lookup
+  would be silently overwritten by the next instruction advancing into MEM1
+  the same cycle.
+- **MEM1B.** The dTLB-S1 outputs (`lookup_hit_o`, `lookup_pa_o`,
+  `lookup_perm_fail_o`, `lookup_a_zero_o`, `lookup_d_zero_o`) are live flop
+  outputs of the dTLB's own internal register. `dtlb_miss` is computed here
+  — `translate_data & mem1_mem1b_q.valid & (is_load|is_store|is_amo) &
+  ((~hit & ~perm_fail) | a_zero | d_zero)` — and both freezes the pipeline
+  (the MEM1B dTLB-miss arm of `combined_stall_no_muldiv`, §7) and kicks off
+  `kronos_ptw`. A/D-bit re-walks fold into the same signal: an entry that
+  hits with `A=0`, or a store that hits an entry with `D=0`, triggers a PTW
+  walk that performs an atomic LR/SC on the leaf PTE to set the missing
+  bit(s) (Svadu) before refilling the dTLB.
+- **MEM1B→MEM2 edge.** `dtlb_pa`, `dtlb_perm_fail`, `dtlb_miss`,
+  `dtlb_a_zero`, `dtlb_d_zero`, `dtlb_hit`, and `dtlb_was_hit` all capture
+  into `mem1_mem2_q` for MEM2's PMP/PMA/page-fault checks and for the
+  LSU's PA input.
 
-**LR/SC (Stage 4):** LR follows the load path and sets a reservation register with the physical address. The reservation is cleared by any store from this hart. SC checks the reservation: on match, performs the store path and writes `0` to `rd`; on miss, skips the store and writes `1` to `rd`. Both outcomes release `mem_stall_o` via STORE_DONE.
+See §11.4 for the dTLB/iTLB's internal S0/S1 mechanics, replacement policy,
+and refill/flush behaviour, and §11.3 for the PTW that services a miss.
 
-**AMO (Stage 4):** Atomic RMW uses the full sequence: `IDLE → LOAD_ADDR → LOAD_DATA → LOAD_DONE → STORE_SEND → STORE_RESP → STORE_DONE`. The RMW operation (SWAP, ADD, AND, OR, XOR, MIN, MAX, signed/unsigned variants) is applied combinationally between LOAD_DONE and STORE_SEND. The original loaded value is forwarded to the integer WB mux as the instruction result.
+### 9.3 Data-side PMP and PMA
 
-**FP loads/stores (Stage 5):** FLW and FLD follow the standard load path; on completion, the data is routed to the FP writeback interface. FLW applies NaN-boxing (upper 32 bits forced to `32'hFFFF_FFFF`). FSW and FSD follow the standard store path, sourcing write data from `kronos_regfile_fp` rather than the integer pipeline register.
+`u_pmp_data` is instantiated at MEM2 on `mem1_mem2_q.dtlb_pa`
+(`kronos_top.sv:1254–1273`); §11.2 covers the shared region-matching logic
+(also used by `u_pmp_fetch` on the instruction side). The PMA non-cacheable
+region check (`mem2_addr_uncacheable`, against `MMIO_BASE` =
+`0x4000_0000`–`0x4FFF_FFFF` by default) runs at MEM2 against the same PA;
+an AMO/LR/SC that targets that region raises `mem2_amo_nc_fault` instead of
+issuing a dcache transaction — the cache never sees an NC atomic. Page-fault
+aggregation folds the registered `mem1_mem2_q.dtlb_perm_fail` bit into
+`mem2_load_page_fault` / `mem2_store_page_fault`, keyed on
+`is_load`/`is_store`/`is_amo`. All three (`mem2_pmp_data_fault`,
+`mem2_amo_nc_fault`, `mem2_{load,store}_page_fault`) are live MEM2-cycle
+wires that feed `mem_redirect_d` directly and capture into `mem_wb_q.fault`
+at the MEM2→WB edge — the same bits §6's fault-bit table lists under "MEM2".
 
-**`mem_done_q` latch:** When the pipeline is stalled by an instruction fetch (`instr_fetch_stall`) at the same cycle the LSU would otherwise complete, `mem_done_q` latches the completion event. On the cycle `instr_fetch_stall` clears, `mem_done_q` drives `mem_stall_o` low for one cycle. `lsu_rdata_latch` holds load data stable across this window.
+### 9.4 Data Cache — `kronos_dcache`
+
+| Parameter | Value |
+|---|---|
+| Total size | 16 KB |
+| Associativity | 4-way set-associative |
+| Line size | 64 bytes (8 × 64-bit beats) |
+| Sets | 64 |
+| Replacement | Tree-PLRU (3 bits/set) |
+| Write policy | Write-back, write-allocate |
+| Refill | Critical-word-first via 8-beat AXI4 WRAP burst |
+| Eviction | If victim dirty: 8-beat AXI4 INCR write burst |
+| Hit latency | 1 cycle (registered), thanks to the MEM1B pre-launch |
+| Non-cacheable bypass | Single-beat AXI4 (`DC_NC_AR/R/AW/W/B`) for the PMA region |
+
+Per-way data and tag arrays are 4× `kronos_ram` each (§3), addressed
+virtually-indexed/physically-tagged: the set+offset index (12 bits) is
+within the page-offset width, so the index is alias-free under any
+translation. The BRAM read is **pre-launched from MEM1B**
+(`dcache_early_req_valid`/`dcache_early_addr`, keyed on
+`mem1_mem1b_q.alu_result`) so `ram_rdata` is already a registered
+MEM1B→MEM2 flop output by the time MEM2 needs it — this is what gives the
+cache its 1-cycle hit latency inside a 3-stage MEM without adding a BRAM
+read cycle of its own; the LSU's same-cycle hit response depends on it.
+
+A dedicated **PTW priority port** (`ptw_req_valid_i` et al.) preempts the
+LSU's own request whenever the walker needs a PTE fetch or an A/D-bit
+LR/SC — single-port arbitration is safe because the pipeline is already
+stalled on the very miss that triggered the walk, so the LSU never
+contends with an in-flight walk.
+
+**Two RAW-bypass tiers.** Xilinx SDP BRAM (`WRITE_MODE_B = "no_change"`, §3)
+leaves `ram_rdata` stale on a same-address write+read collision within one
+cycle. A 1-deep bypass (`prev_write_*`) covers the ordinary
+store-hit→load and last-refill-beat→load cases. A **second**, 2-deep tier
+(`prev2_write_*`) exists specifically because of the MEM1/MEM2 split: a
+load's MEM1B pre-launch fires the same cycle an older store's MEM2 write
+commits, so by the time the load reaches MEM2 the 1-deep tier has already
+been overwritten by the next instruction's own pre-launch (the SD→NOP→LD
+case).
+
+**FENCE.I.** Detected from raw instruction bits (`opcode == 7'b0001111`,
+`funct3 == 3'b001`) at EX2 (`ex1_ex2_q`, not EX1 — using EX1 would sample
+`dcache_dirty_pending` one cycle too early and silently fire the flush
+without draining dirty lines). While the D-cache holds a dirty line,
+`fence_i_active_q` stalls the pipeline until `kronos_dcache` walks every
+set/way (`DC_FLUSH_SCAN`→`DC_FLUSH_AW`→`DC_FLUSH_W`), writing back every
+dirty line and invalidating; only then does `fence_i_pulse` fire for one
+cycle to invalidate the icache (§4.1) and redirect fetch to `FENCE.I + 4`.
+
+### 9.5 AMO and LR/SC
+
+All A-extension instructions execute inside `kronos_dcache`; `kronos_lsu`
+only translates `funct5`/size and routes the request
+(`dcache_amo_req_o = is_lr | is_sc | is_amo`). AMO ops — SWAP, ADD, XOR,
+AND, OR, MIN, MAX, MINU, MAXU, both `.W` and `.D` — read the line on a hit,
+compute the new value combinationally, write it back, and return the old
+value as the instruction's `WB_ALU` result; a miss refills first, then
+performs the RMW. LR (`funct5 = 5'b00010`) behaves as a plain load and
+additionally sets a single-pair reservation register
+(`rsrv_valid_q`/`rsrv_addr_q`, full cache-line granularity). SC
+(`funct5 = 5'b00011`) checks the reservation: match+hit writes and returns
+success (`rd = 0`); match+miss write-allocates then writes; no match skips
+the write and returns failure (`rd = 1`). The reservation clears on SC
+(success or fail), an intervening plain store to the *same* cache line, or
+`rsrv_clear_i` (driven by trap entry, `trap_taken_pulse`) — never on a
+plain load or a store to a different line.
+
+### 9.6 `kronos_lsu` — the MEM2 adapter
+
+`kronos_lsu` is a thin (~175-line) translation layer between the MEM2
+pipeline register and `kronos_dcache`; it owns none of the AXI master, AMO
+arithmetic, or reservation state (all in the cache, §9.4–9.5). Its jobs:
+
+| Responsibility | Mechanism |
+|---|---|
+| `funct3` → dcache size | `LB/SB→0, LH/SH→1, LW/SW/LWU→2, LD/SD→3` (unsigned loads share their signed counterpart's size) |
+| Load sign/zero-extension | dcache always returns zero-extended sub-doubleword data; the LSU applies signed/unsigned extension from `funct3` combinationally |
+| SC result | `rd = {63'b0, ~sc_success}` — 0 on success, 1 on failure, overriding the normal load-data mux |
+| FP load NaN-boxing | FLW upper 32 bits forced to `32'hFFFF_FFFF`; FLD passes the full 64 bits |
+| Fault suppression | `pmp_fault_i \| amo_nc_fault_i \| bus_err_fault_i \| tlb_miss_i` all suppress `dcache_req_o`/`dcache_amo_req_o` **and** force `mem_stall_o` low, so a trap is taken the same cycle the fault is seen instead of after a wasted (or hung) transaction |
+
+`funct3_i`/`fp_dest_req_i` are read combinationally rather than from a
+registered copy — the pipeline is already held (`mem_stall_o`) for the
+full duration of a transaction, so a registered copy would introduce a
+one-cycle lag that breaks cache-hit sign extension.
+
+### 9.7 `mem_done_q` — stall-bridging latch
+
+`kronos_dcache`/`kronos_lsu` can complete (`lsu_valid`) on a cycle the
+pipeline cannot advance `mem_wb_q` — e.g. an instruction-fetch stall
+elsewhere in the pipe. `mem_done_q` latches that completion
+(`lsu_rdata_latch` holds the load data, `amo_write_latch` holds the AMO
+retire-trace bit) so `mem_wb_q` picks up the correct values whichever
+cycle it actually advances (`mem_wb_en`), rather than requiring the dcache
+transaction and the register advance to land on the same cycle.
 
 ![AXI4 load transaction waveform](diagrams/svg/wf-axi-load.svg)
 
@@ -464,86 +619,50 @@ In STORE_SEND the FSM asserts both `awvalid` and `wvalid` simultaneously. Two fl
 
 ---
 
-## 9. WB Stage — Writeback
+## 10. WB Stage — Writeback
 
 ```mermaid
+%% depicts: stage7e
 flowchart LR
-    subgraph memwb["MEM/WB register"]
+    subgraph memwb["mem_wb_q"]
         alu_src["alu_result (WB_ALU)"]
         lsu_src["lsu_rdata (WB_MEM)"]
-        pc_src["pc+2 | pc+4 (WB_PC4)"]
+        pc_src["pc4 (WB_PC4)"]
         csr_src["csr_rdata (WB_CSR)"]
     end
-    alu_src & lsu_src & pc_src & csr_src --> wbmux["WB mux<br>sel = wb_sel[1:0]"]
+    alu_src & lsu_src & pc_src & csr_src --> wbmux["WB mux<br>sel = mem_wb_q.dec.wb_sel"]
     wbmux ==> rf["kronos_regfile write port<br>(rd ← wb_result)"]
-    wbmux -.-> byp["WB → ID bypass<br>(id_stage bypass_mux)"]
-    wbmux -.-> fwd["EX forwarding<br>FWD_MEMWB path"]
+    wbmux -.-> byp["WB → RR bypass (§5)"]
+    wbmux -.-> fwd["FWD_MEMWB (§5)"]
+    csr_commit["kronos_csr retire_i<br>(mem_wb_q.dec.is_csr &<br>~mem_wb_fault_any_trap)"] -.-> memwb
 ```
 
-The integer writeback mux selects the value written to `kronos_regfile` based on `wb_sel` from the decoded instruction:
+The integer writeback mux selects the value written to `kronos_regfile`
+based on `mem_wb_q.dec.wb_sel`:
 
 | `wb_sel` | Source | Used by |
 |----------|--------|---------|
-| `WB_ALU` | `alu_result` from EX/MEM | ALU, muldiv, AUIPC, LUI, AMO (loaded value) |
-| `WB_MEM` | `lsu_rdata` from LSU | Integer load instructions (LB, LH, LW, LD, LBU, LHU, LWU) |
-| `WB_PC4` | `pc + 2/4` from EX/MEM | JAL, JALR (link address) |
-| `WB_CSR` | `csr_rdata` from EX/MEM | CSR read-modify-write instructions |
+| `WB_ALU` | `mem_wb_q.alu_result` | ALU, muldiv, AUIPC, LUI, AMO (returned old value) |
+| `WB_MEM` | `mem_wb_q.lsu_rdata` | Integer loads (LB, LH, LW, LD, LBU, LHU, LWU); SC's 0/1 result rides this path too |
+| `WB_PC4` | `mem_wb_q.pc4` (`pc + 2` or `+4`, from `is_16b`) | JAL, JALR (link address) |
+| `WB_CSR` | `mem_wb_q.csr_rdata` | CSR read-modify-write instructions |
 
-The selected value is written when `rd_wen` is asserted and `rd ≠ x0`. It is also driven to the WB→ID bypass mux and exposed as `FWD_MEMWB` to the EX forwarding muxes.
+The selected value is written when `rd_wen` is asserted and `rd ≠ x0`; the
+same value drives the WB→RR bypass (§5's integer bypass) and is exposed as
+`FWD_MEMWB` to the six-slot forwarding mux (§5).
 
-FP writeback is a separate path from `kronos_fpu_top` directly to `kronos_regfile_fp`. It does not go through `wb_sel`. FLW/FLD results are routed through the FPU's writeback interface so that NaN-boxing is applied uniformly.
+**FP writeback** is a separate path from `kronos_fpu_top` directly to
+`kronos_regfile_fp` (§8); it never touches `wb_sel`. FLW/FLD results are
+routed through the FPU's writeback interface so NaN-boxing is applied
+uniformly with FP arithmetic results.
 
----
-
-## 10. Hazard and Forwarding Control
-
-```mermaid
-flowchart TB
-    forward["kronos_forward<br>fwd_rs1_sel / fwd_rs2_sel<br>(FWD_NONE | EXMEM | MEMWB)"]
-    subgraph pipe["Pipeline registers"]
-        direction LR
-        PC --- if_id[IF/ID] --- id_ex[ID/EX] --- ex_mem[EX/MEM] --- mem_wb[MEM/WB]
-    end
-    id_ex -. "rs1, rs2" .-> forward
-    ex_mem -. "rd, wen" .-> forward
-    mem_wb -. "rd, wen" .-> forward
-    forward -. "fwd selects" .-> id_ex
-    hazard["kronos_hazard<br>stall / flush logic<br>out: pc_en, if_id/id_ex flush,<br>ex_mem/mem_wb enables"]
-    if_id -. "rs1, rs2" .-> hazard
-    id_ex -. "rd, is_load, valid" .-> hazard
-    hazard -. "en / flush" .-> PC & if_id & id_ex & ex_mem & mem_wb
-    stall_or["combined_stall =<br>mem_stall | muldiv_stall | instr_fetch_stall | fpu_stall"]
-    mem_stall["mem_stall<br>(LSU busy)"] --> stall_or
-    muldiv_stall["muldiv_stall<br>(MUL/DIV busy)"] --> stall_or
-    fetch_stall["instr_fetch_stall<br>(align empty)"] --> stall_or
-    fpu_stall["fpu_stall<br>(FPU scoreboard)"] --> stall_or
-    stall_or --> hazard
-```
-
-Two modules sit outside the pipeline stages and control all integer pipeline flow:
-
-**`kronos_forward`** computes `fwd_rs1_sel` and `fwd_rs2_sel` combinationally from the instruction addresses in EX, MEM, and WB. Priority: EX/MEM result is preferred over MEM/WB result when both would forward to the same operand. `FWD_EXMEM` is suppressed for loads; all forwarding is suppressed for `rd = x0`.
-
-**`kronos_hazard`** drives the `en` and `flush` control inputs to all five pipeline registers. It implements a strict priority ordering:
-
-```
-combined_stall = mem_stall | muldiv_stall | instr_fetch_stall | fpu_stall
-```
-
-| Priority | Condition | Effect |
-|----------|-----------|--------|
-| 1 (highest) | `combined_stall` | Freeze entire pipeline (all `en=0`, no flushes) |
-| 2 | Load-use hazard | Stall IF, ID, EX; insert bubble into EX/MEM |
-| 3 | Misprediction / trap / MRET | Flush IF/ID and ID/EX; redirect PC |
-| 4 (lowest) | None | Normal advance (all `en=1`, no flushes) |
-
-`fpu_stall` is asserted by `kronos_fpu_scoreboard` when a WAW conflict is detected on dispatch, a WB port collision requires holding a unit's result, or `iter_busy_o` is high. During `fpu_stall` the integer pipeline is frozen exactly as during `mem_stall`; the scoreboard continues its own internal state transitions independently.
-
-FP hazards are managed entirely by the scoreboard. `kronos_forward` and `kronos_hazard` have no visibility into FP register state. FP loads (FLW, FLD) do not generate load-use hazards to the integer pipeline.
-
-**Load-use detection.** A load-use hazard exists when the instruction in EX is a valid integer load (`id_ex_valid & id_ex_is_load`), its destination is not `x0`, and the instruction in ID reads the same register as RS1 or RS2. The hazard inserts one bubble: IF and ID are held, the ID/EX register is flushed to NOP.
-
-![Load-use hazard waveform](diagrams/svg/wf-load-use-hazard.svg)
+**CSR retire.** `mem_wb_q` is also where a CSR write architecturally
+commits: `kronos_csr.retire_i` fires on `mem_wb_q.valid &
+mem_wb_q.dec.is_csr & ~mem_wb_fault_any_trap & ~combined_stall`, using the
+registered EX1-cycle address/new-value snapshot carried in `mem_wb_q`
+(`retire_addr_i`/`retire_csr_new_val_i`). Trap entry (`trap_i`), MRET
+(`mret_i`), and SRET (`sret_i`) commit from the same `mem_wb_q.fault` bits
+at this edge (§11.1, §6's fault-bit table).
 
 ---
 
@@ -582,265 +701,399 @@ Cycles measured from the instruction entering EX to its result being available i
 
 ---
 
-## 12. CSR Register Map
+## 12. Privilege and Address Translation
 
-> **Era note:** M-mode view through stage 5. Stages 6a–6b added S/U modes,
-> trap delegation (`medeleg`/`mideleg`), the S-mode CSR file, PMP
-> (`pmpcfg*`/`pmpaddr*`), and `satp` with Sv39/Sv48 translation — see the
-> 6a/6b design specs until the [#108](https://github.com/vladdum/kronos-riscv/issues/108) refresh lands them here.
+kronos-riscv implements all three privilege levels (M/S/U), trap
+delegation, 16-region PMP, and Sv39/Sv48 paged virtual memory with a
+hardware page-table walker and split iTLB/dTLB. All of it lives in
+`kronos_csr` (privilege state, delegation, PMP CSRs, `satp`),
+`kronos_pmp` (region matching, instantiated twice), `kronos_tlb`
+(instantiated twice), and `kronos_ptw` (a single shared walker).
 
-| Address | Name | Description |
-|---------|------|-------------|
-| `0x001` | FFLAGS | FP accrued exception flags: NX (bit 0), UF (bit 1), OF (bit 2), DZ (bit 3), NV (bit 4). Aliased from FCSR[4:0]. |
-| `0x002` | FRM | FP rounding mode: RNE=0, RTZ=1, RDN=2, RUP=3, RMM=4. Aliased from FCSR[7:5]. |
-| `0x003` | FCSR | Combined FFLAGS (bits 4:0) + FRM (bits 7:5). |
-| `0x300` | MSTATUS | MIE (bit 3): global interrupt enable. MPIE (bit 7): saved MIE on trap entry. FS[1:0] (bits 14:13): FP state — Off=0, Initial=1, Clean=2, Dirty=3. |
-| `0x301` | MISA | ISA. MXL=2 (64-bit). Extensions: I, M, A, F, D, C. |
-| `0x304` | MIE | Interrupt enable mask. MTIE (bit 7) enables the machine timer interrupt. |
-| `0x305` | MTVEC | Trap vector base address. Direct mode (`[1:0] = 2'b00`). |
-| `0x340` | MSCRATCH | Scratch register for M-mode software. |
-| `0x341` | MEPC | PC of the trapping instruction; restored by MRET. |
-| `0x342` | MCAUSE | Trap cause. Bit 63 = 1 for interrupts, 0 for exceptions (64-bit register). |
-| `0x344` | MIP | Interrupt pending (read-only). MTIP (bit 7). |
+### 12.1 Privilege levels, `mstatus`, and delegation
 
-### MCAUSE Codes
+Reset starts the hart in M-mode (`priv_q = PRIV_M`). `mstatus` carries the
+interrupt-enable and privilege-transition state for both M and S: `MIE`
+(bit 3) / `MPIE` (7) / `MPP` (12:11) for M-mode traps, `SIE` (1) / `SPIE`
+(5) / `SPP` (8) for S-mode traps, plus `FS` (14:13, §6/§8), `MPRV` (17),
+`SUM` (18), `MXR` (19), `TVM` (20), `TW` (21), and `TSR` (22). `SSTATUS`,
+`SIE`, and `SIP` are not separate registers — they are read/write-masked
+*windows* into `mstatus`/`mie`/`mip` (`SSTATUS_RW_MASK`,
+`SMODE_IRQ_MASK` = the SSIE/STIE/SEIE/SSIP/STIP/SEIP bits), so a write
+through either name updates the same underlying state.
+
+**Delegation.** `medeleg` (WARL, bits 0–15 except bit 11 — M-mode ECALL
+can never delegate to itself — hardwired 0) and `mideleg` (WARL, only the
+SSIE/STIE/SEIE bits writable) route a trap to S-mode instead of M-mode
+when `priv_q != PRIV_M` **and** the cause's bit is set in the matching
+delegation register; M-mode traps never delegate. Two copies of the same
+decision exist for timing reasons: `delegate_to_s` gates the actual
+architectural state update at retire (`trap_i`), while `delegate_to_s_ex`
+is an EX1-cycle predictive twin that feeds `kronos_csr.trap_vector_o` —
+without it, the EX1-cycle read of `trap_vector_o` (which forms the
+redirect target one stage before `trap_i` pulses, mirroring the
+`ex1_trap_cause` predictive path of §6) would always see `mtvec` even for
+a trap that is about to delegate to `stvec`.
+
+**Interrupt priority.** MEI > MSI > MTI > SEI > SSI > STI (priv-spec
+§3.1.9 order). M-mode sources are gated by `mstatus.MIE`; S-mode sources
+additionally require `priv_q != PRIV_M`. `irq_cause_o` mirrors the
+asserted bit's standard cause index (MEI=11, MSI=3, MTI=7, SEI=9, SSI=1,
+STI=5) and feeds `trap_cause_i` with bit 63 set.
+
+**Privilege transitions.** MRET is legal only from M-mode; it restores
+`MIE` from `MPIE`, restores `priv_q` from `MPP`, resets `MPP` to U, and
+clears `MPRV` if the restored privilege is below M. SRET is legal from
+M-mode (any) or S-mode when `TSR = 0` (U-mode SRET is always illegal); it
+restores `SIE` from `SPIE`, restores `priv_q` from `SPP`, forces `SPP` to
+U, and unconditionally clears `MPRV` (SRET never returns to M). WFI traps
+to illegal-instruction when `mstatus.TW = 1` and `priv_q != PRIV_M` (no
+real sleep — WFI is a NOP in M-mode otherwise). `SATP` access from S-mode
+is gated by `mstatus.TVM`.
+
+### 12.2 PMP — `kronos_pmp`
+
+Sixteen regions (`N = 16`), instantiated twice — `u_pmp_fetch` on the
+instruction-fetch address (icache S0 VA, §4.1) and `u_pmp_data` on the
+translated data PA at MEM2 (§9.3). Each region is `{pmpcfg[7:0],
+pmpaddr[53:0]}` (`pmpaddr` = PA[55:2]); `A` supports **OFF** (`00`) and
+**NAPOT** (`11`) plus **NA4** (`10`, an exact 4-byte match using the same
+NAPOT-mask machinery with a zero mask) — TOR (`01`) is not implemented and
+collapses to OFF on write (WARL, enforced in `kronos_csr`'s PMP write
+logic).
+
+- **Match.** Both ends of the access (`addr` and `addr + size − 1`) must
+  fall in the same region for a NAPOT/NA4 match; a multi-byte access that
+  straddles a region boundary matches neither side and is therefore
+  rejected. Priority is lowest-index-wins (`kronos_pmp` priority-encodes
+  `active[i]` from index 0 up).
+- **Permission.** `op_allowed = (fetch & X) | (load & R) | (store & W)`
+  from the matched region's bits. `L` (lock) removes M-mode's default
+  bypass for that region (`m_bypass = (priv == M) & ~L`) and, in
+  `kronos_csr`, makes the region's cfg *and* addr WARL-frozen against
+  further CSR writes.
+- **No match.** M-mode passes by default; S/U-mode faults by default
+  (`no_match_pass = (priv == M)`).
+
+### 12.3 Page-table walker — `kronos_ptw`
+
+A single walker shared by both TLBs (dTLB misses take priority over iTLB
+misses — the walker is single-ported). It walks `satp.PPN` through 3
+levels (Sv39) or 4 levels (Sv48, selected by `satp.MODE`), issuing 8-byte
+reads through the dcache's PTW priority port (§9.4).
+
+| State | Action |
+|---|---|
+| `S_IDLE` | Arbitrate dTLB-miss (priority) vs iTLB-miss; latch VA/level/walk-addr on accept |
+| `S_FETCH_REQ` / `S_FETCH_WAIT` | Issue the PTE read; on return, classify: invalid/misconfigured → fault; leaf → check alignment/permission then A/D; pointer → descend a level (or fault at level 0) |
+| `S_AD_LR_REQ` / `S_AD_LR_WAIT` | Load-Reserved on the leaf PTE (re-check validity after the LR) |
+| `S_AD_SC_REQ` / `S_AD_SC_WAIT` | Store-Conditional writing the PTE with `A` set (and `D` if the access is a store) — atomic per Svadu; an SC failure (a racing writer) drops back to `S_IDLE` to retry on the next miss rather than refilling a stale entry |
+| `S_REFILL` | Drive `itlb_refill_valid_o` / `dtlb_refill_valid_o` (mutually exclusive, keyed by which TLB missed) with the leaf's PPN/size/perm/A/D/global/ASID |
+| `S_PAGE_FAULT` | One-cycle `page_fault_o` pulse with `page_fault_cause_o` (instruction/load/store page fault per `page_fault_which_o`) and `page_fault_tval_o` (the faulting VA) |
+
+A leaf PTE that already has `A=1` (and `D=1` for a store) skips the
+LR/SC pair entirely and goes straight to `S_REFILL`. Page faults raised
+here for a pointer-PTE failure fold into `load_page_fault`/
+`store_page_fault` at the MEM1→MEM1B edge (§6's fault-bit table); a fault
+from the dTLB's own registered permission check (an entry that hit the
+TLB but failed the S1 perm test) instead folds in as a live MEM2 producer
+(§9.3) — the two arms cover, respectively, "the PTE itself is bad" and
+"the cached translation says this access isn't allowed."
+
+### 12.4 TLBs — `kronos_tlb`
+
+One module, instantiated twice (`u_itlb`, `u_dtlb`, both `N = 8`):
+fully-associative CAM, per-entry VPN + page size (4K/2M/1G/512G) + PPN +
+`{U,X,W,R}` permission + `A`/`D` + global + ASID, tree-PLRU replacement
+(8-entry 3-bit tree; a round-robin fallback exists in the RTL for `N != 8`
+but is unused — both instances are 8-entry).
+
+**Internal S0/S1 split (7e, §9.1).** S0 is combinational: per-entry CAM
+compare against VPN+ASID+global, priority-encode the lowest hitting
+index, and a snapshot mux that reads the winning entry's fields. A
+snapshot register captures the hit vector, hit index, and the selected
+entry's fields plus lookup context (privilege, load/store/fetch, SUM,
+MXR) at the S0→S1 edge. S1 is combinational on that snapshot: hit
+OR-reduce, PA reconstruction keyed on the registered page size, the full
+permission check (fetch-needs-X; load-needs-R-or-(X-and-MXR);
+store-needs-W; an S-mode access to a `U`-marked page faults unless
+fetching or `SUM` is set; a U-mode access to a non-`U` page always
+faults), and A/D-zero detection. All five lookup outputs
+(`lookup_hit_o`, `lookup_pa_o`, `lookup_perm_fail_o`, `lookup_a_zero_o`,
+`lookup_d_zero_o`) are S1 flop outputs — the split costs one extra cycle
+of TLB latency to break the CAM→encode→PA→perm combinational chain that
+was the 7e critical path (§9.1).
+
+**Refill.** Before installing a new entry, the TLB invalidates any
+existing entry that already matches the incoming VPN/ASID at any page
+size — without this, an A/D-driven re-walk (§9.2) would install its
+updated entry at a fresh (possibly higher) index while a stale
+`A=1,D=0` entry at a lower index kept answering lookups, producing an
+infinite miss loop.
+
+**`sfence.vma`.** A one-cycle pulse from `kronos_csr` (decode-driven,
+forwarded to both TLBs), with priority over a same-cycle refill.
+`rs1 = x0` sweeps every VA; `rs2 = x0` sweeps every ASID. Global entries
+are protected from an ASID-scoped flush (`rs2 != x0`) but are still swept
+by an all-ASID flush (`rs2 = x0`), matching the priv-spec requirement
+that global pages be flushed by a `sfence.vma x0, x0` (or an explicit
+`rs2 = x0` form).
+
+```mermaid
+%% depicts: stage7e
+flowchart TB
+    itlb_miss["itlb_miss"] --> arb["kronos_ptw arbiter<br>(dtlb miss &gt; itlb miss)"]
+    dtlb_miss["dtlb_miss (live, MEM1B)"] --> arb
+    arb --> fetch["S_FETCH_REQ / S_FETCH_WAIT<br>level: Sv48 3→0 / Sv39 2→0"]
+    fetch -- "pointer PTE" --> fetch
+    fetch -- "leaf, A=1 (D=1 if store)" --> refill["S_REFILL"]
+    fetch -- "leaf, needs A and/or D" --> ad["S_AD_LR_REQ/WAIT →<br>S_AD_SC_REQ/WAIT<br>(atomic PTE A/D set)"]
+    ad -- "SC ok" --> refill
+    ad -- "SC fail (raced)" --> idle["S_IDLE (retried on next miss)"]
+    fetch -- "invalid / reserved / misaligned / perm fail" --> pf["S_PAGE_FAULT"]
+    refill -. "refill_*" .-> tlbs["u_itlb / u_dtlb"]
+    pf -. "cause + tval + which" .-> fold["fault fold-in (§6)<br>MEM1→MEM1B"]
+    dcache_port["dcache PTW priority port<br>(8B reads, preempts LSU)"] -.-> fetch
+    ad -.-> dcache_port
+```
+
+---
+
+## 13. CSR Register Map
+
+`kronos_csr`'s `read_csr` function implements 74 distinct CSR addresses
+across 67 case arms (some arms serve two aliased addresses, e.g. `mcycle`
+at both `0xB00` and `0xC00`); the table below groups them into 36 rows,
+collapsing address ranges and aliases for readability while keeping every
+address traceable to the RTL. "Access" reflects the minimum-privilege
+encoding in `addr[9:8]` (`kronos_csr`'s `required_priv`/`min_priv` check)
+plus whether the retire-commit `case` in `kronos_csr`'s sequential block
+has a write arm for that address (no arm ⇒ RO, writes silently dropped).
+
+| Address | Name | Access | Notes |
+|---------|------|--------|-------|
+| `0x001` | `fflags` | U-mode RW | Accrued exception flags: NX(0)/UF(1)/OF(2)/DZ(3)/NV(4). Aliases `fcsr[4:0]`; also sticky-OR'd from the FPU on every FP-arithmetic retire. |
+| `0x002` | `frm` | U-mode RW | Rounding mode: RNE=0, RTZ=1, RDN=2, RUP=3, RMM=4. Aliases `fcsr[7:5]`. |
+| `0x003` | `fcsr` | U-mode RW | `{frm[2:0], fflags[4:0]}`. |
+| `0x100` | `sstatus` | S-mode RW | Window into `mstatus` (`SSTATUS_RW_MASK`); SD (bit 63) derived from `FS == 11`. |
+| `0x104` | `sie` | S-mode RW | Window into `mie`, masked to SSIE/STIE/SEIE. |
+| `0x105` | `stvec` | S-mode RW | Direct mode only (`[1:0]` hardwired 00). |
+| `0x106` | `scounteren` | S-mode RW | Gates U-mode access to `0xC00`–`0xC1F`, alongside `mcounteren`. |
+| `0x10A` | `senvcfg` | S-mode RW | WARL = 0; writes accepted but ignored (no fields implemented). |
+| `0x140` | `sscratch` | S-mode RW | |
+| `0x141` | `sepc` | S-mode RW | Bit 0 hardwired 0. |
+| `0x142` | `scause` | S-mode RW | |
+| `0x143` | `stval` | S-mode RW | |
+| `0x144` | `sip` | S-mode RW | Window into `mip`/`mip_sw`; only SSIP is S-mode-writable. |
+| `0x180` | `satp` | S-mode RW | WARL on MODE — only Bare/Sv39/Sv48 accepted, illegal MODE drops the whole write. Access gated by `mstatus.TVM` from S-mode (§12.1). |
+| `0x300` | `mstatus` | M-mode RW | §12.1. |
+| `0x301` | `misa` | M-mode RO | MXL=2 (64-bit); extensions I,M,A,F,D,C. |
+| `0x302` | `medeleg` | M-mode RW | WARL, bits 0–15 except bit 11 (§12.1). |
+| `0x303` | `mideleg` | M-mode RW | WARL, SSIE/STIE/SEIE only (§12.1). |
+| `0x304` | `mie` | M-mode RW | |
+| `0x305` | `mtvec` | M-mode RW | Direct mode only. |
+| `0x306` | `mcounteren` | M-mode RW | Gates S/U-mode access to `0xC00`–`0xC1F`. |
+| `0x320` | `mcountinhibit` | M-mode RW | Bit *X* gates increment of counter *X* (0=mcycle, 2=minstret, 3–10=mhpmcounter3–10). |
+| `0x323`–`0x32A` | `mhpmevent3..10` | M-mode RW | Event-select; only bits `[7:0]` meaningful (§14). |
+| `0x340` | `mscratch` | M-mode RW | |
+| `0x341` | `mepc` | M-mode RW | |
+| `0x342` | `mcause` | M-mode RW | §13.1 below. |
+| `0x343` | `mtval` | M-mode RW | |
+| `0x344` | `mip` | M-mode RW | Hardware-driven bits OR'd with a `mip_sw` shadow for the SW-writable ones (M-mode: SSIP/STIP/SEIP). |
+| `0x3A0` | `pmpcfg0` | M-mode RW | Regions 0–7. Per-byte WARL: `L=1` freezes that byte and its `pmpaddr`; `A=01` (TOR) collapses to `A=00` (OFF); bits `[6:5]` (WPRI) read 0. |
+| `0x3A2` | `pmpcfg2` | M-mode RW | Regions 8–15, same WARL rules. |
+| `0x3B0`–`0x3BF` | `pmpaddr0..15` | M-mode RW | 54-bit PA[55:2]; write dropped while the region's `L` bit is set. |
+| `0xB00` / `0xC00` | `mcycle` / `cycle` | M-mode RW / U-mode RO | Gated by `mcountinhibit[0]`; U-mode alias additionally gated by `mcounteren`/`scounteren[0]`. |
+| `0xC01` | `time` | U-mode RO | Mirrors `mcycle` (no separate real-time counter). |
+| `0xB02` / `0xC02` | `minstret` / `instret` | M-mode RW / U-mode RO | Increments once per retired instruction, gated by `mcountinhibit[2]`. |
+| `0xB03`–`0xB0A` | `mhpmcounter3..10` | M-mode RW | 8 programmable 64-bit event counters (§14). |
+| `0xC03`–`0xC0A` | `hpmcounter3..10` | U-mode RO | Aliases of the M-mode counters, counter-enable gated. |
+
+### 13.1 MCAUSE Codes
+
+Exception causes (bit 63 = 0), in the priority order §6 already
+establishes (trigger hit > page fault > PMP/AMO-NC fault > D-cache bus
+error > pending interrupt > illegal/CSR-illegal/priv-fail > ECALL > EBREAK):
 
 | Code | Cause |
 |------|-------|
+| `0x0000000000000001` | Instruction access fault (fetch-side PMP) |
 | `0x0000000000000002` | Illegal instruction |
-| `0x0000000000000003` | EBREAK |
+| `0x0000000000000003` | Breakpoint (EBREAK, or an Sdtrig trigger hit) |
+| `0x0000000000000005` | Load access fault (data-side PMP, AMO/LR non-cacheable, or D-cache bus error on a load) |
+| `0x0000000000000007` | Store/AMO access fault (data-side PMP, AMO/SC non-cacheable, or D-cache bus error on a store/AMO) |
+| `0x0000000000000008` | ECALL from U-mode |
+| `0x0000000000000009` | ECALL from S-mode |
 | `0x000000000000000B` | ECALL from M-mode |
-| `0x8000000000000007` | Machine timer interrupt |
+| `0x000000000000000C` | Instruction page fault |
+| `0x000000000000000D` | Load page fault |
+| `0x000000000000000F` | Store/AMO page fault |
+
+Interrupt causes (bit 63 = 1), standard priv-spec indices, delegated per
+`mideleg` (§12.1):
+
+| Code | Cause |
+|------|-------|
+| `0x8000000000000001` | Supervisor software interrupt (SSI) |
+| `0x8000000000000003` | Machine software interrupt (MSI) |
+| `0x8000000000000005` | Supervisor timer interrupt (STI) |
+| `0x8000000000000007` | Machine timer interrupt (MTI) |
+| `0x8000000000000009` | Supervisor external interrupt (SEI) |
+| `0x800000000000000B` | Machine external interrupt (MEI) |
 
 ---
 
-## 13. Performance counters (Zicntr + partial Zihpm)
+## 14. Performance Counters (Zicntr + partial Zihpm)
 
-Stage 5c adds architectural performance counters so subsequent
-microarchitectural changes (caches, MMU, OOO) can be measured
-quantitatively.
+Architectural performance counters let RTL and microarchitectural changes
+be measured quantitatively instead of by feel. `mcycle`/`minstret` are
+spec-compliant read-write Zicntr counters; `mhpmcounter3..10` are
+programmable Zihpm event counters, each independently selecting one of 32
+event-bus lines via its paired `mhpmevent[i][4:0]` (§13's CSR table for
+addresses/access).
 
-**CSR additions** (all 64-bit on RV64):
+**Event bus.** `event_bus` is 32 bits wide (`kronos_top.sv`,
+`logic [31:0] event_bus`), assembled from live pipeline signals and fed to
+`kronos_csr` via `event_bus_i`. Bit positions are named `EVT_*` in
+`rtl/kronos_pkg.sv`:
 
-| Address       | Name                | Access      | Notes                                                |
-|---------------|---------------------|-------------|------------------------------------------------------|
-| 0x320         | `mcountinhibit`     | M-mode RW   | Bit X gates increment of counter X (bit 0=mcycle, 2=minstret, 3..10=mhpmcounter3..10). |
-| 0xB00         | `mcycle`            | M-mode RW   | Was read-only; now spec-compliant.                   |
-| 0xB02         | `minstret`          | M-mode RW   | Was read-only; now spec-compliant.                   |
-| 0xB03–0xB0A   | `mhpmcounter3..10`  | M-mode RW   | 8 programmable 64-bit event counters.                |
-| 0xC03–0xC0A   | `hpmcounter3..10`   | U-mode RO   | Aliases of the M-mode counters.                      |
-| 0x323–0x32A   | `mhpmevent3..10`    | M-mode RW   | Event-select; only bits [7:0] are meaningful.        |
+| ID | `EVT_*` name | Event |
+|----|--------------|-------|
+| `0x00` | — | No event (counter held) |
+| `0x01` | `EVT_BRANCH_RETIRE` | Branch retired |
+| `0x02` | `EVT_BRANCH_MISPREDICT_P` | Branch mispredicted (pulse) — aliases `0x1E` |
+| `0x03` | `EVT_LOAD_RETIRE` | Load retired |
+| `0x04` | `EVT_STORE_RETIRE` | Store retired |
+| `0x05` | `EVT_MEM_STALL` | `mem_stall` asserted |
+| `0x06` | — | Muldiv busy — aliases `0x1B` |
+| `0x07` | — | FPU busy (any unit) — aliases `0x1C` |
+| `0x08` | `EVT_TRAP_TAKEN` | Trap or interrupt taken |
+| `0x09`–`0x0F` | — | Reserved, tied 0 |
+| `0x10` | `EVT_ICACHE_MISS` | I-cache miss |
+| `0x11` | `EVT_DCACHE_MISS` | D-cache miss |
+| `0x12`–`0x13` | — | Reserved, tied 0 |
+| `0x14` | `EVT_LOAD_USE_STALL` | Load-use hazard stall |
+| `0x15` | `EVT_JALR_FWD_STALL` | JALR-forward stall (§7) |
+| `0x16` | `EVT_FP_RAW_STALL` | FP load-use stall |
+| `0x17` | `EVT_FRM_HAZARD_STALL` | FRM/FCSR RAW stall (§7) |
+| `0x18` | `EVT_FP_INFLIGHT_STALL` | `fpu_stall` (§8.1) |
+| `0x19` | `EVT_FENCE_I_DRAIN_STALL` | FENCE.I dirty-line drain (§9.4) |
+| `0x1A` | `EVT_MEM_BUSY_STALL` | LSU or D-cache busy |
+| `0x1B` | `EVT_MULDIV_STALL` | Muldiv busy — same signal as `0x06` |
+| `0x1C` | `EVT_FPU_STALL` | FPU busy — same signal as `0x07` |
+| `0x1D` | `EVT_INSTR_FETCH_STALL` | `instr_fetch_stall` |
+| `0x1E` | `EVT_BRANCH_MISPREDICT` | Branch mispredicted — same signal as `0x02` |
+| `0x1F` | `EVT_EX_REDIRECT` | EX2 direction-redirect asserted |
 
-**Event-ID table** (wired now; reserved IDs documented for later):
+IDs `0x02`/`0x1E`, `0x06`/`0x1B`, and `0x07`/`0x1C` are intentional
+duplicates, not a bug: the low IDs (`0x00`–`0x08`) are the original
+counter set and stay wired for backward compatibility, while `0x10`–`0x1F`
+is a later, more complete stall-cause taxonomy added alongside the icache/
+dcache and hazard-control work — three of its members happen to already
+have a low-ID home. `kronos_top.sv` documents the aliasing explicitly at
+the assignment site.
 
-| ID    | Event                                       |
-|-------|---------------------------------------------|
-| 0x00  | No event (counter held)                     |
-| 0x01  | Branch retired (conditional B-type)         |
-| 0x02  | Branch mispredicted                         |
-| 0x03  | Load retired                                |
-| 0x04  | Store retired                               |
-| 0x05  | AXI memory-stall cycle                      |
-| 0x06  | Muldiv busy cycle                           |
-| 0x07  | FPU busy cycle (any FPU unit busy)          |
-| 0x08  | Trap or interrupt taken                     |
-| 0x10–0x1F | reserved for future I$/D$/TLB miss, ROB full, IQ full, etc. |
+**Pipeline-visibility delay.** CSR reads execute in RR/EX1 (§5, §6), while
+events fire at WB and the counter increment is registered. A `csrr` of a
+counter sees the value flopped at the *previous* posedge — events that
+retire in the same cycle as the read are not yet visible. Software that
+wants an exact post-event count should leave a couple of instructions of
+slack between the event and the read; this matches the standard RISC-V
+perf-counter semantic, and no forwarding path is provided.
 
-The event bus is assembled in `rtl/stage5/kronos_top.sv` from the
-existing pipeline signals (plus three small derivations:
-`bpred_mispredict_pulse`, `fpu_busy_any`, `trap_taken_pulse`) and fed
-into `kronos_csr` via the `event_bus_i [15:0]` input. Per-counter
-increment logic in `kronos_csr` selects the bus line indexed by the
-low 8 bits of `mhpmevent[i]` and is gated by `mcountinhibit[i]`. SW
-writes to a counter on the same cycle as a selected event leave the
-counter at the SW-written value (write wins).
-
-**Pipeline-visibility delay:** CSR reads execute in EX, while events
-fire in WB and the counter increment is registered. A `csrr` of a
-counter sees the value flopped at the *previous* posedge — events
-that retire in the same cycle as the read are not yet visible.
-Software that wants an exact post-event count should leave ~2
-instructions of slack between the event and the read (e.g. the asm
-test in `sw/stage5/test_perf_counters.S` inserts two `nop`s before
-its readback). This matches the standard RISC-V perf-counter
-semantic; no forwarding path is provided.
-
-See `docs/superpowers/specs/2026-04-26-perf-counters-design.md` for
-the full design spec.
+See `docs/superpowers/specs/2026-04-26-perf-counters-design.md` for the
+original design rationale.
 
 ---
 
-### Constrained-random verification (Stage 5d)
+## 15. Constrained-Random Verification
 
-The CRV harness lives at `tools/crv/`.  A Python generator emits random
+The CRV harness lives at `tools/crv/`. A Python generator emits random
 RV64IMAFDC programs across seven scenarios:
 
-| Scenario             | Stresses                                              |
-|----------------------|-------------------------------------------------------|
-| `int_hazards`        | EX/MEM/WB forwarding, load-use, WB→ID bypass          |
-| `muldiv_interleave`  | Multi-cycle stall protocol, muldiv forwarding         |
-| `mem_ordering`       | LSU AXI4 protocol; plain LD/ST sequences (AMOs and LR/SC deferred — see notes) |
-| `fp_arith`           | FPU dispatch, scoreboard, sticky FFLAGS               |
-| `fdiv_fsqrt`         | Iterative FPU late-grant, back-pressure               |
-| `branch_pred`        | Bpred + alignment buffer                              |
-| `traps`              | CSR trap entry/exit, pipeline flush                   |
+| Scenario | Stresses |
+|----------|----------|
+| `int_hazards` | Forwarding across the six-slot bypass network, load-use, WB→RR bypass (§5, §7) |
+| `muldiv_interleave` | Multi-cycle stall protocol, muldiv forwarding |
+| `mem_ordering` | AXI4 protocol through `kronos_dcache`; LD/ST/AMO/LR-SC sequences (§9) |
+| `fp_arith` | FPU dispatch, scoreboard, sticky FFLAGS (§8) |
+| `fdiv_fsqrt` | Iterative FPU late-grant, back-pressure (§8.3) |
+| `branch_pred` | Bpred + predecode/fetch-buffer path (§4) |
+| `traps` | CSR trap entry/exit, delegation, pipeline flush (§6, §12.1) |
 
-Each test compiles via the existing toolchain to a `.hex`, runs on
-Kronos and Sail, and is diffed by `tools/trace_diff.py`.  A
-SystemVerilog covergroup TB (`tb/stage5/tb_crv_cov.sv`) wraps the core
-via the existing `retire_*` outputs and defines 82 bins covering
-instruction class, ALU op × sign, branch type, memory size × alignment,
-AMO type, FP rounding mode, and trap cause.  Coverage is computed via
-manual bit-array tracking (Verilator 5.046's native covergroup support
-is incomplete) and merged through `tools/crv_cov_merge.py`.  Bins random
-can't reach have directed assist tests under `sw/stage5/crv_assists/`.
+Each test compiles via the existing toolchain to a `.hex`, runs on Kronos
+and Sail, and is diffed by `tools/trace_diff.py`. A SystemVerilog
+covergroup TB (`tb/stage5/tb_crv_cov.sv`) wraps the core via the
+`retire_*` outputs and defines 82 bins covering instruction class, ALU
+op × sign, branch type, memory size × alignment, AMO type, FP rounding
+mode, and trap cause. Coverage is computed via manual bit-array tracking
+(Verilator's native covergroup support is incomplete) and merged through
+`tools/crv_cov_merge.py`. Bins random can't reach have directed assist
+tests under `sw/stage5/crv_assists/`.
 
 PR path runs `sim-crv-coverage` (smoke + assists, 100% gate after
-exclusions).  Nightly runs `sim-crv-deep` (50 seeds × 7 scenarios,
-opens an issue on failure).
+exclusions). Nightly runs `sim-crv-deep` (50 seeds × 7 scenarios, opens an
+issue on failure).
 
-Trap entry is surfaced to the coverage predicates via the dedicated
-`retire_trap_taken_o` and `retire_trap_cause_o` outputs added in Stage
-5d; the TB does not rely on `retire_csr_wen` to `mcause` for trap
-detection.
+Trap entry is surfaced to the coverage predicates via dedicated
+`retire_trap_taken_o`/`retire_trap_cause_o` outputs — the TB does not rely
+on `retire_csr_wen` to `mcause` for trap detection. AMO writes surface in
+`retire_mem_wen_o` via a dedicated `is_amo_write` field (`mem_wb_reg_t`,
+§9.5), so AMO/SC coverage is not blocked on a retire-trace gap.
 
 **Known limitations** (tracked as exclusions in
 `tools/crv/coverage_excludes.txt`):
 
-- AMO retire-trace gap: `retire_mem_wen_o` does not assert for the
-  write-back half of an AMO RMW operation.  All 12 AMO-related bins
-  (`cg_instr_class.op_amo`, `cg_amo.*`) are excluded from the gate
-  until the retire bus is extended to flag AMO writes.
-- LR/SC (`cg_amo.lr`, `cg_amo.sc`): the Sail riscv reference model
-  is built with `RsrvNone`, which disables reservation; LR/SC pairs
-  cannot be randomly generated without diverging from Sail.
 - SLT/SLTU result sign (`cg_alu_sign.slt_neg`, `cg_alu_sign.sltu_neg`):
-  these instructions write exactly 0 or 1, so bit63 is always 0 and the
+  these instructions write exactly 0 or 1, so bit 63 is always 0 and the
   `_neg` bins are structurally unreachable.
 - Misalignment traps and unaligned accesses (`cg_trap.ld_misalign`,
   `cg_trap.st_misalign`, `cg_mem.half_odd`, `cg_mem.word_off2`,
   `cg_mem.word_odd`, `cg_mem.double_off4`, `cg_mem.double_off2`,
-  `cg_mem.double_odd`): Stage 5 has no hardware misalignment support;
-  misaligned accesses would trap, and the random-program trap handler
-  only handles ECALL/EBREAK/IRQ.  These bins require a dedicated
-  misalignment handler before they can be exercised.
-- FENCE (`cg_instr_class.op_fence`): `kronos_decode` has no MISC_MEM
-  case; FENCE and FENCE.I are treated as illegal instructions.  This
-  bin is unreachable until FENCE decode support is added.
+  `cg_mem.double_odd`): the core has no hardware misalignment-trap support
+  for ordinary loads/stores (PMP/page faults are the only access-fault
+  paths); these bins require a dedicated misalignment handler before they
+  can be exercised.
+- LR/SC reservation edge cases (`cg_amo.lr_sc_race`): the Sail riscv
+  reference model is built with `RsrvNone`, which disables reservation
+  tracking, so a racing-SC scenario cannot be randomly generated without
+  diverging from Sail.
 
 See `docs/superpowers/specs/2026-04-26-crv-harness-design.md` for the
 full design.
 
-### Instruction cache (Stage 5e)
-
-A 16 KB, 4-way set-associative instruction cache between the fetch unit
-and the AXI4 master.  Replaces the per-instruction fetch FSM that was in
-place through Stage 5d.
-
-**Organization:**
-
-| Parameter        | Value                                               |
-|------------------|-----------------------------------------------------|
-| Total size       | 16 KB                                               |
-| Associativity    | 4-way set-associative                               |
-| Line size        | 64 bytes                                            |
-| Sets             | 64                                                  |
-| Replacement      | Tree-PLRU (3 bits/set)                              |
-| Refill           | Critical-word-first via 8-beat AXI WRAP burst       |
-| Hit latency      | 1 cycle (registered output)                         |
-| Miss latency     | AXI ar→r latency + 1 cycle (CWF bypass)             |
-
-**FENCE.I:** detected from raw instruction bits in `kronos_top.sv`
-(`opcode == 7'b0001111 && funct3 == 3'b001`); not surfaced through the
-decoder (decoder change broke the Zifencei ACT4 baseline; see commit
-`87aac14`).  Asserts `flush_i` for one cycle, clearing all valid bits.
-
-**Performance counter:** I$ miss → event ID `0x10` (the first event in
-the reserved cache/MMU/OOO range from the Stage 5c spec).  Wired through
-`event_bus[16]`; `event_bus` widened from 16 to 32 bits in this stage.
-
-**AXI:** the AXI bus was widened from 32-bit to 64-bit (data + address)
-as part of this work.  All AXI consumers (LSU, top, sim infrastructure)
-were updated.  Single 64-bit beats serve 64-bit LD/SD; 32-bit accesses
-occupy the appropriate 32-bit lane.
-
-See `docs/superpowers/specs/2026-04-26-icache-design.md`.
-
-### Data cache (Stage 5f)
-
-A 16 KB, 4-way set-associative, write-back / write-allocate data cache
-between `kronos_lsu` and the data AXI master.  Same organization as the
-I-cache (Tree-PLRU, 8-beat AXI WRAP refill, CWF bypass) plus the write
-side: per-line dirty bit, byte-strobed store path, dirty-eviction
-writeback FSM (8-beat AXI INCR write burst), AMO read-modify-write
-inside the cache, and a single LR/SC reservation register.
-
-`kronos_lsu` was refactored from a full AXI master (~435 lines with
-embedded AMO RMW + LR/SC) to a thin ~175-line adapter; the cache owns
-the AXI master, AMO arithmetic, and reservation tracking.
-
-| Parameter        | Value                                              |
-|------------------|----------------------------------------------------|
-| Total size       | 16 KB                                              |
-| Associativity    | 4-way                                              |
-| Line size        | 64 bytes / 8 beats × 64-bit                        |
-| Sets             | 64                                                 |
-| Replacement      | Tree-PLRU                                          |
-| Write policy     | Write-back, write-allocate                         |
-| Refill           | Critical-word-first via 8-beat AXI WRAP burst      |
-| Eviction         | If victim dirty: 8-beat AXI INCR write burst       |
-| Hit latency      | 1 cycle (registered)                               |
-
-**AMO + LR/SC.** All A-extension instructions execute inside the cache.
-AMO ops (AMOSWAP / ADD / AND / OR / XOR / MIN / MAX / MINU / MAXU, both
-.W and .D) read the line, compute the new value, write it back, and
-return the old value.  LR sets a single-pair reservation register; SC
-checks the reservation and writes only on match.  The reservation is
-cleared by SC (success or fail), an intervening plain store to the same
-line, trap entry (via `rsrv_clear_i` from `trap_taken_pulse`), or reset.
-
-**Performance counter.** D$ miss → event ID `0x11`, wired through
-`event_bus[17]`.
-
-**Sail diff.** AMO writes now surface in `retire_mem_wen_o` (a new
-`is_amo_write` field in `mem_wb_reg_t`), resolving the Stage 5d gap that
-forced AMOs to be excluded from the CRV `mem_ordering` scenario.  The
-`cg_amo.*` exclusions in `tools/crv/coverage_excludes.txt` were removed
-and AMOs were re-included in random testing.
-
-See `docs/superpowers/specs/2026-04-27-dcache-design.md`.
-
 ---
 
-## Debug — VCD signal groups
+## 16. Debug — VCD Signal Groups
 
-When debugging on a VCD dump in GTKWave/Surfer, the following signal groups
-provide a curated view of pipeline state. All paths are relative to the
-top-level `sim_top.u_top` (or `kronos_top` if dumping from a unit TB).
+When debugging on a VCD dump in GTKWave/Surfer, the following signal
+groups provide a curated view of pipeline state. All paths are relative
+to the top-level `sim_top.u_top` (or `kronos_top` if dumping from a unit
+TB).
 
 ### fetch
 - `pc_q` — current fetch PC
-- `pc_next` — next-cycle PC (committed value)
-- `align_instr` — aligned instruction byte stream
-- `align_instr_valid` — valid alignment unit output
-- `instr_fetch_stall` — alignment unit stalls fetch
+- `s0_pc_q` — icache S0 fetch address (§4.1)
+- `predecode_instr_valid_o` / `predecode_instr_pc_o` — predecode's emitted stream
+- `instr_fetch_stall` — frontend stall into `if_id_q`
 
-### decode
-- `if_id_q.instr` — fetched 32-bit instruction (post-decompression)
-- `if_id_q.pc` — PC of decoded instruction
-- `if_id_q.valid` — decode-stage register valid
+### decode / register-read
+- `if_id_q.instr` / `.pc` / `.valid` — fetched instruction (post-decompression)
+- `id_rr_q.dec` — decoded instruction bundle
+- `id_rr_q.fwd_rs1_sel` / `.fwd_rs2_sel` — precomputed bypass selects (§5)
 
 ### execute
-- `id_ex_q.*` — full EX-stage register (decoded fields, rs1/rs2 data, fwd selects)
-- `ex_redirect` — EX-stage taken-branch / trap / mret redirect
-- `ex_pc_next` — redirect target
-- `combined_stall` — pipeline freeze (any source)
-- `mem_stall` — memory subsystem stall (LSU + dcache + fence.i drain)
+- `rr_ex1_q.*` — full RR/EX1 register (decoded fields, rs1/rs2 data, fwd selects)
+- `ex1_ex2_q.*` — full EX1/EX2 register (ALU/AGU result, branch direction, fault bits)
+- `ex_redirect_q` — EX2 direction-mispredict redirect
+- `combined_stall` — pipeline freeze (any source, §7)
+- `mem_stall` — data-memory-subsystem stall (LSU + dcache + FENCE.I drain)
 
 ### mem
-- `ex_mem_q.*` — full MEM-stage register
-- `lsu_mem_stall` — LSU bus wait
-- `dcache_stall` — D-cache FSM busy
+- `ex2_mem1_q.*` / `mem1_mem1b_q.*` / `mem1_mem2_q.*` — the three MEM-stage registers (§9)
+- `dtlb_hit` / `dtlb_perm_fail` / `dtlb_pa` — live dTLB-S1 outputs (§9.2, §11.4)
+- `pmp_data_fault` / `mem2_amo_nc_fault` — MEM2 fault-producing wires (§9.3)
+- `dcache_stall` — D-cache FSM busy (§9.4)
 
 ### regfile
 - `u_regfile.regs[]` — 32 × 64-bit integer GPRs
@@ -849,49 +1102,47 @@ top-level `sim_top.u_top` (or `kronos_top` if dumping from a unit TB).
 - `u_regfile_fp.we` / `u_regfile_fp.wd` / `u_regfile_fp.wa` — FP write port
 
 ### caches
-- `icache_*` — full I-cache subhierarchy (FSM state, way valid, miss pulse)
-- `dcache_*` — full D-cache subhierarchy
-- `fence_i_active_q` — FENCE.I in-flight (D-cache flush window)
+- `icache_*` — full I-cache subhierarchy (FSM state, way valid, miss pulse, §4.1)
+- `dcache_*` — full D-cache subhierarchy (§9.4)
+- `fence_i_active_q` — FENCE.I in-flight (D-cache dirty-drain window, §9.4)
+
+### privilege / translation
+- `priv_q` — current privilege level
+- `pmpcfg_q[]` / `pmpaddr_q[]` — PMP region state (§12.2)
+- `u_ptw.state_q` — page-table-walker FSM state (§12.3)
 
 ### trap
-- `trap_taken_pulse` — pulses high on the cycle a trap is committed
-- `trap_cause` — current cycle's trap cause (only valid when pulse is high)
-- `mcause` / `mepc` — register state after trap entry
+- `trap_taken_pulse` — pulses high on the cycle a trap commits
+- `mem_wb_q.fault` — full registered fault aggregate at retire (§6)
+- `mcause` / `mepc` / `scause` / `sepc` — register state after trap entry
 
 ### events
-- `event_bus[31:0]` — Zihpm event bus; bit positions documented in `kronos_pkg.sv` `EVT_*` constants
+- `event_bus[31:0]` — Zihpm event bus; bit positions documented in `kronos_pkg.sv` `EVT_*` constants (§14)
 
 ---
 
-## Debug — OoO debug surface (Stage 6 reservation)
+## 17. Debug — OoO Debug Surface (Superseded Reservation)
 
-Stage 5h reserves the following hierarchical paths for the upcoming Stage 6
-(BOOM-style OoO) debug surface. None of the modules listed below exist yet
-in Stage 5g/5h; this is purely a forward-looking convention so sim-side
-inspectors will not need RTL changes when they're introduced.
+`sim/sim_ooo_inspect.cpp` still exists as a reserved-but-empty translation
+unit, and its header comment still describes a Stage 6 BOOM-style
+out-of-order machine (reorder buffer, issue queue, load/store queue,
+register alias table) that was expected to follow the in-order Stage 5
+work. That plan was paused early in Stage 6 (`git log`: "paused for OoO
+rethink") and never resumed — Stage 6 instead became the privilege/MMU
+work this document's §12 describes, and kronos-riscv has stayed a 9-stage
+**in-order** pipeline (§1) since. `rtl/stage7/` contains no `kronos_rob.sv`
+or `kronos_busy.sv`; none of the hierarchical paths below exist in any
+current build:
 
-| Path             | Purpose                                                |
-|------------------|--------------------------------------------------------|
-| `u_top.u_rob.*`  | Reorder buffer — entries, head/tail, retire mask       |
-| `u_top.u_iq.*`   | Issue queue — entries, ready bits, age                 |
-| `u_top.u_lsq.*`  | Load/store queue — entries, age, completion mask       |
-| `u_top.u_rat.*`  | Register alias table — logical → physical mapping      |
+| Path | Purpose (never implemented) |
+|------|------------------------------|
+| `u_top.u_rob.*` | Reorder buffer — entries, head/tail, retire mask |
+| `u_top.u_iq.*` | Issue queue — entries, ready bits, age |
+| `u_top.u_lsq.*` | Load/store queue — entries, age, completion mask |
+| `u_top.u_rat.*` | Register alias table — logical → physical mapping |
 
-A stub file `sim/sim_ooo_inspect.cpp` reserves the namespace
-`kronos_ooo_inspect::` for the dumper entry points that Stage 6 will define.
-
----
-
-## Stage transition gates
-
-A "stage transition gate" is a verification activity that **must** run clean before a stage is tagged complete and merged. Gates are not part of default CI when their cost makes per-PR execution impractical; instead they are run manually before the closing PR is opened, and the result is captured in the PR description as a one-line evidence note.
-
-Current gates:
-
-| Gate | When | How | Evidence |
-|------|------|-----|----------|
-| **GLS-s6** (xsim funcsim + SDF timing-sim on the smoke subset) | Before tagging Stage 6c, 6d, 6e, … complete | `make gls-funcsim-s6 GLS_TEST=<n>` and `make gls-sdf-s6 GLS_TEST=<n>` for at least 4 programs (1 directed + 1 CRV smoke seed + 1 ACT4 priv test + the long integration program) | "GLS-s6 ran clean as of commit <SHA>: 4/4 PASS, max sim runtime <m> min" in PR body |
-
-Why GLS is gated rather than CI'd: GitHub-hosted runners do not have the disk space (~14 GB free) for a Vivado install (~10–15 GB minimum, ~30 GB full). Self-hosted runners with Vivado pre-installed would lift this restriction; until then, GLS is a manual checkpoint.
-
-Stage 5 GLS infrastructure (`gls-funcsim-s5`, `gls-sdf-s5`) operates the same way and predates this section.
+The file is kept only so `sim/` still builds against the namespace it
+reserves (`kronos_ooo_inspect::`); it defines no symbols. If an
+out-of-order redesign is ever picked back up, this section — and the stub
+file — should be rewritten against whatever that design's actual module
+hierarchy turns out to be, not against this abandoned Stage-6 plan.
