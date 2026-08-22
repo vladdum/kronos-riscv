@@ -7,6 +7,16 @@ on:
     branches: [main]
 
 jobs:
+  docs-lint:
+    runs-on: ubuntu-latest
+    name: docs-lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run docs era-lint
+        run: python3 tools/docs_lint.py
+
   sim-units:
     runs-on: ubuntu-latest
     strategy:

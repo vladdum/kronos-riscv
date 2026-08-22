@@ -315,6 +315,8 @@ flowchart LR
 
 ![MUL stall waveform](diagrams/svg/wf-muldiv-stall.svg)
 
+*(era: stage5 — same pre-7a freeze-while-computing waveform generation as above.)*
+
 ![DIV stall waveform](diagrams/svg/wf-div-stall.svg)
 
 **Branch resolution.** EX1 evaluates every branch condition from the ALU's `cmp_lt_o`/`eq_o` — `kronos_decode` drives `alu_op` to `ALU_SLT` (BLT/BGE) or `ALU_SLTU` (BLTU/BGEU, and BEQ/BNE, where any subtract-style op makes `eq_o` valid) — and maps `funct3` to `alu_eq` / `~alu_eq` / `alu_cmp_lt` / `~alu_cmp_lt`. JAL, JALR, and taken branches compute `ex_pc_d` (the redirect target on a direction mispredict) from `rr_ex1_q.pc + imm` or the JALR adder (`fwd_rs1_data + sext(imm)`, bit 0 cleared). The branch predictor's update inputs (§4.4) are driven from this same EX1 state, keyed by `rr_ex1_q.pc`.
@@ -623,7 +625,11 @@ transaction and the register advance to land on the same cycle.
 
 ![AXI4 load transaction waveform](diagrams/svg/wf-axi-load.svg)
 
+*(era: stage3 — same retired direct-AXI4 LSU FSM as the load waveform above.)*
+
 ![AXI4 store transaction waveform](diagrams/svg/wf-axi-store.svg)
+
+*(era: stage5 — the `mem_done_q` latch's role is current, but its register names are pre-7d MEM1/MEM1B/MEM2 split.)*
 
 ![mem_done_q latch scenario](diagrams/svg/wf-mem-done-latch.svg)
 
