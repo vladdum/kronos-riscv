@@ -29,6 +29,7 @@
     { "name": "id_ex_flush",      "wave": "0........." }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage5",
   "head": {
     "text": "Branch Predictor — correct prediction (pred_taken=1, actual_taken=1, same target)",
     "tick": 0

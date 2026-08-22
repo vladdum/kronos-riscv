@@ -19,6 +19,7 @@
       "data": ["rdata"] }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage5",
   "head": {
     "text": "mem_done_q latch — LSU rvalid arrives during instr_fetch_stall",
     "tick": 0

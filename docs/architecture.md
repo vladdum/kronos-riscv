@@ -134,6 +134,8 @@ The cache is structurally split into three stages, each with its own `valid` reg
 
 When the fetch buffer is full, S2 stalls (does not advance, does not kill) and back-pressure propagates to S1 and `s0_ready_o` — ordinary valid/ready flow control, not a shared stall signal with the rest of the pipeline.
 
+*(era: stage3 — the two-state per-instruction fetch FSM this waveform depicts was retired by the icache rewrite in stage 6d–6i; §4.1 above describes the current S0/S1/S2 pipeline.)*
+
 ![AXI4 instruction fetch waveform](diagrams/svg/wf-axi-fetch.svg)
 
 ### 4.2 Fetch Buffer — `kronos_fetch_buffer`
@@ -192,6 +194,8 @@ Reset initializes every counter to `2'b01` (weakly not-taken) and clears the BTB
 **Update (registered):** EX1 sends the resolved direction and target back to the predictor, keyed by `rr_ex1_q.pc` (the branch's own PC, one register earlier than its EX2 fault-aggregation point). The PHT counter increments on taken, decrements on not-taken, saturating at the extremes. A taken outcome writes the BTB with the resolved target; a not-taken outcome where the counter has saturated to `00` invalidates the BTB entry.
 
 **Misprediction detection.** A *direction* mispredict — the predicted taken/not-taken outcome disagrees with EX1's resolved outcome — is detected at EX1/EX2 and forms `ex_redirect` (§6). A *target* mispredict — both sides agree the branch was taken but the predicted target differs from the resolved target — is deferred to MEM2 (`bpred_mispredict_target`, §6), specifically so the JALR target adder and the 32-bit target comparator are removed from the direction-redirect's combinational path.
+
+*(era: stage5 — the predictor structure and prediction logic are unchanged since stage 3, but this waveform's pipeline-register names (`id_ex_q`) predate the 7a EX1/EX2/RR split; see the stage7e-tagged misprediction waveform below for the current register names.)*
 
 ![Correct prediction waveform](diagrams/svg/wf-bpred-correct.svg)
 
@@ -303,7 +307,9 @@ flowchart LR
     cmp --> eq_o
 ```
 
-**Muldiv (`kronos_muldiv`, EX1).** Implements all eight M-extension operations for 32-bit and 64-bit operands. MUL requires **2 cycles**. DIV/REM require **34 cycles** (32-bit) or **66 cycles** (64-bit) in the normal case; division by zero and `INT_MIN / -1` are detected early and resolve in **2 cycles**. `muldiv_stall` freezes the entire pipeline while asserted, but — unlike the older redirect-blind version — the hazard priority table (§7) lets a redirect flush a wrong-path MUL/DIV out from under `muldiv_stall` rather than waiting for it to finish.
+**Muldiv (`kronos_muldiv`, EX1).** Implements all eight M-extension operations for 32-bit and 64-bit operands. MUL takes **5 cycles** dispatch-to-WB and DIV/REM take **29 cycles** (32-bit) or **62 cycles** (64-bit) in the normal case (measured at stage 7e — §11; corrects earlier text here that quoted the muldiv unit's own iteration count, 2/34/66, as if it were the end-to-end pipeline cost — dispatch and writeback add a few cycles either way, same as every other class in §11). Division by zero and `INT_MIN / -1` are detected early and resolve fast, but that fast path was not re-measured this pass. `muldiv_stall` freezes the entire pipeline while asserted, but — unlike the older redirect-blind version — the hazard priority table (§7) lets a redirect flush a wrong-path MUL/DIV out from under `muldiv_stall` rather than waiting for it to finish.
+
+*(era: stage5 — the freeze-while-computing shape and cycle counts these two waveforms illustrate predate the stage-7a EX1/EX2/RR split; register names like `id_ex_q`/`ex_mem_en` are pre-7a. The MUL/DIV latencies now current are the ones just above, measured at stage 7e.)*
 
 ![MUL stall waveform](diagrams/svg/wf-muldiv-stall.svg)
 
@@ -395,18 +401,18 @@ That mechanism is built to let `kronos_fpu_top` accept a new dispatch every cycl
 | fadd | `kronos_fpu_fadd` | 7 cycles | FADD.S, FSUB.S, FADD.D, FSUB.D |
 | fmul | `kronos_fpu_fmul` | 9 cycles | FMUL.S, FMUL.D |
 | fma | `kronos_fpu_fma` | 9 cycles | FMADD.S, FMSUB.S, FNMADD.S, FNMSUB.S, FMADD.D, FMSUB.D, FNMADD.D, FNMSUB.D |
-| iter | `kronos_fpu_iter` | ≤ 29 (S) / ≤ 58 (D) cycles | FDIV.S, FDIV.D, FSQRT.S, FSQRT.D |
+| iter | `kronos_fpu_iter` | 62 (S) / 120 (D) cycles, dispatch-to-WB, measured — see §11 | FDIV.S, FDIV.D, FSQRT.S, FSQRT.D (FSQRT not separately measured; see §8.3) |
 
 All units implement IEEE 754-2019 rounding and exception flag generation. The resolved rounding mode is carried from decode through the pipeline register (`rm_resolved`, resolved against `fcsr_frm` at decode time when the instruction encodes `rm = 3'b111`).
 
 ### 8.3 FDIV/FSQRT — Iterative SRT
 
-`kronos_fpu_fdiv_core` and `kronos_fpu_fsqrt_core` implement radix-2 SRT iterative division and square root. One quotient/root bit is produced per cycle after an initial normalization step.
+`kronos_fpu_fdiv_core` and `kronos_fpu_fsqrt_core` implement radix-2 SRT iterative division and square root. **Corrected while investigating the §11 FDIV re-measurement — previous revisions of this doc said "one bit per cycle" and quoted ≤29(S)/≤58(D) cycles; both were wrong.** Per `kronos_fpu_fdiv_core.sv`'s and `kronos_fpu_fsqrt_core.sv`'s own header comments, each core spends *two* cycles per fractional bit (a CMP phase computing the trial subtraction, then a registered UPD phase committing it) after a one-cycle first bit, so the cycle count is roughly double the iteration count, not equal to it:
 
-- Single precision (23-bit mantissa): ≤ 29 cycles
-- Double precision (52-bit mantissa): ≤ 58 cycles
+- FDIV core: 27 iterations (S) / 56 iterations (D) → 1 + 2×(n−1) = **53 cycles (S) / 111 cycles (D)**, core only.
+- FSQRT core: total = n+26 digits (53 for S, 82 for D) → 2×total+1 = **107 cycles (S) / 165 cycles (D)**, core only (from the core's own "Cycle count: 2\*total+1" comment) — FSQRT is not the same cost as FDIV at the same precision, despite sharing a table row above; it has not been hardware-measured, only derived from this comment.
 
-`kronos_fpu_iter` wraps both cores in a 3-state FSM: `IDLE → RUNNING → DONE`. While in RUNNING, `iter_busy_o` is asserted; the scoreboard's `busy_o` propagates this, freezing new dispatch (and, via `fpu_stall`, the whole integer pipeline) for the duration. Both cores handle special cases (±0, ±Inf, NaN, subnormals) combinationally before the iteration begins and short-circuit to DONE when applicable. The iterative unit reserves its writeback slot late (`late_req_i`/`late_latency_i = 1`, at ROUND time) since its total latency isn't known at dispatch.
+`kronos_fpu_iter` wraps both cores in a 7-state FSM — `IDLE → UNPACK1 → UNPACK2 → ITER → ROUND1 → ROUND2 → PACK → IDLE` — not the 3-state `IDLE → RUNNING → DONE` a previous revision of this doc claimed. `UNPACK1`/`UNPACK2` classify and normalize operands before `ITER` starts; `ROUND1`/`ROUND2`/`PACK` denormalize, round, and hand off the result after the core's `done_o`. `iter_busy_o` is asserted for the full FSM traversal (not just `ITER`); the scoreboard's `busy_o` propagates this, freezing new dispatch (and, via `fpu_stall`, the whole integer pipeline) for the duration. Both cores handle special cases (±0, ±Inf, NaN, subnormals) combinationally before the iteration begins and short-circuit to `PACK` when applicable. The iterative unit reserves its writeback slot late (`late_req_i`/`late_latency_i = 1`, at `ROUND2`) since its total latency isn't known at dispatch. The wrapper's five non-`ITER` states plus EX1 dispatch and WB retire account for the gap between the core-only cycle counts above and the measured end-to-end FDIV numbers in §11 (53→62 for S, 111→120 for D — roughly 8-9 cycles of dispatch/wrapper/retire overhead either way, consistent with the other FPU classes in §11).
 
 ---
 ## 9. MEM1 / MEM1B / MEM2 — Address Translation and the Data Cache
@@ -611,6 +617,8 @@ retire-trace bit) so `mem_wb_q` picks up the correct values whichever
 cycle it actually advances (`mem_wb_en`), rather than requiring the dcache
 transaction and the register advance to land on the same cycle.
 
+*(era: stage3 for the load/store transaction waveforms below — the `LOAD_ADDR`/`LOAD_DATA`/`LOAD_DONE`/`STORE_SEND`/`STORE_RESP` direct-AXI4 LSU FSM they depict was retired when the dcache landed in stage 5c-5h; the current data path is `kronos_dcache` (§9.4). The `mem_done_q` waveform is stage5 — that latch's role is current (this paragraph), but its register names are pre-7d MEM1/MEM1B/MEM2 split.)*
+
 ![AXI4 load transaction waveform](diagrams/svg/wf-axi-load.svg)
 
 ![AXI4 store transaction waveform](diagrams/svg/wf-axi-store.svg)
@@ -668,36 +676,70 @@ at this edge (§11.1, §6's fault-bit table).
 
 ## 11. Timing Table
 
-> **Era note:** stage-5 pipeline depths. The stage 7a–7c splits (EX1/EX2,
-> RR, MEM1/MEM2) re-price branch, load-use, and redirect costs; this table
-> has not been re-measured since. Tracked in [#108](https://github.com/vladdum/kronos-riscv/issues/108).
+Measured at stage 7e, commit `13af6a8`, `sw/stage7/bench_timing` (Verilator,
+`sim/Makefile`'s `run-s7t-%` target — same pipeline/build as the stage-7a/7c
+directed-asm suites). Method: for each instruction class, a 100-iteration
+loop wraps the class in a dependent (or, for the hit/throughput rows,
+independent) chain; `mcycle` is read before and after via `csrr` and the
+delta is reported through the common.S halt idiom. `bench_overhead`
+measures the bare 2-instruction loop tail (`addi`/`bnez`) alone — its total
+(721 cycles) is subtracted from every other bench's total before dividing
+by 100, giving cycles/op. Every bench's loop-closing `bnez` is placed at a
+`.balign 4` boundary: kronos_predecode's "combine span" path (§4.3) costs
+an extra cycle when a 4-byte branch straddles a 4-byte icache fetch word,
+and that one-off address accident is not part of the cost being measured —
+without the alignment fix, otherwise-identical loop bodies disagreed by
+several cycles/op purely from where the linker happened to place them (see
+task-4-report.md for the trace evidence). Loads/stores/AMO hit in the D$
+(the line is touched once, untimed, before the timed region starts).
 
-Cycles measured from the instruction entering EX to its result being available in WB (or to the first valid instruction after a redirect for branches and traps). FPU latencies are measured from dispatch (EX) to writeback.
+Two sanity gates were required to demonstrate a real failure mode before
+being trusted: DIV/REM 64-bit must exceed 32-bit (62 > 29 ✓ — both are
+fixed-iteration dividers in `kronos_muldiv`, so 64-bit doing roughly double
+the work of 32-bit is the expected shape), and a misprediction must exceed
+a correctly-predicted taken branch. The second gate genuinely failed once
+during development — an LFSR-driven "mispredict" bench came in *cheaper*
+than the predictable-branch control (1416 vs. 2897 raw cycles) because the
+two benches' branches weren't actually comparable (a load-use hazard was
+entangled with the branch in one of them) — and was fixed by
+software-pipelining the load a full iteration ahead of its use and driving
+the mispredict case from a sequence that forces the 2-bit bimodal counter
+to flip every time (strict alternation, not an LFSR — see
+`bench_mispredict.S` for the derivation). After the fix: 15 > 12 ✓. Full
+raw numbers, the failing run, and the "what if you forget the overhead
+subtraction" check are in task-4-report.md.
 
-| Instruction class | Cycles |
-|---|:---:|
-| ALU / logic / not-taken branch (predicted correctly) | 1 |
-| Taken branch / JAL / JALR (predicted correctly) | 1 |
-| Mispredicted branch / JAL / JALR | 3 |
-| Load-use (integer load then dependent) | 3 |
-| Integer load (AXI4) | 3 |
-| Integer store (AXI4) | 3 |
-| ECALL / EBREAK / illegal / MRET / interrupt | 3 |
-| MUL / MULH / MULHSU / MULHU (32-bit or 64-bit) | 2 |
-| DIV / REM (32-bit, normal) | 34 |
-| DIV / REM (64-bit, normal) | 66 |
-| DIV / REM (div-by-0 or INT_MIN / −1, any width) | 2 |
-| LR.W / LR.D | 3 |
-| SC.W / SC.D | 3 |
-| AMO (AMOSWAP / AMOADD / …) | 6 |
-| FP load (FLW / FLD, AXI4) | 3 |
-| FP store (FSW / FSD, AXI4) | 3 |
-| FSGNJ / FMIN / FMAX / FCLASS / FCMP / FMV | 1 |
-| FCVT (any variant) | 2 |
-| FADD / FSUB / FMUL (S or D) | 4 |
-| FMADD / FMSUB / FNMADD / FNMSUB (S or D) | 5 |
-| FDIV.S / FSQRT.S | ≤ 29 |
-| FDIV.D / FSQRT.D | ≤ 58 |
+Loads/stores/AMO below are back-to-back, address-independent accesses
+(pipeline throughput, not a forwarded round-trip latency); load-use is the
+dependent-consumer case and is the number that matters for scheduling
+around a load.
+
+| Instruction class | Cycles | Bench |
+|---|:---:|---|
+| ALU / logic (dependent chain) | 1 | `bench_alu` |
+| Taken branch (predicted correctly) | 12 | `bench_taken_branch` |
+| Mispredicted branch | 15 | `bench_mispredict` |
+| Load-use (integer load then dependent) | 7 | `bench_load_use_hit` |
+| Integer load, D$ hit (back-to-back, no dependency) | 1 | `bench_load_hit` |
+| Integer store, D$ hit (back-to-back) | 1 | `bench_store_hit` |
+| AMO (AMOADD.D), D$ hit (back-to-back) | 1 | `bench_amo` |
+| MUL | 5 | `bench_mul` |
+| DIV / REM (32-bit, normal) | 29 | `bench_div32` |
+| DIV / REM (64-bit, normal) | 62 | `bench_div64` |
+| CSR (CSRRW, dependent chain) | 4 | `bench_csr` |
+| Trap round-trip (ECALL → handler → MRET) | 41 | `bench_trap` |
+| FADD / FSUB (S or D) | 8 | `bench_fadd` |
+| FMUL (S or D) | 10 | `bench_fmul` |
+| FMADD / FMSUB / FNMADD / FNMSUB (S or D) | 10 | `bench_fma` |
+| FDIV.S | 62 | `bench_fdiv_s` |
+| FDIV.D | 120 | `bench_fdiv_d` |
+
+Not re-measured this pass (dropped rather than carried forward stale — no
+bench exists yet): not-taken branch, LR.W/LR.D and SC.W/SC.D as their own
+classes (distinct from AMO), FP load/store, FSGNJ/FMIN/FMAX/FCLASS/FCMP/FMV,
+FCVT, and the DIV/REM div-by-0/INT_MIN÷−1 fast-path. FSQRT.S/FSQRT.D are
+also not in this table (no bench was run for them), but §8.3 below has been
+corrected from RTL evidence found while investigating the FDIV numbers.
 
 ---
 

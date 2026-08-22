@@ -1,43 +1,39 @@
 {
   "signal": [
-    { "name": "clk",                "wave": "P............" },
+    { "name": "clk",                "wave": "P.............." },
     {},
     ["IF Stage",
-      { "name": "pc_q",             "wave": "=.=.=.=...=..",
-        "data": ["PC_br", "PC_br+4", "PC_br+8", "T (redirect)", "T+4"] },
-      { "name": "pred_taken",       "wave": "0............" },
-      { "name": "pred_target",      "wave": "x............" }
+      { "name": "pc_q",             "wave": "=.=.=.=...=...=",
+        "data": ["PC_br", "PC_br+4", "PC_br+8", "T (redirect)", "T+4", "T+8"] },
+      { "name": "pred_taken",       "wave": "0.............." }
     ],
     {},
-    ["ID Stage",
-      { "name": "if_id_q.pc",       "wave": "x=.=.=.=...=.",
-        "data": ["PC_br", "PC_br+4", "PC_br+8", "T", "T+4"] },
-      { "name": "if_id_q.valid",    "wave": "01.....0..1.." }
+    ["Pipeline registers",
+      { "name": "if_id_q.valid",    "wave": "01.....0..1...." },
+      { "name": "id_rr_q.valid",    "wave": "0.1.....0..1..." },
+      { "name": "rr_ex1_q.valid",   "wave": "0..1.....0..1.." },
+      { "name": "ex1_ex2_q.valid",  "wave": "0...1.....0...." }
     ],
     {},
-    ["EX Stage",
-      { "name": "id_ex_q.pc",       "wave": "x..=.=.=.....",
-        "data": ["PC_br", "PC_br+4", "PC_br+8"] },
-      { "name": "id_ex_q.pred_taken", "wave": "0............" },
-      { "name": "actual_taken",     "wave": "x..0.0.1....." },
-      { "name": "bpred_mispredict", "wave": "0......10...." },
-      { "name": "ex_redirect",      "wave": "0......10...." },
-      { "name": "ex_pc_next",       "wave": "x......=x....",
-        "data": ["T"] }
+    ["EX1 / EX2",
+      { "name": "actual_taken",     "wave": "x...0...........",
+        "data": [] },
+      { "name": "ex1_ex2_q.fault.bpred_dir_mispredict", "wave": "0....1.........." },
+      { "name": "ex_redirect_d",    "wave": "0....1.........." }
     ],
     {},
-    { "name": "if_id_flush",        "wave": "0......10...." },
-    { "name": "id_ex_flush",        "wave": "0......10...." },
-    {},
-    { "name": "Pipeline slots flushed", "wave": "x......22x...",
-      "data": ["BUBBLE", "BUBBLE"] }
+    { "name": "if_id_flush",        "wave": "0....10........." },
+    { "name": "id_rr_flush",        "wave": "0....10........." },
+    { "name": "rr_ex1_flush",       "wave": "0....10........." },
+    { "name": "ex1_ex2_q flush (kronos_top comb.)", "wave": "0....10........." }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage7e",
   "head": {
-    "text": "Branch Predictor — misprediction (pred_taken=0, actual_taken=1) — 2-cycle penalty",
+    "text": "Branch Predictor — direction misprediction, EX2 redirect (stage 7e: IF/ID/RR/EX1/EX2)",
     "tick": 0
   },
   "foot": {
-    "text": "Predictor said not-taken, so PC advanced sequentially. EX detects the branch actually taken, asserts ex_redirect, flushes IF/ID + ID/EX (2 bubbles), and jumps PC to T."
+    "text": "EX1 folds bpred_dir_mispredict into ex1_ex2_q; EX2 reads it combinationally and forms ex_redirect_d, flushing if_id_q/id_rr_q/rr_ex1_q/ex1_ex2_q (the wrong-path follower) and redirecting IF to the resolved target T (§6). Measured at stage 7e (bench_mispredict vs bench_taken_branch, §11): a misprediction costs 15 cycles/branch against 12 for a correctly-predicted taken branch — 3 cycles more, not the simple single-bubble picture a 5-stage pipeline would suggest."
   }
 }

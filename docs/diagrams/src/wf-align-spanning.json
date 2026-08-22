@@ -25,6 +25,7 @@
     { "name": "needs_fetch",  "wave": "1....0....1...0." }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage3",
   "head": {
     "text": "Alignment — spanning 32-bit instruction (NEED_UPPER path)",
     "tick": 0

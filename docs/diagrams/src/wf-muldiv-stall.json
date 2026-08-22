@@ -17,6 +17,7 @@
     { "name": "ex_mem_en",       "wave": "10.......1." }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage5",
   "head": {
     "text": "MUL stall — 2-cycle multiply (pipeline frozen during compute)",
     "tick": 0

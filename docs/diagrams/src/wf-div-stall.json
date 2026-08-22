@@ -13,6 +13,7 @@
     { "name": "pc_en",          "wave": "10.|.1" }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage5",
   "head": {
     "text": "DIV stall — 34-cycle divide (gap compresses iterations)",
     "tick": 0

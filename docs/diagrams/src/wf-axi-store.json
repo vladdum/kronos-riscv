@@ -25,6 +25,7 @@
     { "name": "valid_o",   "wave": "0......10." }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage3",
   "head": {
     "text": "AXI4 Store Transaction — IDLE → ST_SEND → ST_RESP → ST_DONE → IDLE",
     "tick": 0
