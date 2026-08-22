@@ -1,44 +1,33 @@
 # kronos-riscv Architecture Reference
 
-**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** in-order pipeline (stage-7 restructure — see §1) &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB) &nbsp;|&nbsp; **Active stage:** Stage 7e (in progress)
+**ISA:** RV64IMAFDC &nbsp;|&nbsp; **Microarchitecture:** 9-stage in-order pipeline — register-read stage and split EX/MEM boundaries for the Fmax push, see §1 &nbsp;|&nbsp; **Bus:** AXI4 &nbsp;|&nbsp; **Branch prediction:** bimodal (64-entry PHT + 16-entry BTB)
 
-kronos-riscv is a 5-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. Instructions flow through Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). The IF stage includes an alignment unit that handles variable-width compressed instructions and a bimodal branch predictor that speculatively redirects fetch before branch resolution. The EX stage contains the 64-bit ALU, a multi-cycle 64-bit multiply/divide unit, branch resolution logic, and the CSR unit. The MEM stage drives an AXI4 load/store unit supporting atomic operations (LR/SC, AMO) and floating-point loads/stores. A separate FPU with six pipelined units handles the F and D extensions; the FPU uses a scoreboard rather than the integer forwarding network for hazard management. Hazard and forwarding control modules sit outside the pipeline stages and manage stalls, flushes, and operand forwarding.
+kronos-riscv is a 9-stage in-order RISC-V processor implementing the RV64IMAFDC ISA. A BOOM-style frontend — a pipelined instruction cache, a fetch buffer, and a predecode block that also owns RVC decompression — feeds Instruction Decode (ID) and Register-Read (RR); RR performs the integer and FP register-file reads and the operand-bypass mux, so Execute consumes only flop outputs. Execute is split into EX1 (ALU/AGU, muldiv dispatch, branch-direction compare, CSR read-modify-write, FPU dispatch) and EX2 (fault aggregation and direction-mispredict redirect formation). Memory access is split into MEM1 (dTLB lookup + PMP check), MEM1B (the dTLB's internal encode sub-stage), and MEM2 (dcache hit/data, target-mispredict and trap redirect formation), followed by Writeback (WB). Every fault source — illegal instruction, ECALL/EBREAK, CSR/privilege failures, PMP, page faults, trigger hits — writes exactly one bit into a `fault_t` struct that is registered one stage past its producer; the two redirect points (EX2 for direction mispredicts, MEM2 for everything else) OR-reduce only registered bits, so no fault ever reaches a consumer combinationally. A separate FPU with six pipelined units handles the F and D extensions and dispatches from EX1; a writeback-slot scoreboard, not the integer forwarding network, arbitrates its shared result port. `kronos_hazard` and `kronos_forward` sit outside the pipeline stages and manage stalls, flushes, and a six-producer-slot operand-forwarding network.
 
 ```mermaid
+%% depicts: stage7e
 flowchart LR
-    instr_axi{{Instr AXI4}} --> IF
-    IF --> if_id[IF/ID] --> ID --> id_ex[ID/EX] --> EX --> ex_mem[EX/MEM] --> MEM --> mem_wb[MEM/WB] --> WB
-    MEM --> data_axi{{Data AXI4}}
-    irq{{IRQ}} -. trap .-> EX
-    EX -. redirect .-> IF
-    mem_wb -. "fwd (EX/MEM, MEM/WB)" .-> EX
-    WB -. "wb / bypass" .-> ID
-    ctrl["Control<br>(hazard + forward)"] -.-> if_id & id_ex & ex_mem & mem_wb
-    EX -. dispatch .-> fpu["FPU<br>(6 units + scoreboard)"]
-    fpu -.-> regfile_fp["regfile_fp<br>32×64b FP"]
+    instr_axi{{Instr AXI4}} --> IF["IF: icache s0/s1/s2 → fetch buffer → predecode"]
+    IF --> if_id[if_id_q] --> ID --> id_rr[id_rr_q] --> RR --> rr_ex1[rr_ex1_q] --> EX1 --> ex1_ex2[ex1_ex2_q] --> EX2 --> ex2_mem1[ex2_mem1_q] --> MEM1 --> mem1_mem1b[mem1_mem1b_q] --> MEM1B --> mem1_mem2[mem1_mem2_q] --> MEM2 --> mem_wb[mem_wb_q] --> WB
+    MEM2 --> data_axi{{Data AXI4}}
+    bpred["bpred — bimodal PHT + BTB"] -. predict .-> IF
+    EX1 -. update .-> bpred
+    irq{{IRQ}} -. sampled .-> EX1
+    EX2 -. "direction redirect" .-> IF
+    MEM2 -. "target / trap redirect" .-> IF
+    ctrl["Control: kronos_hazard + kronos_forward"] -.-> id_rr & rr_ex1 & ex1_ex2 & ex2_mem1 & mem1_mem1b & mem1_mem2
+    EX1 -. dispatch .-> fpu["FPU — 6 units + scoreboard"]
+    fpu -.-> regfile_fp["regfile_fp — 32×64b FP"]
     WB -. "FP WB (FLW/FLD)" .-> regfile_fp
 ```
 
-The five pipeline registers — IF/ID, ID/EX, EX/MEM, MEM/WB — carry decoded instruction state across stages. Each register has an `en` enable and a `flush` (clear-to-NOP) control driven by `kronos_hazard`. Operand forwarding is handled by `kronos_forward`, which selects between the register-file read value, the EX/MEM result, and the MEM/WB result. FP operand hazards are managed by `kronos_fpu_scoreboard` rather than the integer forwarding network.
-
-> **Currency note (2026-08-22).** The narrative above and §2–§12 describe the
-> **stage-5-era machine** and have not yet been rewritten for later stages:
-> stages 6a–6i added M/S/U privilege + trap delegation, PMP, the Sv39/Sv48
-> MMU with iTLB/dTLB and a hardware PTW, and moved caches/regfiles to
-> BRAM/LUTRAM; stages 7a–7c restructured the pipeline itself (fault-bit
-> propagation, EX1/EX2 split, a new RR register-read stage with a rebuilt
-> bypass network, and a MEM1/MEM2 split). The diagram above likewise shows
-> the pre-restructure 5-stage pipeline. §1's per-stage rows are current;
-> for stage-6/7 detail see the per-stage design specs under
-> `docs/superpowers/specs/`. The full rewrite is tracked in
-> [#108](https://github.com/vladdum/kronos-riscv/issues/108); era notes
-> below mark the sections known to be superseded.
+The nine pipeline registers — `if_id_q`, `id_rr_q`, `rr_ex1_q`, `ex1_ex2_q`, `ex2_mem1_q`, `mem1_mem1b_q`, `mem1_mem2_q`, `mem_wb_q` — carry decoded instruction state across stages. Names follow a `{producer stage}_{consumer stage}` convention, with one quirk worth knowing when reading the RTL: the MEM1B→MEM2 register is `mem1_mem2_q`, not `mem1b_mem2_q` — MEM1B is the dTLB's internal S1 (encode) sub-stage rather than a distinct producer name, and its register type comment describes it as "passed through MEM1B→MEM2 with PMP/PMA bits filled in." Each register has an `en` enable and a `flush` (clear-to-NOP) control driven by `kronos_hazard`. Operand forwarding is handled by `kronos_forward`, which selects among six producer slots — `FWD_EX1_NOW`, `FWD_EX1`, `FWD_EXMEM`, `FWD_MEM1B`, `FWD_MEM2`, `FWD_MEMWB` — consumed by the bypass mux at the RR stage; see §5 for the full source map. FP operand hazards are managed by `kronos_fpu_scoreboard` rather than the integer forwarding network (§8 covers what that scoreboard actually arbitrates).
 
 ---
 
 ## 1. Design Evolution
 
-One row per stage. The core pipeline structure (5 stages, AXI4 bus, bimodal branch predictor) was established in Stage 3 and has not changed since.
+One row per stage. AXI4 and bimodal branch prediction were established in Stage 3 and remain unchanged; the pipeline's stage count and register boundaries were restructured by the Stage 7 Fmax push (7a–7e) — see the diagram above for the current 9-stage shape.
 
 | Stage | ISA | Key modules introduced | Key concept |
 |-------|-----|----------------------|-------------|
@@ -49,43 +38,58 @@ One row per stage. The core pipeline structure (5 stages, AXI4 bus, bimodal bran
 | 4 | RV64IMAC | `kronos_alu` (64-bit), `kronos_muldiv` (64-bit), `kronos_decompress` (RV64C), `kronos_lsu` (LR/SC + AMO), `kronos_csr` (64-bit) | 64-bit datapath widening, atomic operations |
 | 5a | RV64IMAFD | `kronos_regfile_fp`, `kronos_fpu_top`, `kronos_fpu_scoreboard`, `kronos_fpu_fmisc`, `kronos_fpu_fcvt`, `kronos_fpu_fadd`, `kronos_fpu_fmul`, `kronos_fpu_fma` | Separate FP register file, multi-unit FPU dispatch, scoreboard hazard model |
 | 5b | RV64IMAFDC | `kronos_fpu_iter`, `kronos_fpu_fdiv_core`, `kronos_fpu_fsqrt_core` | Iterative FDIV/FSQRT (radix-2 SRT) |
-| 5c–5h | RV64IMAFDC | `kronos_icache`, `kronos_dcache`, `kronos_predecode`, `kronos_fetch_buffer`, `kronos_trigger` | Performance counters, CRV harness, I/D caches (4-way + tree-PLRU), FENCE.I, debug/trace layer |
+| 5c–5h | RV64IMAFDC | `kronos_icache`, `kronos_dcache`, `kronos_trigger` | Performance counters, CRV harness, I/D caches (4-way + tree-PLRU), FENCE.I, debug/trace layer |
 | 6a–6c | RV64IMAFDC | `kronos_pmp`, `kronos_tlb`, `kronos_ptw` | M/S/U privileged modes + trap delegation + PMP, Sv39/Sv48 MMU + iTLB/dTLB + HW PTW + sfence.vma, closeout |
-| 6d–6i | RV64IMAFDC | `kronos_ram` (SDP wrapper) | RAM wrapper infrastructure, PMA non-cacheable regions, dcache `data_q` BRAM-back, BOOM-style frontend rewrite, cache tag arrays + FP regfile in BRAM/LUTRAM, verification overhaul |
-| 7a–7c | RV64IMAFDC | (decoder split: `kronos_decode_int`, `kronos_decode_mem`, `kronos_decode_ctrl`, `kronos_decode_sys`, `kronos_decode_fp`) | In-order Fmax push: BOOM-style fault-bit propagation + EX1/EX2 split, RR (register-read) stage + bypass network rebuild, MEM1/MEM2 split (dTLB/PMP separated from dcache hit) |
-| 7d | RV64IMAFDC | (no new modules) | Stretch: MEM1B PMP retime + FWD_MEM2 load suppression + trap_vector retime; post-route WNS −3.128 → −2.872 ns on KV260 (xck26-2LV, Vivado 2025.2). RTL portion complete; Pblock floorplan deferred. |
-| 7e | RV64IMAFDC | (no new modules) | In progress: stall-network retime (`event_bus` register before `mhpmcounter` CE) + dTLB pipeline split |
+| 6d–6i | RV64IMAFDC | `kronos_ram` (SDP wrapper); `kronos_decode_int`/`_mem`/`_ctrl`/`_sys`/`_fp` (per-class decoder split, replacing the monolithic `kronos_decode`); `kronos_predecode` + `kronos_fetch_buffer` (BOOM-style frontend rewrite, replacing `kronos_align`) | RAM wrapper infrastructure, PMA non-cacheable regions, dcache `data_q` BRAM-back, per-class decoder split, BOOM-style frontend rewrite, cache tag arrays + FP regfile in BRAM/LUTRAM, verification overhaul |
+| 7a–7c | RV64IMAFDC | (no new modules — restructures `kronos_top`, `kronos_forward`, `kronos_hazard`, `kronos_csr`) | In-order Fmax push: BOOM-style fault-bit propagation (`fault_t`) + EX1/EX2 split; RR (register-read) stage + bypass network rebuild; MEM1/MEM2 split (dTLB/PMP separated from dcache hit) |
+| 7d | RV64IMAFDC | (no new modules) | MEM1B split (dTLB internal S0/S1 sub-stages) + PMP retime + `FWD_MEM2` load suppression + `trap_vector` retime; post-route WNS −3.128 → −2.872 ns on KV260 (xck26-2LV, Vivado 2025.2). RTL portion complete; Pblock floorplan deferred. |
+| 7e | RV64IMAFDC | (no new modules) | dTLB internal S0/S1 pipeline split (landed); stall-network retime — registering `event_bus` ahead of the `mhpmcounter` clock-enable fan-in — still open |
 
 ---
 
 ## 2. Module Hierarchy
 
-Full instantiation tree for Stage 5 `kronos_top`. The stage column shows when each module was introduced; modules marked "reused" were not modified in later stages.
+Full instantiation tree for `kronos_top`. Modules under `rtl/common/` are shared verbatim across stages; modules under `rtl/stage7/` are the current stage's active copy. See §1 for a module's introduction stage.
 
 ```
-kronos_top  (rtl/stage5/kronos_top.sv)
-├── u_align         kronos_align             (rtl/stage3/kronos_align.sv)              [stage 3]
-├── u_bpred         kronos_bpred             (rtl/stage3/kronos_bpred.sv)              [stage 3]
-├── u_decompress    kronos_decompress        (rtl/stage4/kronos_decompress.sv)         [stage 4: RV64C]
-├── u_decode        kronos_decode            (rtl/stage5/kronos_decode.sv)             [stage 5: IMAFDC]
-├── u_regfile       kronos_regfile           (rtl/stage0/kronos_regfile.sv)            [stage 0, reused]
-├── u_regfile_fp    kronos_regfile_fp        (rtl/common/kronos_regfile_fp.sv)         [stage 5a]
-├── u_alu           kronos_alu               (rtl/stage4/kronos_alu.sv)                [stage 4: 64-bit]
-├── u_csr           kronos_csr               (rtl/stage5/kronos_csr.sv)                [stage 5: FCSR/FRM]
-├── u_lsu           kronos_lsu               (rtl/stage5/kronos_lsu.sv)                [stage 5: FP loads/stores]
-├── u_muldiv        kronos_muldiv            (rtl/stage4/kronos_muldiv.sv)             [stage 4: 64-bit]
-├── u_forward       kronos_forward           (rtl/stage1/kronos_forward.sv)            [stage 1, reused]
-├── u_hazard        kronos_hazard            (rtl/stage1/kronos_hazard.sv)             [stage 1, reused]
-└── u_fpu           kronos_fpu_top           (rtl/stage5/fpu/kronos_fpu_top.sv)       [stage 5a]
+kronos_top  (rtl/stage7/kronos_top.sv)
+├── u_icache        kronos_icache            (rtl/stage7/kronos_icache.sv)             s0/s1/s2 pipeline, per-stage kill inputs
+├── u_fb            kronos_fetch_buffer      (rtl/common/kronos_fetch_buffer.sv)       depth-4 FIFO, icache S2 → predecode
+├── u_predecode     kronos_predecode         (rtl/common/kronos_predecode.sv)          replaces kronos_align
+│   ├── u_decomp_lower  kronos_decompress    (rtl/common/kronos_decompress.sv)         lower-half RVC expand
+│   └── u_decomp_upper  kronos_decompress    (rtl/common/kronos_decompress.sv)         upper-half RVC expand
+├── u_bpred         kronos_bpred             (rtl/common/kronos_bpred.sv)              reused unmodified (see §1)
+├── u_decode        kronos_decode            (rtl/stage7/kronos_decode.sv)             dispatch wrapper over 5 sub-decoders
+│   ├── u_int       kronos_decode_int        (rtl/stage7/kronos_decode_int.sv)         OP / OP-IMM / OP-IMM-32 / OP-32 / LUI / AUIPC
+│   ├── u_ctrl      kronos_decode_ctrl       (rtl/stage7/kronos_decode_ctrl.sv)        JAL / JALR / BRANCH
+│   ├── u_mem       kronos_decode_mem        (rtl/stage7/kronos_decode_mem.sv)         LOAD / STORE / LOAD-FP / STORE-FP / AMO
+│   ├── u_sys       kronos_decode_sys        (rtl/stage7/kronos_decode_sys.sv)         SYSTEM: priv/sfence cluster + CSR*
+│   └── u_fp        kronos_decode_fp         (rtl/stage7/kronos_decode_fp.sv)          OP-FP + the four FMA opcodes
+├── u_regfile       kronos_regfile           (rtl/stage0/kronos_regfile.sv)            reused unmodified (see §1); 2R read now issued from RR
+├── u_regfile_fp    kronos_regfile_fp        (rtl/common/kronos_regfile_fp.sv)         3R read now issued from RR
+├── u_forward       kronos_forward           (rtl/stage7/kronos_forward.sv)            6-slot bypass select, computed at ID
+├── u_hazard        kronos_hazard            (rtl/stage7/kronos_hazard.sv)             en/flush for 8 registers, stall priority
+├── u_alu           kronos_alu               (rtl/common/kronos_alu.sv)                EX1
+├── u_muldiv        kronos_muldiv            (rtl/common/kronos_muldiv.sv)             EX1, multi-cycle MUL/DIV
+├── u_csr           kronos_csr               (rtl/stage7/kronos_csr.sv)                RR speculative read + EX1 RMW + WB-retire commit
+├── u_trigger       kronos_trigger           (rtl/common/kronos_trigger.sv)             Sdtrig hardware breakpoints
+├── u_pmp_fetch     kronos_pmp               (rtl/stage7/kronos_pmp.sv)                16 regions, instruction side
+├── u_pmp_data      kronos_pmp               (rtl/stage7/kronos_pmp.sv)                16 regions, data side
+├── u_itlb          kronos_tlb               (rtl/stage7/kronos_tlb.sv)                8-entry CAM, instruction side
+├── u_dtlb          kronos_tlb               (rtl/stage7/kronos_tlb.sv)                8-entry CAM, data side; internal S0/S1 split (see §1)
+├── u_ptw           kronos_ptw               (rtl/stage7/kronos_ptw.sv)                Sv39/Sv48 hardware page-table walker
+├── u_lsu           kronos_lsu               (rtl/stage7/kronos_lsu.sv)                thin MEM2 adapter to kronos_dcache
+├── u_dcache        kronos_dcache            (rtl/stage7/kronos_dcache.sv)             AXI master, AMO arithmetic, LR/SC reservation
+└── u_fpu           kronos_fpu_top           (rtl/common/fpu/kronos_fpu_top.sv)        dispatches from EX1
     ├── u_fmisc     kronos_fpu_fmisc         1-cycle: FSGNJ/FMIN/FMAX/FCLASS/CMP/FMV
-    ├── u_fcvt      kronos_fpu_fcvt          2-cycle: FCVT
-    ├── u_fadd      kronos_fpu_fadd          5-cycle: FADD/FSUB
-    ├── u_fmul      kronos_fpu_fmul          4-cycle: FMUL
-    ├── u_fma       kronos_fpu_fma           5-cycle: FMADD/FMSUB/FNMADD/FNMSUB
-    ├── u_iter      kronos_fpu_iter          variable: FDIV/FSQRT wrapper FSM          [stage 5b]
-    │   ├── u_fdiv  kronos_fpu_fdiv_core     radix-2 SRT division                      [stage 5b]
-    │   └── u_fsqrt kronos_fpu_fsqrt_core   radix-2 SRT square root                   [stage 5b]
-    └── u_scoreboard kronos_fpu_scoreboard   WAW busy-table + WB port arbitration
+    ├── u_fcvt      kronos_fpu_fcvt          3-cycle: FCVT
+    ├── u_fadd      kronos_fpu_fadd          7-cycle: FADD/FSUB
+    ├── u_fmul      kronos_fpu_fmul          9-cycle: FMUL
+    ├── u_fma       kronos_fpu_fma           9-cycle: FMADD/FMSUB/FNMADD/FNMSUB
+    ├── u_iter      kronos_fpu_iter          variable: FDIV/FSQRT wrapper FSM
+    │   ├── u_fdiv  kronos_fpu_fdiv_core     radix-2 SRT division
+    │   └── u_fsqrt kronos_fpu_fsqrt_core   radix-2 SRT square root
+    └── u_scoreboard kronos_fpu_scoreboard   writeback-slot reservation (see §8.1 — not a per-register busy table)
 ```
 
 ---
@@ -110,102 +114,62 @@ Smaller storage stays in flops or LUTRAM — iTLB/dTLB CAMs (8 entries each), br
 
 ---
 
-## 4. IF Stage — Fetch, Alignment, Decompression, Branch Prediction
+## 4. Frontend — Instruction Cache, Fetch Buffer, Predecode, Branch Prediction
 
-### 3a. Fetch FSM
+The frontend follows a BOOM-style structure: a pipelined instruction cache with per-stage kill inputs, a standalone fetch buffer that decouples the cache from decode-side back-pressure, and a predecode block that both expands compressed instructions and tracks halfword spanning. It replaced a single per-instruction fetch FSM plus a combined alignment/decompression FSM (`kronos_align`); §4.5 points at that history.
 
-> **Era note:** stage ≤5d. This per-instruction fetch FSM was **replaced by
-> `kronos_icache`** in stage 5e (see the Instruction-cache section below) and
-> the frontend was further rewritten BOOM-style in stage 6f. Retained as
-> stage-5 reference until the [#108](https://github.com/vladdum/kronos-riscv/issues/108) refresh.
+### 4.1 Instruction Cache — `kronos_icache`
 
-The fetch FSM has two states: **FETCH_IDLE** and **FETCH_WAIT_R**.
+16 KB, 4-way set-associative, 64-byte lines, tree-PLRU replacement (64 sets, 3 PLRU bits/set), critical-word-first refill via an 8-beat AXI4 WRAP burst. Data arrays are 4× `kronos_ram` (one per way); tag/valid/PLRU stay in flops.
 
-```mermaid
-stateDiagram-v2
-    [*] --> FETCH_IDLE : rst_ni deasserted
-    FETCH_IDLE --> FETCH_WAIT_R : ar_valid & ar_ready
-    FETCH_WAIT_R --> FETCH_IDLE : r_valid
-    note right of FETCH_IDLE
-        ar_valid = align_needs_fetch
-        r_ready = 0
-    end note
-    note right of FETCH_WAIT_R
-        ar_valid = 0
-        r_ready = 1
-        rdata → kronos_align
-    end note
-```
+The cache is structurally split into three stages, each with its own `valid` register and a combinational kill input:
 
-`instr_fetch_stall = ~align_instr_valid` — the PC is frozen until `r_valid`; in the alignment unit's BUFFERED state `align_needs_fetch` is 0, so no re-fetch is issued.
+| Stage | Registers | Action |
+|---|---|---|
+| S0 | (combinational) | `s0_addr_i` / `s0_pc_i` presented; latched into S1 on `s0_ready_o & s0_valid_i`. |
+| S1 | `s1_valid_q` | BRAM read in flight. Cleared by `s1_kill_i`. |
+| S2 | `s2_valid_q`, `s2_hit_q` | Combinational hit detect against the tag array; a hit pushes `(pc, data)` into the fetch buffer. Cleared by `s2_kill_i`. |
 
-In FETCH_IDLE the FSM asserts `arvalid` when a new fetch is needed (`align_needs_fetch` is high). It transitions to FETCH_WAIT_R on the same cycle that `arready` is seen, then waits for `rvalid`. When `rvalid` arrives, the 32-bit word is handed to the alignment unit and the FSM returns to FETCH_IDLE, immediately issuing the next fetch if `align_needs_fetch` is still asserted.
+`s1_kill_i` and `s2_kill_i` are driven combinationally from `redirect_load | fence_i_pulse` — where `redirect_load = mem_redirect_q | ex_redirect_q | fence_i_redirect_q | pred_taken_q` is the same signal that reloads `s0_pc_q`. Note that `redirect_load` includes `pred_taken_q`, a *speculative* predicted-taken kill, not only the three confirmed (direction/trap/FENCE.I) redirects — a killed S2 entry with a real miss does not start a refill, so wrong-path fetches never issue AXI traffic, whether the kill was speculative or confirmed. A separate, narrower `confirmed_redirect_i` (only `ex_redirect_q | mem_redirect_q` — excludes both `pred_taken_q` and `fence_i_redirect_q`) lets an in-flight refill mark itself squashed without discarding a line that a since-corrected prediction may still want.
 
-`align_needs_fetch` gates every new AXI4 AR transaction. The alignment unit raises it when it has consumed its current word and needs the next one. For spanning instructions (a 16-bit compressed instruction whose upper half sits at the start of the next aligned word), the fetch FSM computes the next-word address by incrementing the current aligned PC by 4 (`NEED_UPPER` path).
+When the fetch buffer is full, S2 stalls (does not advance, does not kill) and back-pressure propagates to S1 and `s0_ready_o` — ordinary valid/ready flow control, not a shared stall signal with the rest of the pipeline.
 
 ![AXI4 instruction fetch waveform](diagrams/svg/wf-axi-fetch.svg)
 
-### 3b. Alignment Unit
+### 4.2 Fetch Buffer — `kronos_fetch_buffer`
 
-RVC instructions are 16 bits wide; RVI instructions are 32 bits wide. Both arrive from memory as 32-bit aligned words, so the alignment unit must extract instructions of varying width from a fixed-width stream.
+A depth-4 FIFO between icache S2 and predecode. Each entry carries `(pc, instr_word, valid)` — the PC travels with the data, so predecode never has to reconstruct which address a word came from. `enq_ready_o = (count < DEPTH)`, `deq_valid_o = (count > 0)`; a single `flush_i` (driven by the same redirect signals as the icache kills, OR'd with the FENCE.I pulse) clears the FIFO in one cycle so stale entries fetched ahead of a redirect or a self-modifying-code drain cannot reach decode.
 
-```mermaid
-stateDiagram-v2
-    [*] --> NORMAL : reset / flush (pc_offset=0)
-    NORMAL : NORMAL — buf_valid = 0
-    BUFFERED : BUFFERED — buf_valid = 1
-    NEED_UPPER : NEED_UPPER — buf holds lower 16b of 32b instr
-    SKIP_LOWER : SKIP_LOWER — post-flush halfword-align
-    NORMAL --> BUFFERED : rvalid & rdata[1:0] ≠ 11 (16b at lower half)
-    BUFFERED --> NORMAL : buf[1:0] ≠ 11 (emit buf as 16b)
-    BUFFERED --> NEED_UPPER : buf[1:0] == 11 (spanning 32b)
-    NEED_UPPER --> BUFFERED : rvalid (combine halves)
-    NORMAL --> SKIP_LOWER : flush & pc_offset=1
-    BUFFERED --> SKIP_LOWER : flush & pc_offset=1
-    NEED_UPPER --> SKIP_LOWER : flush & pc_offset=1
-    SKIP_LOWER --> BUFFERED : rvalid (buffer upper)
-```
+### 4.3 Predecode — `kronos_predecode`
 
-Per-state outputs:
+Replaces `kronos_align`. Consumes one 4-byte-aligned word at a time from the fetch-buffer head and emits at most one instruction per cycle. Decompression is internal: two combinational `kronos_decompress` instances (`u_decomp_lower`, `u_decomp_upper`) expand whichever half the classifier selects — there is no separate top-level decompress stage.
 
-| State | `instr_valid` | `is_16b` | `needs_fetch` |
+State is two registers: `prev_half_q` (the lower 16 bits of a 32-bit instruction whose halves span two fetch-buffer entries) and `word_lower_consumed_q` (set when the lower 16 bits of the current head have been emitted as RVC but the upper 16 bits are still pending in the same word). The classifier's five cases:
+
+| Case | Condition | Emits | FB pop |
 |---|---|---|---|
-| NORMAL | `rvalid` | `rdata[1:0] ≠ 11` | 1 |
-| BUFFERED | 1 (if 16b) | 1 | 0 |
-| NEED_UPPER | `rvalid` | 0 | 1 |
-| SKIP_LOWER | 0 | — | 1 |
+| Combine span | `prev_half_valid_q` set | `{word[15:0], prev_half}` as a 32-bit instr at `prev_half_pc_q` | no (re-reads the same head from its upper half next cycle) |
+| RVC at lower | not spanning, reading lower half, `word[1:0] ≠ 11` | decompressed 16-bit instr | no (upper half still pending) |
+| 32-bit non-spanning | not spanning, reading lower half, `word[1:0] = 11` | `word_data_i` unchanged | yes |
+| RVC at upper | not spanning, reading upper half, `word[17:16] ≠ 11` | decompressed 16-bit instr at `word_pc \| 2` | yes |
+| Span lower | not spanning, reading upper half, `word[17:16] = 11` | (no emit — buffers `word[31:16]` into `prev_half_q`) | yes |
 
-SKIP_LOWER is the post-flush halfword-align state: after a redirect to a halfword-aligned PC, `rdata[15:0]` is skipped and the upper half buffered; `instr_valid = 0` for that cycle.
+Backpressure is strict valid/ready: while `instr_valid_o & ~instr_ready_i`, no internal state advances and the fetch-buffer head is not popped — the same `(instr, pc)` is re-presented until the consumer accepts it. A redirect's `flush_i` clears `prev_half_q` and `word_lower_consumed_q` in the same cycle; `flush_pc_offset_i` (the redirect target's `pc[1]`) primes `word_lower_consumed_q` so a half-aligned redirect target starts from the correct half. Cross-page fault detection (`pc[11:1] == 11'h7FF` on a 32-bit instruction's lower half) is unchanged from the pre-rewrite alignment unit, gated by `translate_fetch_i`.
 
-The alignment unit operates as a three-state FSM:
+`instr_fetch_stall` (consumed by `kronos_hazard`, §7) is simply `~align_instr_valid & ~pmp_fetch_fault & ~redirect_load` — decode-side stalls (`mem_stall`, `muldiv_stall`, `fpu_stall`) hold `if_id_en` low and back-pressure through predecode's `instr_ready_i`; they never reach into the icache or fetch buffer directly.
 
-- **NORMAL** — the upper 16 bits of the fetched word have not yet been consumed. The current instruction is taken directly from the word. If it is 16-bit, the unit stays in NORMAL (or moves to BUFFERED for the upper half); if it is 32-bit spanning two aligned words, it transitions to NEED_UPPER.
-- **BUFFERED** — the lower 16 bits of the previous word held a 16-bit instruction that was emitted. The upper 16 bits (`skip_lower_q`) are now at the head of the stream and may form the start of the next instruction.
-- **NEED_UPPER** — the lower 16 bits of the current word hold the start of a 32-bit instruction whose upper 16 bits are in the next word. A new fetch is issued immediately; once `rvalid` arrives, the two halves are concatenated and emitted together.
+### 4.4 Branch Predictor — `kronos_bpred`
 
-`skip_lower_q` latches the upper half-word whenever a 16-bit instruction is extracted from the lower half of a fetched word, so the next decode sees the buffered upper half without issuing a new fetch.
-
-![32-bit instruction pass-through](diagrams/svg/wf-align-32b.svg)
-
-![16-bit instruction buffering](diagrams/svg/wf-align-16b.svg)
-
-![Spanning instruction (NEED_UPPER)](diagrams/svg/wf-align-spanning.svg)
-
-### 3c. Decompression
-
-Decompression is purely combinational. `kronos_decompress` accepts a 16-bit or 32-bit instruction word and expands it to a canonical 32-bit equivalent. If `inst[1:0]` are both `1`, the input is already 32-bit and is passed through unchanged. Stage 4 extended the decompressor to cover the RV64C-only encodings: C.ADDIW, C.LDSP, C.SDSP, C.LD, C.SD, C.ADDW, C.SUBW. Reserved or undefined compressed encodings set `illegal_o`, which propagates through the pipeline and triggers a trap in EX.
-
-### 3d. Branch Predictor
-
-The branch predictor combines a **bimodal pattern history table (PHT)** with a **branch target buffer (BTB)**.
+The branch predictor combines a **bimodal pattern history table (PHT)** with a **branch target buffer (BTB)**; its structure has not changed since it was introduced (see §1).
 
 - **PHT:** 64 entries indexed by `PC[7:2]`, each holding a 2-bit saturating counter (00 = strongly not-taken, 11 = strongly taken).
 - **BTB:** 16 entries indexed by `PC[5:2]`, each holding a valid bit, a tag (`PC[31:6]`), and a 64-bit target address. Direct-mapped; a hit requires `valid && tag match`.
 
 ```mermaid
+%% depicts: stage7e
 flowchart LR
     subgraph lookup["Lookup path (combinational)"]
-        pc_in["PC input (pc_q)"] --> idx["Index logic<br>bimodal_idx = pc[7:2]<br>btb_idx = pc[5:2]<br>tag = pc[31:6]"]
+        pc_in["PC input (predecode_instr_pc)"] --> idx["Index logic<br>bimodal_idx = pc[7:2]<br>btb_idx = pc[5:2]<br>tag = pc[31:6]"]
         idx --> bimodal["Bimodal table<br>64×2b sat-counters<br>pred_taken = counter[1]"]
         idx --> btb["BTB — 16 entries<br>(valid | tag | target)<br>hit = valid & tag match"]
         bimodal --> hit["Hit & prediction<br>pred_taken = btb_hit & counter[1]<br>pred_target = btb[idx].target"]
@@ -213,7 +177,7 @@ flowchart LR
         hit --> pred_out["Prediction outputs<br>pred_taken_o / pred_target_o"]
     end
     subgraph update["Update path (registered)"]
-        upd_in["EX update<br>upd_valid / pc / taken / target / is_jal"] --> upd_idx["Update index logic<br>update_idx = upd_pc[7:2]<br>update_btb_idx = upd_pc[5:2]"]
+        upd_in["EX1 update<br>upd_valid / pc / taken / target / is_jal"] --> upd_idx["Update index logic<br>update_idx = upd_pc[7:2]<br>update_btb_idx = upd_pc[5:2]"]
         upd_idx --> cupd["Counter update<br>taken → incr (max 11)<br>not-taken → decr (min 00)<br>(JAL skips counter)"]
         upd_idx --> bupd["BTB update<br>taken/JAL → write entry<br>not-taken & cnt=00 → invalidate"]
     end
@@ -223,82 +187,99 @@ flowchart LR
 
 Reset initializes every counter to `2'b01` (weakly not-taken) and clears the BTB.
 
-**Lookup (combinational):** On every cycle the current PC indexes both structures simultaneously. If the BTB entry is valid and the PHT counter MSB is `1`, the predictor asserts `pred_taken` and drives `pred_target` from the BTB. The IF stage uses `pred_target` as the next PC instead of `PC+2/4`.
+**Lookup (combinational):** Every cycle, `predecode_instr_pc` (predecode's emitted PC, not a dedicated fetch-address register) indexes both structures simultaneously. If the BTB entry is valid and the PHT counter MSB is `1`, the predictor asserts `pred_taken` and drives `pred_target` from the BTB; the frontend uses `pred_target` as the redirect target instead of `PC+2/4`. The predicted-taken redirect is registered (`pred_taken_q`) before it reaches the icache kill / fetch-buffer flush network, so the branch itself is already captured into `if_id_q` by the time the redirect fires — at most one extra wrong-path bubble per predicted-taken branch.
 
-**Update (registered):** The EX stage sends the resolved direction and target back to the predictor. The PHT counter is incremented on taken, decremented on not-taken, saturating at the extremes. On a taken outcome the BTB is written with the resolved target. On a not-taken outcome where the counter has saturated to `00`, the BTB entry is invalidated.
+**Update (registered):** EX1 sends the resolved direction and target back to the predictor, keyed by `rr_ex1_q.pc` (the branch's own PC, one register earlier than its EX2 fault-aggregation point). The PHT counter increments on taken, decrements on not-taken, saturating at the extremes. A taken outcome writes the BTB with the resolved target; a not-taken outcome where the counter has saturated to `00` invalidates the BTB entry.
 
-**Misprediction detection:** EX compares its resolved outcome against the prediction carried in the pipeline register. A misprediction is flagged when the direction disagrees, or when both sides agree the branch was taken but the predicted target differs from the resolved target. Either condition triggers a two-cycle flush of IF and ID and a PC redirect.
+**Misprediction detection.** A *direction* mispredict — the predicted taken/not-taken outcome disagrees with EX1's resolved outcome — is detected at EX1/EX2 and forms `ex_redirect` (§6). A *target* mispredict — both sides agree the branch was taken but the predicted target differs from the resolved target — is deferred to MEM2 (`bpred_mispredict_target`, §6), specifically so the JALR target adder and the 32-bit target comparator are removed from the direction-redirect's combinational path.
 
 ![Correct prediction waveform](diagrams/svg/wf-bpred-correct.svg)
 
 ![Misprediction flush waveform](diagrams/svg/wf-bpred-mispredict.svg)
 
+### 4.5 History: the pre-icache fetch model
+
+The frontend above replaced two earlier designs (see §1 for when). Fetch was originally a two-state per-instruction AXI FSM (`FETCH_IDLE`/`FETCH_WAIT_R`) issuing one AR transaction per word, and alignment/decompression was a single four-state FSM (`NORMAL`/`BUFFERED`/`NEED_UPPER`/`SKIP_LOWER`) consuming that word combinationally. A cache first replaced the per-word fetch FSM; later, two attempts at bolting a fetch buffer onto the still-combinational alignment FSM proved unsound — a buffered head sitting one cycle behind an FSM that reads combinationally cannot be flushed atomically on a redirect — which is why the full BOOM-style split into icache S0/S1/S2 + fetch buffer + predecode (this section) replaced the alignment FSM outright rather than wrapping it. See `docs/superpowers/specs/2026-04-26-icache-design.md` (the original per-word-FSM replacement) and `docs/superpowers/specs/2026-05-02-stage6f-icache-boom-frontend-v3-design.md` (the full frontend rewrite and the failure analysis of the two intermediate attempts) for the retired designs in full.
+
 ---
 
-## 5. ID Stage — Decode and Register Read
+## 5. ID / RR — Decode and Register Read
 
 ```mermaid
+%% depicts: stage7e
 flowchart LR
-    if_id[IF/ID] --> decode["kronos_decode<br>RV64IMAFDC decoder<br>(control + imm + rm)"]
-    if_id --> regfile["kronos_regfile<br>32×64b async read<br>(rs1, rs2)"]
-    if_id --> regfile_fp["kronos_regfile_fp<br>32×64b FP async read<br>(fs1, fs2, fs3)"]
-    decode --> regfile
-    decode --> id_ex[ID/EX]
-    regfile --> bypass["WB → ID bypass mux<br>sel = wb_wen & (rd == rs)"]
-    bypass --> id_ex
-    wb["WB stage<br>wb_result / wb_wen / rd"] -.-> bypass
-    regfile_fp -. fp ops .-> id_ex
+    if_id[if_id_q] --> decode["kronos_decode<br>dispatch wrapper over 5<br>per-class sub-decoders"]
+    decode --> id_rr[id_rr_q]
+    fwdsel["kronos_forward<br>fwd_rs1/2_sel (6 slots)"] --> id_rr
+    id_rr --> regfile["kronos_regfile<br>32×64b async read<br>(rs1, rs2)"]
+    id_rr --> regfile_fp["kronos_regfile_fp<br>32×64b FP async read<br>(fs1, fs2, fs3)"]
+    regfile --> intbyp["WB→RR int bypass<br>sel = wb_writing & rd==rs"]
+    wb["mem_wb_q writeback mux"] -.-> intbyp
+    fpmux["FP source mux<br>live FPU result | EX2/MEM1 fwd | WB fwd | regfile"] --> rrmux
+    intbyp --> rrmux["RR/EX1 bypass mux<br>keyed by fwd_rs1/2_sel"]
+    ex1now["EX1 combinational ex_result"] -.-> rrmux
+    ex1ex2["ex1_ex2_q.alu_result / csr_rdata"] -.-> rrmux
+    ex2mem1["ex2_mem1_q.alu_result / csr_rdata"] -.-> rrmux
+    mem1mem1b["mem1_mem1b_q.alu_result / csr_rdata"] -.-> rrmux
+    mem1mem2["mem1_mem2_q.alu_result / csr_rdata"] -.-> rrmux
+    rrmux --> rr_ex1[rr_ex1_q]
+    csr["kronos_csr<br>speculative read port"] -. "id_rr_q.dec.csr_addr" .-> rr_ex1
 ```
 
-`kronos_decode` is a purely combinational decoder. It accepts a 32-bit instruction word (already decompressed) and produces the `decoded_instr_t` struct carried by all downstream pipeline registers. It handles the full RV64IMAFDC instruction set. For FP instructions with `rm = 3'b111` (dynamic rounding mode), the rounding mode field is resolved at decode by reading `fcsr_frm_i`; the resolved rounding mode is carried in the pipeline register so that FPU units do not need CSR access.
+`kronos_decode` is a thin combinational dispatch wrapper over five per-class sub-decoders — `kronos_decode_int` (OP/OP-IMM/OP-IMM-32/OP-32/LUI/AUIPC), `kronos_decode_ctrl` (JAL/JALR/BRANCH), `kronos_decode_mem` (LOAD/STORE/LOAD-FP/STORE-FP/AMO), `kronos_decode_sys` (the SYSTEM priv/sfence cluster and CSR\*), and `kronos_decode_fp` (OP-FP and the four FMA opcodes, the only sub-decoder that reads `frm_i`). Each sub-decoder owns its class's `funct3`/`funct7` decode and per-class illegal-encoding check; the wrapper matches on `opcode[6:0]`, routes exactly one sub-decoder's `decoded_instr_t` bundle to its output, and raises `illegal_insn_o` itself only when no class matches. The external interface (`instr_i`, `frm_i`, `decoded_o`, `illegal_insn_o`) is unchanged from the pre-split monolithic decoder, so nothing downstream of ID sees a difference.
 
-`kronos_regfile` implements 32 registers of 64 bits each. Reads are asynchronous (combinational): `rs1_rdata_o` and `rs2_rdata_o` reflect the current register contents in the same cycle the addresses are presented. Writes are synchronous on the rising clock edge. Reads and writes to `x0` are both suppressed — reads return `'0`, writes are ignored.
+ID also generates the fault bits it owns — `ecall`, `ebreak`, `illegal`, `is_mret`, `is_sret` — directly into `id_rr_q.fault`, and computes `fwd_rs1_sel`/`fwd_rs2_sel` via `kronos_forward` (below) for capture into the same register. ID performs **no** register-file read, no bypass mux, and no CSR access — those all moved to RR so that EX1's ALU/AGU/FPU-dispatch/branch-compare/CSR-illegal logic starts from pure flop outputs (§6).
 
-`kronos_regfile_fp` implements 32 floating-point registers of 64 bits each. It provides three simultaneous read ports (`fs1`, `fs2`, `fs3`) and one write port (`fd`). The NaN-boxing invariant is maintained at the LSU boundary: FLW forces the upper 32 bits to `32'hFFFF_FFFF` before writing, and FPU units check NaN-boxing on single-precision source operands.
+**RR — register read and bypass.** `kronos_regfile` (32×64b, async read, sync write, `x0` reads-as-zero/writes-ignored) and `kronos_regfile_fp` (32×64b, three async read ports `fs1`/`fs2`/`fs3`, one write port `fd`) are both read from `id_rr_q.dec.rs1/rs2/rs3` at RR, one cycle later than the pre-7b design read them at ID. `kronos_csr` also gets a second, RR-only combinational read port (`rr_csr_addr_i`/`rr_csr_read_en_i`/`rr_csr_rdata_o`) driven from `id_rr_q.dec.csr_addr`, separate from the CSR read-modify-write that still executes at EX1 from `rr_ex1_q` — RR's CSR read is purely speculative, captured into `rr_ex1_q.csr_rdata` and safe to discard if the consumer is later flushed.
 
-A WB→ID bypass mux sits between the integer register file read ports and the ID/EX pipeline register. When the WB stage is writing a register that ID is simultaneously reading, the bypass mux selects the write-data path rather than the stale register file output. There is no equivalent FP bypass; FP hazards are managed entirely by the scoreboard.
+**Integer bypass.** `int_rs1_data_rr` picks `mem_wb_q`'s writeback result over the (possibly stale) `kronos_regfile` read when `mem_wb_q` is writing the same register this cycle — this is the WB→RR analogue of the old WB→ID bypass, shifted one register later.
+
+**FP bypass.** A four-way mux, mirroring the integer path, picks between a live-just-completed FPU result (`fp_result_avail` and a tag match against `id_rr_q.dec.rs1/rs2/rs3`), a still-draining FP-arithmetic producer sitting in `ex2_mem1_q` (`ex2_mem1_q.dec.is_fp & rd_fp & ~fp_load` — FP loads are excluded since their value isn't in `.alu_result` at that point), the FP writeback value (`fp_we`/`fp_wa` match), or a plain `kronos_regfile_fp` read. This exists specifically for the single instruction that was held in IF/ID for the duration of an `fpu_stall`: when the stall lifts, that instruction reaches RR the same cycle its producer's result becomes visible, and this mux picks it up instead of a stale regfile read. It is **not** a general multi-cycle FP forwarding network — see §8.1 for why the FPU's blocking dispatch model means at most one FP consumer can ever be waiting.
+
+**RR/EX1 bypass mux.** The final operand values captured into `rr_ex1_q.rs1_data`/`rs2_data` are selected by `id_rr_q.fwd_rs1_sel`/`fwd_rs2_sel` — computed at the preceding ID cycle by `kronos_forward` from the instruction that will occupy RR at the *next* cycle — over six sources, freshest first:
+
+| Select | Source | Producer's stage at select time | Notes |
+|---|---|---|---|
+| `FWD_EX1_NOW` | `ex_result` (combinational EX1 ALU/muldiv output) | RR (advancing to EX1 next cycle) | same-cycle bypass; no extra stall for back-to-back ALU-RAW pairs |
+| `FWD_EX1` | `ex1_ex2_q.alu_result` (or `.csr_rdata` if CSR-typed) | EX1 | |
+| `FWD_EXMEM` | `ex2_mem1_q.alu_result` (or `.csr_rdata`) | EX2 | legacy enum name; the source register is `ex2_mem1_q` |
+| `FWD_MEM1B` | `mem1_mem1b_q.alu_result` (or `.csr_rdata`) | MEM1 | |
+| `FWD_MEM2` | `mem1_mem2_q.alu_result` (or `.csr_rdata`) | MEM1B | ALU/CSR producers only — `kronos_forward` suppresses this slot for loads, so the live `lsu_rdata` path never reaches the bypass mux |
+| `FWD_MEMWB` | `wb_result_64` (the WB mux output, driven from `mem_wb_q`) | MEM2 | the only path that carries a registered **load** value — every load producer in an earlier slot falls through to here |
+| (default) | RR-cycle source (the FP mux above, or the integer regfile/WB-bypass mux) | — | no producer matched |
+
+`kronos_forward` computes this per rs1/rs2 from the consumer's `if_id_rs1/rs2` addresses against five producer slots (`id_rr_q`, `rr_ex1_q`, `ex1_ex2_q`, `ex2_mem1_q`, `mem1_mem1b_q`; the sixth, `mem1_mem2_q`, only ever reaches `FWD_MEMWB` and needs no producer-slot check since `mem_wb_q`'s writeback mux already gates on `mem_wb_q.valid`). `rd = x0` and FP-destination producers (`rd_fp`) never match an integer consumer; loads are suppressed on every slot except the last two — `FWD_MEM2` (ALU/CSR results only, per the note above) and `FWD_MEMWB`.
 
 ---
 
-## 6. EX Stage — Execute, Branch Resolution, Muldiv
+## 6. EX1 / EX2 — Execute, Branch Resolution, Muldiv, Fault Aggregation
 
 ```mermaid
+%% depicts: stage7e
 flowchart LR
-    id_ex[ID/EX] --> fwdA["FWD mux A<br>FWD_NONE | EXMEM | MEMWB"]
-    id_ex --> fwdB["FWD mux B<br>FWD_NONE | EXMEM | MEMWB"]
-    exmem_fwd["EX/MEM fwd<br>alu_result / rd"] -.-> fwdA & fwdB
-    memwb_fwd["MEM/WB fwd<br>wb_result / rd"] -.-> fwdA & fwdB
-    fwdA --> opA["Operand A mux<br>use_pc ? PC : fwd_rs1"] --> alu["kronos_alu"]
-    fwdB --> opB["Operand B mux<br>use_imm ? imm : fwd_rs2"] --> muldiv["kronos_muldiv<br>multi-cycle MUL/DIV"]
-    alu --> resmux["Result mux<br>is_muldiv ? muldiv_res : alu_res"]
+    rr_ex1[rr_ex1_q] --> alu["kronos_alu"]
+    rr_ex1 --> muldiv["kronos_muldiv<br>multi-cycle MUL/DIV"]
+    rr_ex1 --> fpu_disp["FPU dispatch<br>(kronos_fpu_top)"]
+    rr_ex1 --> csr["kronos_csr<br>RMW / csr_illegal check"]
+    alu --> resmux["ex_result mux<br>is_muldiv ? muldiv : alu"]
     muldiv --> resmux
-    alu --> branch["Branch resolution<br>cmp_lt / eq + mispredict check"]
-    trap["Trap priority<br>irq > illegal > ecall > ebreak"] --> csr["kronos_csr<br>traps / MRET / IRQ"]
-    resmux --> ex_mem[EX/MEM]
-    branch --> ex_mem
-    csr --> ex_mem
-    branch -. redirect .-> pc["IF PC register<br>(redirect target)"]
+    alu --> branch["Branch-direction compare<br>cmp_lt / eq (from ALU)"]
+    resmux -. "FWD_EX1_NOW (comb)" .-> rr_bypass["RR bypass mux<br>(next cycle, §5)"]
+    resmux --> ex1_ex2[ex1_ex2_q]
+    branch --> ex1_ex2
+    csr --> ex1_ex2
+    ex1_ex2 -- "fault (EX1-owned bits +<br>bpred_dir_mispredict)" --> ex2_agg["EX2: fault OR-reduce<br>+ live pmp_fetch_fault fold-in"]
+    ex2_agg --> ex_redirect["ex_redirect_d =<br>fault.bpred_dir_mispredict"]
+    ex_redirect -. "direction redirect" .-> icache_top["icache kill / FB flush<br>(§4.1/§4.2)"]
+    ex2_agg --> ex2_mem1[ex2_mem1_q]
 ```
 
-Both execution units receive both operands; the A/B cross-connections are omitted for clarity.
+EX1 consumes only `rr_ex1_q` flop outputs — no combinational reach into the register file, the bypass mux, or the CSR file remains in front of the ALU, the AGU, FPU dispatch, or the branch comparator, which is the entire point of moving register read into RR (§5). EX2 aggregates fault bits and forms the direction-mispredict redirect; it performs no new datapath computation.
 
-**Forwarding muxes.** Two muxes, one for each source operand (RS1, RS2), select among three sources controlled by `fwd_rs1_sel` / `fwd_rs2_sel` from `kronos_forward`:
-
-| Select | Source |
-|--------|--------|
-| `FWD_NONE` | ID/EX register value (from register file or WB→ID bypass) |
-| `FWD_EXMEM` | EX/MEM `alu_result` (instruction two stages ahead of the consumer) |
-| `FWD_MEMWB` | MEM/WB `wb_result` (instruction one stage ahead of the consumer) |
-
-`FWD_EXMEM` is suppressed when the producing instruction is a load — load data is not available until the MEM stage completes, which generates a load-use hazard instead. All forwarding is suppressed when `rd = x0`.
-
-**ALU.** Single-cycle, fully combinational. BOOM/Rocket-style structural decomposition: one shared 64-bit adder (drives ADD, SUB, SLT, SLTU and the comparator), one right-only barrel shifter (SLL is implemented as input bit-reverse → right-shift → output bit-reverse, sharing the same shifter as SRL/SRA), one logic block (AND, OR, XOR, PASSB), and a comparator derived from the adder's sign bit (LT) and zero detect (EQ) rather than a second subtractor. A 5:1 op-class final mux selects which functional unit drives the result; ADD/SUB get an explicit arm and the default arm produces zero so an invalid `alu_op` cannot leak adder output into the writeback path. Operations: ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND, PASSB (used by LUI to pass the immediate through unchanged).
-
-W-suffix instructions (ADDW, SUBW, SLLW, SRLW, SRAW, and their immediate variants) run on the same single 64-bit datapath via input pre-mask (zero-extend, except sign-extend for SRA so the shifter sees the right MSB) and output sign-extension of the low 32 bits — no parallel 32-bit datapath. The A-operand mux selects between the forwarded RS1 value and the instruction PC (for AUIPC and branch offset computation). The B-operand mux selects between the forwarded RS2 value and the sign-extended immediate.
-
-In addition to `result_o`, the ALU exposes `adder_out_o` (raw adder output, before word-op extend), `cmp_lt_o` (signed-or-unsigned LT per `op_i`), and `eq_o` (`adder_out == 0`, valid whenever the adder is in subtract mode). The branch unit consumes `cmp_lt_o` and `eq_o` directly instead of duplicating the comparator on the same operands.
+**ALU (`kronos_alu`, unchanged since its structural decomposition was introduced — see §1).** Single-cycle, fully combinational. BOOM/Rocket-style structural decomposition: one shared 64-bit adder (drives ADD, SUB, SLT, SLTU and the comparator), one right-only barrel shifter (SLL is implemented as input bit-reverse → right-shift → output bit-reverse, sharing the same shifter as SRL/SRA), one logic block (AND, OR, XOR, PASSB), and a 5:1 op-class final mux; ADD/SUB get an explicit arm and the default arm produces zero so an invalid `alu_op` cannot leak adder output into writeback. W-suffix instructions run on the same 64-bit datapath via input pre-mask and output sign-extension — no parallel 32-bit datapath. `alu_a` selects between the forwarded RS1 value and `rr_ex1_q.pc` (AUIPC / branch offset); `alu_b` selects between the forwarded RS2 value and the sign-extended immediate. In addition to `result_o`, the ALU exposes `adder_out_o`, `cmp_lt_o` (signed-or-unsigned LT per `op_i`), and `eq_o` (`adder_out == 0`, valid whenever the adder is in subtract mode) — the branch unit consumes `cmp_lt_o`/`eq_o` directly instead of duplicating the comparator.
 
 ```mermaid
+%% depicts: stage7e
 flowchart LR
     a_i["a_i [63:0]"] --> premask
     b_i["b_i [63:0]"] --> premask
@@ -322,55 +303,109 @@ flowchart LR
     cmp --> eq_o
 ```
 
-**Muldiv.** `kronos_muldiv` implements all eight M-extension operations for both 32-bit and 64-bit operands. MUL operations require **2 cycles**. DIV and REM operations require **34 cycles** (32-bit) or **66 cycles** (64-bit) in the normal case. Division by zero and `INT_MIN / -1` are detected early and produce a result in **2 cycles**. While `muldiv_stall` is asserted the entire pipeline freezes.
+**Muldiv (`kronos_muldiv`, EX1).** Implements all eight M-extension operations for 32-bit and 64-bit operands. MUL requires **2 cycles**. DIV/REM require **34 cycles** (32-bit) or **66 cycles** (64-bit) in the normal case; division by zero and `INT_MIN / -1` are detected early and resolve in **2 cycles**. `muldiv_stall` freezes the entire pipeline while asserted, but — unlike the older redirect-blind version — the hazard priority table (§7) lets a redirect flush a wrong-path MUL/DIV out from under `muldiv_stall` rather than waiting for it to finish.
 
 ![MUL stall waveform](diagrams/svg/wf-muldiv-stall.svg)
 
 ![DIV stall waveform](diagrams/svg/wf-div-stall.svg)
 
-**Branch resolution.** EX evaluates every branch condition by consuming the ALU's `cmp_lt_o` and `eq_o` outputs — `kronos_decode` drives `alu_op` to `ALU_SLT` (BLT/BGE), `ALU_SLTU` (BLTU/BGEU), or `ALU_SLTU` for BEQ/BNE (any subtract-style op makes `eq_o` valid). The branch unit then maps `funct3` to `alu_eq` / `~alu_eq` / `alu_cmp_lt` / `~alu_cmp_lt`. This removes the historical 4-way inline comparator that ran in parallel on the same operands. JAL, JALR, and taken branches write `pc_next` into EX/MEM and assert `redirect`. JALR adds RS1 to the sign-extended 12-bit immediate and clears bit 0. The branch predictor update signals (resolved direction and target) are also driven from EX.
+**Branch resolution.** EX1 evaluates every branch condition from the ALU's `cmp_lt_o`/`eq_o` — `kronos_decode` drives `alu_op` to `ALU_SLT` (BLT/BGE) or `ALU_SLTU` (BLTU/BGEU, and BEQ/BNE, where any subtract-style op makes `eq_o` valid) — and maps `funct3` to `alu_eq` / `~alu_eq` / `alu_cmp_lt` / `~alu_cmp_lt`. JAL, JALR, and taken branches compute `ex_pc_d` (the redirect target on a direction mispredict) from `rr_ex1_q.pc + imm` or the JALR adder (`fwd_rs1_data + sext(imm)`, bit 0 cleared). The branch predictor's update inputs (§4.4) are driven from this same EX1 state, keyed by `rr_ex1_q.pc`.
 
-**Trap cause priority.** When multiple exception sources are simultaneously active, EX selects the cause in this order (highest first): external interrupt (`irq_pending`) > illegal instruction > ECALL > EBREAK. All traps and MRET assert `redirect` and set `pc_next` to the trap vector or `mepc` respectively.
+**Fault-bit propagation.** Every fault and privileged-transition source writes exactly one bit of the `fault_t` struct, in the pipeline register belonging to the stage that produces it, with no combinational reach across module boundaries:
 
-**CSR unit.** `kronos_csr` implements CSRRW, CSRRS, and CSRRC plus their immediate variants. CSR reads return the old value; writes take effect one cycle later. MISA reports I, M, A, F, D, and C extensions; MXL = 2 (64-bit). FCSR, FFLAGS, and FRM are readable/writable; the FPU reads `fcsr_frm_o` from the CSR unit and writes accumulated exception flags back via `fflags_i`. `mstatus.FS` tracks floating-point state (Off / Initial / Clean / Dirty).
+| Producer stage | `fault_t` bits |
+|---|---|
+| ID (`id_rr_q.fault`) | `ecall`, `ebreak`, `illegal`, `is_mret`, `is_sret` |
+| EX1 (folded into `ex1_ex2_q.fault`) | `csr_illegal`, `mret_priv_fail`, `sret_priv_fail`, `satp_tvm_fail`, `wfi_priv_fail`, `irq_pending`, `bpred_dir_mispredict` |
+| EX2 (folded into `ex2_mem1_q.fault`) | `pmp_fetch_fault`, `trig_hit` |
+| MEM (folded into `mem1_mem2_q.fault`, or fed live to the MEM2 redirect aggregator) | `pmp_data_fault`, `ex_amo_nc_fault`, `instr_page_fault`, `load_page_fault`, `store_page_fault`, `bpred_target_mispredict`, `dcache_bus_err_fault` |
+
+Each pipeline register's `always_ff` carries forward every earlier producer's bits verbatim and OR-folds in only its own stage's new bits — a Verilator `UNUSEDSIGNAL` lint failure catches any bit a producer forgets to drive. Redirect formation reads only registered bits, at exactly two points:
+
+- **`ex_redirect_d = ex1_ex2_q.fault.bpred_dir_mispredict`** — formed at EX2, the only fault class resolved that early. A direction mispredict flushes every younger register — `if_id_q`, `id_rr_q`, `rr_ex1_q`, and `ex1_ex2_q` itself (the wrong-path follower that would otherwise land in `ex1_ex2_q` the same edge) — while the mispredicting branch, already past the EX1/EX2 boundary, continues to retire normally.
+- **`mem_redirect_d`** — a single OR over every other fault bit in `mem1_mem2_q.fault` plus the still-live MEM2-cycle producers (`mem2_pmp_data_fault`, `mem2_amo_nc_fault`, `mem2_load_page_fault`, `mem2_store_page_fault`, `bpred_mispredict_target`, `dcache_bus_err_fault`) — all of which stay within MEM2's own narrow cone rather than crossing a module boundary. A `mem_redirect` flushes `id_rr_q` through `mem1_mem2_q`.
+
+**Trap cause priority.** `mem_trap_cause_d` (and its EX1-cycle predictive twin `ex1_trap_cause`, which feeds `kronos_csr.trap_vector_o` so the redirect target already reflects `medeleg`/`mideleg` delegation) select the cause in fixed priority order, roughly: trigger hit > instruction/load/store page fault > instruction/data PMP fault (or AMO non-cacheable fault) > D-cache bus error > pending interrupt > illegal/CSR-illegal/priv-fail class > ECALL (M/S/U per current `priv_q`) > EBREAK (default). MEM-class (older-instruction) faults always outrank EX1-class faults in the predictive path, since a MEM-class trap's `mem_redirect` would flush the EX1 instruction anyway.
+
+**CSR unit (`kronos_csr`).** Two access points, not one: RR issues a purely speculative combinational read (§5) into `rr_ex1_q.csr_rdata`, discarded harmlessly if the consumer is later flushed; the actual CSRRW/CSRRS/CSRRC read-modify-write (plus immediate variants) executes at EX1 from `rr_ex1_q.dec.csr_addr`/`rs1_data`, gated only by `rr_ex1_q.valid & rr_ex1_q.dec.is_csr` — no `~combined_stall` gate, which is what breaks a historical `combined_stall → csr_illegal → ex_redirect → combined_stall` combinational loop. The CSR write itself does not commit at EX1: it retires from `mem_wb_q` (`retire_i = mem_wb_q.valid & mem_wb_q.dec.is_csr & ~mem_wb_fault_any_trap & ~combined_stall`), alongside `trap_i`/`mret_i`/`sret_i`, all driven from the registered `mem_wb_q.fault` bits. MISA reports I, M, A, F, D, C (MXL = 2); FCSR/FFLAGS/FRM are readable/writable, with the FPU's accumulated exception flags folded into `fcsr` at the same retire edge (gated by `mem_wb_is_fp_arith_q` so a non-FP retire cannot OR in a stale `fflags` value); `mstatus.FS` tracks FP state (Off/Initial/Clean/Dirty).
 
 ---
 
-## 7. FPU
+## 7. Hazard, Forwarding, and Stall Control
 
-The FPU handles all F and D extension instructions. It is logically separate from the integer pipeline: FP instructions are dispatched from EX to `kronos_fpu_top`, which routes them to one of six pipelined units. Results are written directly to `kronos_regfile_fp` through the FPU's dedicated writeback interface, bypassing the integer WB mux.
+```mermaid
+%% depicts: stage7e
+flowchart TB
+    forward["kronos_forward<br>fwd_rs1/2_sel — 6 slots<br>(computed at ID, consumed at RR)"]
+    subgraph pipe["Pipeline registers"]
+        direction LR
+        if_id[if_id_q] --- id_rr[id_rr_q] --- rr_ex1[rr_ex1_q] --- ex1_ex2[ex1_ex2_q] --- ex2_mem1[ex2_mem1_q] --- mem1_mem1b[mem1_mem1b_q] --- mem1_mem2[mem1_mem2_q] --- mem_wb[mem_wb_q]
+    end
+    id_rr -. "consumer rs1, rs2" .-> forward
+    id_rr & rr_ex1 & ex1_ex2 & ex2_mem1 & mem1_mem1b -. "rd, wen, is_load (producers)" .-> forward
+    forward -. "fwd_rs1_sel, fwd_rs2_sel" .-> id_rr
+    hazard["kronos_hazard<br>en / flush for 8 registers"]
+    if_id & id_rr & rr_ex1 & ex1_ex2 & ex2_mem1 & mem1_mem1b & mem1_mem2 -. "rd / valid / is_load / is_csr" .-> hazard
+    hazard -. "en / flush" .-> pipe
+    stall["combined_stall_no_muldiv =<br>mem_stall | instr_fetch_stall | fpu_stall<br>| (MEM1B dTLB-miss hold)"] --> hazard
+    muldiv_stall["muldiv_stall"] --> hazard
+    redirect["ex_redirect_q | fence_i_redirect_q<br>(ex_redirect_i)<br>mem_redirect_q (mem_redirect_i)"] --> hazard
+```
 
-### 6a. Dispatch and Scoreboard
+`kronos_forward` and `kronos_hazard` both sit outside the pipeline stages. `kronos_forward`'s bypass-source computation is covered in §5 — it is a pure combinational function of the consumer's `rs1`/`rs2` against five producer slots, with loads suppressed on every slot except the last two.
 
-`kronos_fpu_top` receives the decoded FP instruction from EX when `is_fp` is asserted. It selects the target unit based on `fpu_op`, presents the three FP register read values, and arbitrates the writeback port when multiple units complete in the same cycle.
+`kronos_hazard` drives `en`/`flush` for all eight pipeline registers, with a fixed priority order (highest first):
 
-`kronos_fpu_scoreboard` implements the FP hazard model:
+| Priority | Condition | Effect |
+|---|---|---|
+| 1 | `mem_stall_i` (= `combined_stall_no_muldiv`: `mem_stall \| instr_fetch_stall \| fpu_stall \|` a MEM1B dTLB-miss hold) | Freeze all eight registers — no enables, no flushes. |
+| 2 | `ex_redirect_i` (`ex_redirect_q \| fence_i_redirect_q`) or `mem_redirect_i` (`mem_redirect_q`) | Flush `if_id_q`, `id_rr_q`, `rr_ex1_q` (the registers `kronos_hazard` owns). `ex1_ex2_q`/`ex2_mem1_q`/`mem1_mem1b_q`/`mem1_mem2_q` flush via separate combinational assigns in `kronos_top`, gated on the same redirect signals, so the module boundary doesn't force every older register's flush condition through `kronos_hazard`'s port list. |
+| 3a | ID-class RAW: `load_use \| fp_load_use \| csr_raw_stall_id \| jalr_fwd_stall \| frm_hazard` | Stall `pc`/`if_id`/`id_rr`; bubble into RR (`id_rr_flush`). |
+| 3b | RR-class CSR-RAW: `csr_raw_stall_rr` | Stall `pc`/`if_id`/`id_rr`/`rr_ex1`; bubble into EX1 (`rr_ex1_flush`). Closes a one-cycle window where a consumer that has advanced from ID to RR would otherwise read a CSR write that is still in flight one register ahead. |
+| 4 | `muldiv_stall_i` | Freeze all eight registers. Ranked *below* redirect so a wrong-path MUL/DIV can still be flushed instead of running to completion. |
+| 5 (else) | — | Normal advance: all `en = 1`, no flushes. |
 
-**WAW busy-table:** One bit per FP register. Set when an instruction is dispatched to any unit that writes `fd`. Cleared on writeback. A new FP instruction is stalled (`fpu_stall_o` asserted) while any of its source registers (`fs1`, `fs2`, `fs3`) or its destination register (`fd`) have their busy bit set. This prevents RAW and WAW hazards without operand forwarding.
+**Load-use.** A load can occupy any of six slots ahead of an ID-stage consumer — `id_rr_q`, `rr_ex1_q`, `ex1_ex2_q`, `ex2_mem1_q`, `mem1_mem1b_q`, or `mem1_mem2_q` — because the only registered load value is `mem_wb_q.alu_result` (`FWD_MEMWB`, §5): `FWD_MEM2` explicitly suppresses loads to keep the live `lsu_rdata` path out of the bypass mux. A load-use hazard therefore costs a full 5-cycle ID stall in the worst case (the load advances through all six slots before the consumer's `FWD_MEMWB` bypass fires at the next RR). `is_load` for this purpose mirrors `kronos_forward`'s `wb_sel == WB_MEM` predicate, so AMO and LR/SC — which also write `rd` from `lsu_rdata` at MEM2 — stall a dependent consumer exactly like an ordinary load; without this, a `bnez`/branch reading an SC's success/fail code the cycle after would see a stale regfile value. FP load-use (`fp_load_use`) is the same shape with FP consumer keys.
 
-**WB port arbitration:** All six units share one write port to `kronos_regfile_fp`. When multiple units complete in the same cycle, the scoreboard grants the port to the highest-priority unit and holds lower-priority units in a DONE state until the port is free.
+**JALR-forward stall.** A JALR in ID whose `rs1` matches a load producer in `ex2_mem1_q` or `mem1_mem1b_q` stalls rather than forwards — the load value isn't available until MEM2, too late for the JALR target adder. Non-load producers in those slots are covered by ordinary `FWD_EXMEM`/`FWD_MEM1B` forwarding without a stall.
 
-### 6b. FPU Unit Table
+**FRM/FCSR RAW.** A CSR write to FRM/FCSR sitting in EX1 (`rr_ex1_is_frm_write_i`) stalls an FP instruction in ID that reads the dynamic rounding mode (`rm = 3'b111`) for one cycle, so decode re-reads `frm` only after the write has landed.
+
+![Load-use hazard waveform](diagrams/svg/wf-load-use-hazard.svg)
+
+---
+
+## 8. FPU
+
+The FPU handles all F and D extension instructions (`rtl/common/fpu/`, an unchanged file set since the iterative FDIV/FSQRT units were added — see §1: `kronos_fpu_top`, `kronos_fpu_scoreboard`, `kronos_fpu_fmisc`, `kronos_fpu_fcvt`, `kronos_fpu_fadd`, `kronos_fpu_fmul`, `kronos_fpu_fma`, `kronos_fpu_iter`, `kronos_fpu_fdiv_core`, `kronos_fpu_fsqrt_core`). It dispatches from EX1: `kronos_fpu_top` receives `rr_ex1_q`'s decoded FP operands whenever `is_fp` is asserted and routes them to one of six pipelined units. FP-destination results are written to `kronos_regfile_fp` through a dedicated writeback interface, bypassing the integer WB mux — but instructions with an **integer** destination that happen to dispatch through the FPU (FCVT.\*.S/D→int, FMV.X.W/D, FCLASS, FEQ, FLT, FLE) do the opposite: their result rides the ordinary integer `WB_ALU` path via `mem_wb_q.alu_result` (captured from `fpu_result` at the MEM2→WB edge), not the FP writeback interface.
+
+### 8.1 Dispatch, Blocking Integration, and the Scoreboard
+
+`kronos_fpu_scoreboard` is a **writeback-slot reservation shift register** (`DEPTH = 9`, the FMA/FMUL latency), not a per-FP-register busy table. Each dispatch computes which future cycle its result will complete (`dispatch_latency`, from the op's unit table below) and checks `slots_q[latency-1]` for a collision; the check is keyed by whether the result targets the FP regfile or the integer regfile (`fp_dest_i`/`int_dest_i`), which is what lets an FCVT/FMV/FCLASS/FEQ/FLT/FLE op (integer destination) share dispatch with an FP-destination op without a false collision. `busy_o` blocks a new dispatch on a real slot collision or while the iterative FDIV/FSQRT unit is already running.
+
+That mechanism is built to let `kronos_fpu_top` accept a new dispatch every cycle whose writeback slot doesn't collide with an already-outstanding op — but `kronos_top`'s integration does not exploit this: `fp_inflight_q` is set on dispatch and only clears on `fpu_out_valid`, and `fpu_stall` (`= (fp_inflight_q | fpu_dispatching) & ~fp_result_avail`) freezes the **entire** integer pipeline for the whole duration, so only one FP operation is ever in flight from `kronos_top`'s perspective, regardless of the FPU's internal overlap capability. Because dispatch is fully serialized, at most one instruction — the one held in `if_id_q` for the length of the stall — can ever be waiting on a result; the RR-stage FP bypass mux described in §5 exists to hand that single consumer the result the same cycle the stall lifts, not to forward across a general multi-op pipeline. FP hazards (RAW and structural WB-port collisions) are therefore fully handled by blocking dispatch plus that single-slot bypass — there is no equivalent of the integer six-slot forwarding network for FP, and none is needed while dispatch stays serialized this way.
+
+### 8.2 FPU Unit Table
 
 | Unit | Module | Latency | Operations |
 |------|--------|---------|------------|
-| fmisc | `kronos_fpu_fmisc` | 1 cycle | FSGNJ, FMIN, FMAX, FCLASS, FCMP, FMV.X.W, FMV.W.X, FMV.X.D, FMV.D.X |
-| fcvt | `kronos_fpu_fcvt` | 2 cycles | FCVT.W.S, FCVT.WU.S, FCVT.L.S, FCVT.LU.S, FCVT.S.W, FCVT.S.WU, FCVT.S.L, FCVT.S.LU, FCVT.S.D, FCVT.D.S, and D variants |
-| fadd | `kronos_fpu_fadd` | 5 cycles | FADD.S, FSUB.S, FADD.D, FSUB.D |
-| fmul | `kronos_fpu_fmul` | 4 cycles | FMUL.S, FMUL.D |
-| fma | `kronos_fpu_fma` | 5 cycles | FMADD.S, FMSUB.S, FNMADD.S, FNMSUB.S, FMADD.D, FMSUB.D, FNMADD.D, FNMSUB.D |
+| fmisc | `kronos_fpu_fmisc` | 1 cycle | FSGNJ, FMIN, FMAX, FCLASS, FEQ, FLT, FLE, FMV.X.W, FMV.W.X, FMV.X.D, FMV.D.X |
+| fcvt | `kronos_fpu_fcvt` | 3 cycles | FCVT.W.S, FCVT.WU.S, FCVT.L.S, FCVT.LU.S, FCVT.S.W, FCVT.S.WU, FCVT.S.L, FCVT.S.LU, FCVT.S.D, FCVT.D.S, and D variants |
+| fadd | `kronos_fpu_fadd` | 7 cycles | FADD.S, FSUB.S, FADD.D, FSUB.D |
+| fmul | `kronos_fpu_fmul` | 9 cycles | FMUL.S, FMUL.D |
+| fma | `kronos_fpu_fma` | 9 cycles | FMADD.S, FMSUB.S, FNMADD.S, FNMSUB.S, FMADD.D, FMSUB.D, FNMADD.D, FNMSUB.D |
 | iter | `kronos_fpu_iter` | ≤ 29 (S) / ≤ 58 (D) cycles | FDIV.S, FDIV.D, FSQRT.S, FSQRT.D |
 
-All units implement IEEE 754-2019 rounding and exception flag generation. The resolved rounding mode is carried from decode through the pipeline register.
+All units implement IEEE 754-2019 rounding and exception flag generation. The resolved rounding mode is carried from decode through the pipeline register (`rm_resolved`, resolved against `fcsr_frm` at decode time when the instruction encodes `rm = 3'b111`).
 
-### 6c. FDIV/FSQRT — Iterative SRT
+### 8.3 FDIV/FSQRT — Iterative SRT
 
 `kronos_fpu_fdiv_core` and `kronos_fpu_fsqrt_core` implement radix-2 SRT iterative division and square root. One quotient/root bit is produced per cycle after an initial normalization step.
 
 - Single precision (23-bit mantissa): ≤ 29 cycles
 - Double precision (52-bit mantissa): ≤ 58 cycles
 
-`kronos_fpu_iter` wraps both cores in a 3-state FSM: `IDLE → RUNNING → DONE`. While in RUNNING, `iter_busy_o` is asserted; the scoreboard propagates this as `fpu_stall_o`, freezing integer dispatch for the duration. Both cores handle special cases (±0, ±Inf, NaN, subnormals) combinationally before the iteration begins and short-circuit to DONE when applicable.
+`kronos_fpu_iter` wraps both cores in a 3-state FSM: `IDLE → RUNNING → DONE`. While in RUNNING, `iter_busy_o` is asserted; the scoreboard's `busy_o` propagates this, freezing new dispatch (and, via `fpu_stall`, the whole integer pipeline) for the duration. Both cores handle special cases (±0, ±Inf, NaN, subnormals) combinationally before the iteration begins and short-circuit to DONE when applicable. The iterative unit reserves its writeback slot late (`late_req_i`/`late_latency_i = 1`, at ROUND time) since its total latency isn't known at dispatch.
 
 ---
 
