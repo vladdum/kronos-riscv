@@ -594,7 +594,7 @@ arithmetic, or reservation state (all in the cache, §9.4–9.5). Its jobs:
 | Load sign/zero-extension | dcache always returns zero-extended sub-doubleword data; the LSU applies signed/unsigned extension from `funct3` combinationally |
 | SC result | `rd = {63'b0, ~sc_success}` — 0 on success, 1 on failure, overriding the normal load-data mux |
 | FP load NaN-boxing | FLW upper 32 bits forced to `32'hFFFF_FFFF`; FLD passes the full 64 bits |
-| Fault suppression | `pmp_fault_i \| amo_nc_fault_i \| bus_err_fault_i \| tlb_miss_i` all suppress `dcache_req_o`/`dcache_amo_req_o` **and** force `mem_stall_o` low, so a trap is taken the same cycle the fault is seen instead of after a wasted (or hung) transaction |
+| Fault suppression | `dcache_req_o`/`dcache_amo_req_o` are gated by `~pmp_fault_i & ~tlb_miss_i` only (`kronos_lsu.sv:147,151`) — `amo_nc_fault_i`/`bus_err_fault_i` deliberately do **not** gate the request: `amo_nc_fault_i` is produced combinationally from the same `eff_req_valid` the request itself depends on, so gating on it would close a combinational loop (L133–135); `kronos_dcache` instead just never issues an AXI transaction for an NC atomic or a bus error on its own. `mem_stall_o` is forced low by `pmp_fault_i \| amo_nc_fault_i \| bus_err_fault_i` (any one collapses the AND to 0, L237–238) so the trap can be taken the same cycle the fault is seen; `tlb_miss_i` is the opposite of a suppressor — it is one of the OR'd terms that *keeps* `mem_stall_o` asserted while a walk is in flight |
 
 `funct3_i`/`fp_dest_req_i` are read combinationally rather than from a
 registered copy — the pipeline is already held (`mem_stall_o`) for the
@@ -722,8 +722,9 @@ interrupt-enable and privilege-transition state for both M and S: `MIE`
 `SMODE_IRQ_MASK` = the SSIE/STIE/SEIE/SSIP/STIP/SEIP bits), so a write
 through either name updates the same underlying state.
 
-**Delegation.** `medeleg` (WARL, bits 0–15 except bit 11 — M-mode ECALL
-can never delegate to itself — hardwired 0) and `mideleg` (WARL, only the
+**Delegation.** `medeleg` (WARL, bits 0–15 except bits 11 and 14 — M-mode
+ECALL can never delegate to itself, and bit 14 is reserved — both
+hardwired 0, `MEDELEG_MASK = 16'hB7FF`) and `mideleg` (WARL, only the
 SSIE/STIE/SEIE bits writable) route a trap to S-mode instead of M-mode
 when `priv_q != PRIV_M` **and** the cause's bit is set in the matching
 delegation register; M-mode traps never delegate. Two copies of the same
@@ -862,8 +863,11 @@ flowchart TB
 ## 13. CSR Register Map
 
 `kronos_csr`'s `read_csr` function implements 74 distinct CSR addresses
-across 67 case arms (some arms serve two aliased addresses, e.g. `mcycle`
-at both `0xB00` and `0xC00`); the table below groups them into 36 rows,
+across 64 case arms (some arms serve two aliased addresses, e.g. `mcycle`
+at both `0xB00` and `0xC00`; a raw colon-count of the case body reads 68,
+but that sweeps in 2 comment lines, 1 multi-line continuation with a
+bit-select colon, and the `default:` arm — 68 − 4 = 64 real address arms).
+The table below groups them into 36 rows,
 collapsing address ranges and aliases for readability while keeping every
 address traceable to the RTL. "Access" reflects the minimum-privilege
 encoding in `addr[9:8]` (`kronos_csr`'s `required_priv`/`min_priv` check)
@@ -888,7 +892,7 @@ has a write arm for that address (no arm ⇒ RO, writes silently dropped).
 | `0x180` | `satp` | S-mode RW | WARL on MODE — only Bare/Sv39/Sv48 accepted, illegal MODE drops the whole write. Access gated by `mstatus.TVM` from S-mode (§12.1). |
 | `0x300` | `mstatus` | M-mode RW | §12.1. |
 | `0x301` | `misa` | M-mode RO | MXL=2 (64-bit); extensions I,M,A,F,D,C. |
-| `0x302` | `medeleg` | M-mode RW | WARL, bits 0–15 except bit 11 (§12.1). |
+| `0x302` | `medeleg` | M-mode RW | WARL, bits 0–15 except bits 11 and 14 (§12.1). |
 | `0x303` | `mideleg` | M-mode RW | WARL, SSIE/STIE/SEIE only (§12.1). |
 | `0x304` | `mie` | M-mode RW | |
 | `0x305` | `mtvec` | M-mode RW | Direct mode only. |
@@ -1044,6 +1048,13 @@ on `retire_csr_wen` to `mcause` for trap detection. AMO writes surface in
 **Known limitations** (tracked as exclusions in
 `tools/crv/coverage_excludes.txt`):
 
+- FENCE (`cg_instr_class.op_fence`): `kronos_decode_sys.sv` has no
+  MISC_MEM (opcode `0b0001111`) case — the only fence-family instruction
+  the decoder recognizes is SFENCE.VMA (a SYSTEM-opcode instruction, §12).
+  Plain FENCE and FENCE.I are therefore never decoded; FENCE.I instead
+  works entirely outside the decoder, via the raw-instruction-bits
+  detection §9.4 documents. This bin stays excluded in
+  `tools/crv/coverage_excludes.txt` until FENCE gets real MISC_MEM decode.
 - SLT/SLTU result sign (`cg_alu_sign.slt_neg`, `cg_alu_sign.sltu_neg`):
   these instructions write exactly 0 or 1, so bit 63 is always 0 and the
   `_neg` bins are structurally unreachable.
@@ -1054,10 +1065,15 @@ on `retire_csr_wen` to `mcause` for trap detection. AMO writes surface in
   for ordinary loads/stores (PMP/page faults are the only access-fault
   paths); these bins require a dedicated misalignment handler before they
   can be exercised.
-- LR/SC reservation edge cases (`cg_amo.lr_sc_race`): the Sail riscv
-  reference model is built with `RsrvNone`, which disables reservation
-  tracking, so a racing-SC scenario cannot be randomly generated without
-  diverging from Sail.
+
+`tools/crv/coverage_excludes.txt` carries no `cg_amo.*` exclusions — every
+`cg_amo` bin (`lr`, `sc`, and the nine `amo*` operation-type bins,
+`tb/stage5/tb_crv_cov.sv`) is covered, LR/SC included, by the directed
+`assist_amo.S` test. The one real gap in LR/SC verification is that the
+Sail riscv reference model is built with `RsrvNone` (reservation tracking
+disabled), so a racing-SC scenario can never be *randomly* generated
+without diverging from Sail — that gap is closed by the directed test
+rather than carried as a coverage exclusion.
 
 See `docs/superpowers/specs/2026-04-26-crv-harness-design.md` for the
 full design.
@@ -1127,12 +1143,14 @@ TB).
 unit, and its header comment still describes a Stage 6 BOOM-style
 out-of-order machine (reorder buffer, issue queue, load/store queue,
 register alias table) that was expected to follow the in-order Stage 5
-work. That plan was paused early in Stage 6 (`git log`: "paused for OoO
-rethink") and never resumed — Stage 6 instead became the privilege/MMU
-work this document's §12 describes, and kronos-riscv has stayed a 9-stage
-**in-order** pipeline (§1) since. `rtl/stage7/` contains no `kronos_rob.sv`
-or `kronos_busy.sv`; none of the hierarchical paths below exist in any
-current build:
+work. That plan was paused during the early Stage-7 work (the attempt
+itself landed under a `feat(stage7a)` commit message — `1d51cc0
+feat(stage7a): WIP — Reorder Buffer + scoreboarded OoO completion (paused
+for OoO rethink)` — not Stage 6) and never resumed. Stage 6 became the
+privilege/MMU work this document's §12 describes, and kronos-riscv has
+stayed a 9-stage **in-order** pipeline (§1) throughout. `rtl/stage7/`
+contains no `kronos_rob.sv` or `kronos_busy.sv`; none of the hierarchical
+paths below exist in any current build:
 
 | Path | Purpose (never implemented) |
 |------|------------------------------|
@@ -1145,4 +1163,4 @@ The file is kept only so `sim/` still builds against the namespace it
 reserves (`kronos_ooo_inspect::`); it defines no symbols. If an
 out-of-order redesign is ever picked back up, this section — and the stub
 file — should be rewritten against whatever that design's actual module
-hierarchy turns out to be, not against this abandoned Stage-6 plan.
+hierarchy turns out to be, not against this abandoned early-Stage-7 plan.
