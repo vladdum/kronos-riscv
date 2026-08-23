@@ -59,17 +59,34 @@ kronos-riscv/
 └── kronos_riscv.core                        # FuseSoC core descriptor
 ```
 
+## Documentation Ownership
+
+| Document | Owns |
+|---|---|
+| `docs/architecture.md` | The **current** machine: pipeline, hazards, memory subsystem, FPU, privilege/MMU, CSR map, timing, counters. One design-evolution table (§1) is the only stage-keyed content. |
+| `docs/testplan.md` | Verification truth: per-stage coverage, gates (GLS table moves here), CRV, how-to-add-a-test. |
+| `README.md` | Build/run/compliance/status: stage table (the single source of stage numbering), ACT4, FPGA flow. |
+| Master spec + per-stage specs | Design intent and history; the master spec gains a dated **amendment log** and is never silently edited. |
+
+A stage-closing PR is not done until every document its changes falsified
+is true again — the same rule `docs/testplan.md` already states for tests,
+extended to all four documents. Stage numbers appear in exactly three
+places: the README's Staged Development table (the single source of stage
+numbering), `docs/architecture.md` §1, and `docs/testplan.md` section
+headers. All other prose cites the reason for a design choice (the failure
+it prevents), never the stage that introduced it.
+
 ## Bus Interface
 
 **Stages 0–2:** OBI (Open Bus Interface) — req/gnt/rvalid handshake, one
 outstanding transaction per port. Two ports: instruction fetch (read-only) and
 data (read/write).
 
-**Stages 3–5:** Native AXI4 — single-outstanding AXI4 master ports (one
-in-flight transaction per channel), instruction and data on separate ports.
-
-**Stage 6:** Native AXI4 with multiple outstanding IDs — the OOO LSU issues
-multiple in-flight memory requests with tagged, out-of-order responses.
+**Stage 3 onward:** Native AXI4, single-outstanding — one in-flight
+transaction per channel, instruction and data on separate master ports. As
+built: OBI stages 0–2; native AXI4 single-outstanding from stage 3; multiple
+outstanding IDs is the stage-8 OOO plan (not yet built — see
+`docs/architecture.md` §17).
 
 ## Build Commands
 
@@ -194,7 +211,7 @@ Stage implementation and debug follow this loop:
 5. **Synthesis gates**: for any stage with Fmax or resource goals, re-synthesize after RTL-touching tasks. On a timing miss: analyze failing-path classes first, try zero-RTL directive escalation before RTL changes, and make every RTL timing fix behavior-identical and sim-gated.
 6. **Final whole-branch review** (most capable model) with the ledger's deferred-minors list for merge triage; ONE fix wave + one scoped re-review.
 7. **Hardware last**: the full sim regression, ACT4, and `make ci-local` must be green before any FPGA or GLS run, and every hardware scenario must already have an equivalent simulation twin at the same scale (same program, iteration, and loop counts). Run the stage-transition gates (GLS) before tagging a stage complete.
-8. **Update the checked-in documentation as part of closing the work** — a change is not done until the docs that describe it are true again (see Documentation Upkeep below). This is a closing step, not an optional follow-up.
+8. **Update the checked-in documentation as part of closing the work** — a change is not done until the docs that describe it are true again (see Documentation Ownership above). This is a closing step, not an optional follow-up.
 
 ## Worktrees
 
@@ -228,19 +245,30 @@ Do not use ASCII art diagrams of either kind.
 
 ## Documentation Upkeep
 
-After completing each implementation step:
+Doc upkeep after each implementation step is governed by the
+**Documentation Ownership** table above: after completing a step,
+identify which docs it falsified and update only the owner of each kind
+of truth.
 
-1. **Update `README.md`** — reflect the current state of the project:
-   - Update the stage table (mark the active stage, tick completed substeps)
-   - Update build instructions if commands changed
-   - Update the repository structure if new files/directories were added
+- **`README.md`** (build/run/compliance/status): update its stage table
+  (mark the active stage, tick completed substeps), build instructions if
+  commands changed, and the repository structure if files/directories
+  were added.
+- **`docs/architecture.md`** / **`docs/testplan.md`**: update whichever
+  owns the truth the step changed — the current machine's behaviour, or
+  verification coverage/gates, respectively.
+- **Master spec + per-stage specs** (design intent and history): the
+  master spec (`docs/superpowers/specs/2026-04-08-boom-sv-core-design.md`)
+  is **never edited in place** — it is append-only via its dated
+  amendment log. Record renumbering, deviations from the original design,
+  and completed-stage notes as dated log entries, not as edits to the
+  original text below the log. Per-stage specs may still be updated
+  directly to correct interface/signal names or note implementation
+  decisions for that stage.
 
-2. **Update the design spec** (`docs/superpowers/specs/2026-04-08-boom-sv-core-design.md`) — keep it accurate as the implementation reveals details that differ from the original design:
-   - Correct any interface or signal names that changed
-   - Note decisions made during implementation that deviate from the spec
-   - Mark completed stages/sections
-
-Both files should always reflect the current state of the code, not the original plan.
+Every checked-in doc should always reflect the current state of the code
+(or, for the master spec, its append-only amendment history), not the
+original plan.
 
 ## CI gates
 

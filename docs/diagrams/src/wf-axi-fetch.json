@@ -17,6 +17,7 @@
     { "name": "instr_fetch_stall", "wave": "1...0.1..0.1" }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage3",
   "head": {
     "text": "AXI4 Instruction Fetch — two back-to-back word reads",
     "tick": 0

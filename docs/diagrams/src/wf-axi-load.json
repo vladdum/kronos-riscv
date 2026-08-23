@@ -21,6 +21,7 @@
       "data": ["rdata"] }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage3",
   "head": {
     "text": "AXI4 Load Transaction — IDLE → LD_ADDR → LD_DATA → LD_DONE → IDLE",
     "tick": 0

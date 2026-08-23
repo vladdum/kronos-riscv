@@ -24,6 +24,7 @@
     { "name": "needs_fetch",  "wave": "1....0....1." }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage3",
   "head": {
     "text": "Alignment — 16-bit instruction (NORMAL → BUFFERED → NORMAL)",
     "tick": 0

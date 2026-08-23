@@ -7,6 +7,16 @@ on:
     branches: [main]
 
 jobs:
+  docs-lint:
+    runs-on: ubuntu-latest
+    name: docs-lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run docs era-lint
+        run: python3 tools/docs_lint.py
+
   sim-units:
     runs-on: ubuntu-latest
     strategy:
@@ -84,16 +94,18 @@ jobs:
 
   sim-all:
     runs-on: ubuntu-latest
-    needs: [sim-units, pytest, lint-rtl]
+    needs: [sim-units, pytest, lint-rtl, docs-lint]
     if: always()
     steps:
       - run: |
           if [ "${{ needs.sim-units.result }}" != "success" ] || \
              [ "${{ needs.pytest.result }}"    != "success" ] || \
-             [ "${{ needs['lint-rtl'].result }}" != "success" ]; then
+             [ "${{ needs['lint-rtl'].result }}" != "success" ] || \
+             [ "${{ needs['docs-lint'].result }}" != "success" ]; then
             echo "sim-units=${{ needs.sim-units.result }}"
             echo "pytest=${{ needs.pytest.result }}"
             echo "lint-rtl=${{ needs['lint-rtl'].result }}"
+            echo "docs-lint=${{ needs['docs-lint'].result }}"
             exit 1
           fi
 

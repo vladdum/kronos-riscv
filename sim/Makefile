@@ -1190,6 +1190,15 @@ run-s7c-%: build-s7a
 	$(MAKE) -C $(SW_DIR_S7C) build/$*.hex
 	./$(SIM_BIN_S7A) $(SW_DIR_S7C)/build/$*.hex
 
+# ── Stage 7 timing benches (measurement-only; §11 Timing Table) ──────────────
+# Same pipeline (SIM_BIN_S7A / build-s7a) — bench_timing/ has no correctness
+# assertions, it just reports a0 = cycle count for a 100-iteration loop.
+SW_DIR_S7T := ../sw/stage7/bench_timing
+
+run-s7t-%: build-s7a
+	$(MAKE) -C $(SW_DIR_S7T) build/$*.hex
+	./$(SIM_BIN_S7A) $(SW_DIR_S7T)/build/$*.hex
+
 sim-stage7c-asm: build-s7a
 	@$(MAKE) -C $(SW_DIR_S7C) all > /dev/null 2>&1; \
 	tmpdir=$$(mktemp -d); pids=""; \

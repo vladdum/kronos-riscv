@@ -1,35 +1,31 @@
 {
   "signal": [
-    { "name": "clk",             "wave": "P........." },
+    { "name": "clk",              "wave": "P........." },
     {},
-    { "name": "IF stage",        "wave": "=.=.=.=.=.",
-      "data": ["I₂", "I₃", "stall", "I₃", "I₄"] },
-    { "name": "ID stage",        "wave": "=.=.=.=.=.",
-      "data": ["I₁", "I₂", "stall", "I₂", "I₃"] },
-    { "name": "EX stage",        "wave": "=.=.=.=...",
-      "data": ["—", "I₁(LW)", "bubble", "I₂"] },
-    { "name": "MEM stage",       "wave": "=...=.....",
-      "data": ["—", "I₁(LW)"] },
-    { "name": "WB stage",        "wave": "=.....=...",
-      "data": ["—", "I₁(LW)"] },
+    ["Load (L)",
+      { "name": "stage",          "wave": "=========.",
+        "data": ["IF", "ID", "RR", "EX1", "EX2", "MEM1", "MEM1B", "MEM2", "WB"] }
+    ],
     {},
-    { "name": "id_ex_is_load",   "wave": "0.1.0....." },
-    { "name": "load-use match",  "wave": "0..10....." },
-    { "name": "id_ex_flush",     "wave": "0..10....." },
+    ["Consumer (C, rs1 = L.rd)",
+      { "name": "stage",          "wave": "x==.....==",
+        "data": ["IF", "ID", "RR", "EX1"] }
+    ],
     {},
-    { "name": "pc_en",           "wave": "1...0.1..." },
-    { "name": "if_id_en",        "wave": "1...0.1..." },
-    { "name": "id_ex_en",        "wave": "1...0.1..." },
+    { "name": "load_use",         "wave": "001.....0." },
+    { "name": "id_rr_flush",      "wave": "001.....0." },
+    { "name": "pc_en / if_id_en", "wave": "110.....1." },
     {},
-    { "name": "fwd_rs1_sel",     "wave": "=.....=...",
-      "data": ["FWD_NONE", "FWD_MEMWB"] }
+    { "name": "fwd_rs1_sel (C)",  "wave": "x.......=.",
+      "data": ["FWD_MEMWB"] }
   ],
   "config": { "hscale": 2 },
+  "depicts": "stage7e",
   "head": {
-    "text": "Load-Use Hazard — 1-cycle bubble + MEM/WB forwarding",
+    "text": "Load-Use Hazard — worst-case 5-cycle ID stall (stage 7e: IF/ID/RR/EX1/EX2/MEM1/MEM1B/MEM2/WB)",
     "tick": 0
   },
   "foot": {
-    "text": "Load (I₁) writes rd in MEM; consumer (I₂) reads rd in EX. One bubble (id_ex flushed), then MEM/WB→EX forwarding resolves I₂."
+    "text": "L is fetched at tick 0 and advances one stage per cycle, IF through WB. C is fetched one cycle behind L (tick 1) and decodes at tick 2, where it sees L's rd still live in the pipe (RR) — load_use goes high and stays high for ticks 2-7 (kronos_hazard priority 3a: stalls pc/if_id/id_rr, bubbles into RR) because the load occupies six producer slots and the only load-forwarding path, FWD_MEMWB (mem_wb_q.alu_result, registered), isn't valid until L reaches WB at tick 8. C is stalled in ID for tick 2's normal cycle plus 5 more (ticks 3-7) before advancing to RR at tick 8 — the worst-case 5-cycle stall (§7). Measured at stage 7e (bench_load_use_hit, §11): 7 cycles/op end-to-end (load issue + the 5-cycle stall + the consumer's own execute), consistent with this diagram. The Timing Table's pre-7e figure of 3 cycles (5-stage-pipeline era) is what this re-measurement replaces."
   }
 }
